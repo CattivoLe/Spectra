@@ -4,7 +4,7 @@ import Foundation
 /// The BLE contract with the Cardputer firmware. docs/protocol.md is the
 /// source of truth; keep the two in step.
 nonisolated enum SensorProtocol {
-    static let version = 3
+    static let version = 4
 
     static let service = CBUUID(string: "53500001-8F2D-4B6A-9C1E-737065637472")
     static let info = CBUUID(string: "53500002-8F2D-4B6A-9C1E-737065637472")
@@ -32,6 +32,7 @@ nonisolated enum SensorProtocol {
         case station(scanID: UInt16, client: WiFiClient)
         case probeReq(scanID: UInt16, probe: ProbeRequest)
         case deauth(scanID: UInt16, event: DeauthEvent)
+        case ssidReveal(scanID: UInt16, bssid: BSSID, rssi: Int, ssid: String)
     }
 
     enum MessageType: UInt8 {
@@ -41,6 +42,7 @@ nonisolated enum SensorProtocol {
         case station = 0x13
         case probeReq = 0x14
         case deauth = 0x15
+        case ssidReveal = 0x16
     }
 
     /// Decodes one Results notification, or returns nil for anything malformed
@@ -133,6 +135,15 @@ nonisolated enum SensorProtocol {
                 count: Int(u16(bytes, 25))
             )
             return .deauth(scanID: scanID, event: event)
+
+        case .ssidReveal:
+            guard bytes.count >= 11 else { return nil }
+            let bssid = BSSID(bytes: Array(bytes[3..<9]))
+            let rssi = Int(Int8(bitPattern: bytes[9]))
+            let ssidLen = Int(bytes[10])
+            guard ssidLen > 0, ssidLen <= 32, bytes.count >= 11 + ssidLen else { return nil }
+            let ssid = String(bytes: bytes[11..<(11 + ssidLen)], encoding: .utf8) ?? ""
+            return .ssidReveal(scanID: scanID, bssid: bssid, rssi: rssi, ssid: ssid)
         }
     }
 
@@ -202,6 +213,15 @@ nonisolated enum SensorProtocol {
             bytes.append(UInt8(bitPattern: Int8(clamping: event.rssi)))
             bytes.append(UInt8(clamping: event.channel))
             put16(UInt16(clamping: event.count))
+
+        case .ssidReveal(let scanID, let bssid, let rssi, let ssid):
+            bytes.append(MessageType.ssidReveal.rawValue)
+            put16(scanID)
+            bytes.append(contentsOf: bssid.bytes)
+            bytes.append(UInt8(bitPattern: Int8(clamping: rssi)))
+            let ssidBytes = Array(ssid.utf8.prefix(32))
+            bytes.append(UInt8(ssidBytes.count))
+            bytes.append(contentsOf: ssidBytes)
         }
         return Data(bytes)
     }

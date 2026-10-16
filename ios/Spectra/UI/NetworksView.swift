@@ -28,6 +28,7 @@ struct NetworksView: View {
             (showOutOfRange || network.isInRange)
                 && (query.isEmpty
                     || network.latest.displayName.localizedStandardContains(query)
+                    || network.revealedSSID?.localizedStandardContains(query) == true
                     || network.id.description.localizedStandardContains(query))
         }
         return filtered.sorted { a, b in
@@ -215,10 +216,15 @@ struct NetworkRow: View {
                 .frame(width: 30)
 
             VStack(alignment: .leading, spacing: 3) {
-                // One Text, so the lock follows the last word when a long
-                // name wraps instead of hanging off to the side.
-                Text("\(nameText(reading)) \(lockText(reading))")
-                    .font(.body.weight(.medium))
+                HStack(spacing: 4) {
+                    Text("\(nameText(reading)) \(lockText(reading))")
+                        .font(.body.weight(.medium))
+                    if isRevealed {
+                        Image(systemName: "eye.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.purple)
+                    }
+                }
                 Group {
                     if network.wasInLastScan {
                         let clientSuffix = network.clients.isEmpty ? "" : " · 👤 \(network.clients.count)"
@@ -266,8 +272,19 @@ struct NetworkRow: View {
         }
     }
 
+    private var effectiveName: String {
+        network.revealedSSID ?? network.latest.displayName
+    }
+
+    private var isRevealed: Bool {
+        network.revealedSSID != nil
+    }
+
     private func nameText(_ reading: AccessPointReading) -> Text {
-        Text(reading.displayName)
+        if let revealed = network.revealedSSID {
+            return Text(revealed)
+        }
+        return Text(reading.displayName)
             .italic(reading.ssid == nil)
             .foregroundStyle(reading.ssid == nil ? .secondary : .primary)
     }

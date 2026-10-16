@@ -21,10 +21,17 @@ struct NetworkDetailView: View {
         return List {
             Section {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(reading.displayName)
-                        .font(.title2.weight(.semibold))
-                        .italic(reading.ssid == nil)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 6) {
+                        Text(network.revealedSSID ?? reading.displayName)
+                            .font(.title2.weight(.semibold))
+                            .italic(reading.ssid == nil && network.revealedSSID == nil)
+                        if network.revealedSSID != nil {
+                            Image(systemName: "eye.fill")
+                                .font(.subheadline)
+                                .foregroundStyle(.purple)
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
                     HStack(alignment: .firstTextBaseline) {
                         Text("\(reading.rssi)")
                             .font(.system(size: 52, weight: .semibold, design: .rounded).monospacedDigit())
@@ -60,7 +67,10 @@ struct NetworkDetailView: View {
             }
 
             Section("Identity") {
-                InfoRow("Name", value: reading.displayName)
+                InfoRow("Name", value: network.revealedSSID ?? reading.displayName)
+                if network.revealedSSID != nil {
+                    InfoRow("Broadcast name", value: String(localized: "Hidden"))
+                }
                 InfoRow("BSSID") {
                     Text(reading.bssid.description)
                         .monospaced()
@@ -115,7 +125,7 @@ struct NetworkDetailView: View {
                 InfoRow("Readings", value: "\(network.samples.count)")
             }
         }
-        .navigationTitle(reading.displayName)
+        .navigationTitle(network.revealedSSID ?? reading.displayName)
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -152,6 +162,12 @@ struct NetworkDetailView: View {
         if reading.bssid.isLocallyAdministered {
             notes.append(Note(
                 text: String(localized: "Randomised address: usually a phone hotspot, a guest network or a mesh node."),
+                isWarning: false
+            ))
+        }
+        if network.revealedSSID != nil {
+            notes.append(Note(
+                text: String(localized: "Hidden SSID revealed from a probe response or association frame — the AP hides its name from beacons."),
                 isWarning: false
             ))
         }

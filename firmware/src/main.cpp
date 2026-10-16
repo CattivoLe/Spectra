@@ -13,8 +13,8 @@
 #include <cstring>
 #include <vector>
 
-static constexpr char kFirmwareVersion[] = "0.3.0";
-static constexpr uint8_t kProtocolVersion = 3;
+static constexpr char kFirmwareVersion[] = "0.4.0";
+static constexpr uint8_t kProtocolVersion = 4;
 
 static constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
 static constexpr char kInfoUuid[] = "53500002-8F2D-4B6A-9C1E-737065637472";
@@ -30,6 +30,7 @@ static constexpr uint8_t kMsgScanFinished = 0x12;
 static constexpr uint8_t kMsgStation = 0x13;
 static constexpr uint8_t kMsgProbeReq = 0x14;
 static constexpr uint8_t kMsgDeauth = 0x15;
+static constexpr uint8_t kMsgSSIDReveal = 0x16;
 
 // Time spent on each channel during an active scan. 13 channels at 120 ms
 // keeps a full sweep under two seconds.
@@ -74,6 +75,14 @@ struct DeauthEntry {
   uint16_t count;     // frames seen with this signature
 };
 
+// An SSID revealed from a probe response or association request for a hidden AP.
+struct RevealEntry {
+  uint8_t bssid[6];
+  int8_t rssi;
+  uint8_t ssidLen;
+  char ssid[33];
+};
+
 static NimBLEServer *server = nullptr;
 static NimBLECharacteristic *infoChar = nullptr;
 static NimBLECharacteristic *resultsChar = nullptr;
@@ -97,6 +106,10 @@ static bool uiDirty = true;
 static std::vector<StationEntry> capturedStations;
 static std::vector<ProbeEntry> capturedProbes;
 static std::vector<DeauthEntry> capturedDeauths;
+static std::vector<RevealEntry> capturedReveals;
+// BSSIDs of hidden APs from the latest scan, for filtering probe responses.
+struct HiddenAP { uint8_t bssid[6]; };
+static std::vector<HiddenAP> hiddenAPs;
 static uint8_t ownMac[6];
 
 static bool isConnected() { return server != nullptr && server->getConnectedCount() > 0; }
@@ -184,6 +197,54 @@ static void recordDeauth(const uint8_t *src, const uint8_t *dst,
   capturedDeauths.push_back(entry);
 }
 
+/// Extract SSID (tag 0) from 802.11 tagged parameters.
+static bool extractSSID(const uint8_t *frame, uint16_t frameLen,
+                        uint16_t taggedStart, char *ssid, uint8_t &ssidLen) {
+  if (frameLen <= taggedStart) return false;
+  const uint8_t *body = frame + taggedStart;
+  const uint16_t bodyLen = frameLen - taggedStart;
+  uint16_t pos = 0;
+  while (pos + 2 <= bodyLen) {
+    const uint8_t tag = body[pos];
+    const uint8_t tlen = body[pos + 1];
+    if (pos + 2 + tlen > bodyLen) break;
+    if (tag == 0) {
+      if (tlen == 0 || tlen > 32) return false;
+      ssidLen = tlen;
+      memcpy(ssid, body + pos + 2, tlen);
+      ssid[tlen] = '\0';
+      return true;
+    }
+    pos += 2 + tlen;
+  }
+  return false;
+}
+
+/// Record a revealed SSID for a hidden AP, deduplicating by BSSID.
+static void recordReveal(const uint8_t *bssid, int8_t rssi,
+                         const char *ssid, uint8_t ssidLen) {
+  if (ssidLen == 0 || ssidLen > 32) return;
+  bool isHidden = false;
+  for (const auto &h : hiddenAPs) {
+    if (macEqual(bssid, h.bssid)) { isHidden = true; break; }
+  }
+  if (!isHidden) return;
+  for (auto &r : capturedReveals) {
+    if (macEqual(r.bssid, bssid)) {
+      if (rssi > r.rssi) r.rssi = rssi;
+      return;
+    }
+  }
+  if (capturedReveals.size() >= 32) return;
+  RevealEntry entry;
+  memcpy(entry.bssid, bssid, 6);
+  entry.rssi = rssi;
+  entry.ssidLen = ssidLen;
+  memcpy(entry.ssid, ssid, ssidLen);
+  entry.ssid[ssidLen] = '\0';
+  capturedReveals.push_back(entry);
+}
+
 // ---------------------------------------------------------------------------
 // Promiscuous-mode callback
 // ---------------------------------------------------------------------------
@@ -219,25 +280,24 @@ static void IRAM_ATTR promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t
     if (subtype == 4) {
       // Probe request: addr2 is the client, no associated AP.
       recordStation(addr2, zeroBssid, rssi, false);
-      // Extract SSID from the tagged parameters (starts at byte 24).
-      const uint16_t frameLen = pkt->rx_ctrl.sig_len;
-      if (frameLen > 24 + 2) {
-        const uint8_t *body = frame + 24;
-        const uint16_t bodyLen = frameLen - 24;
-        uint16_t pos = 0;
-        while (pos + 2 <= bodyLen) {
-          uint8_t tag = body[pos];
-          uint8_t tlen = body[pos + 1];
-          if (pos + 2 + tlen > bodyLen) break;
-          if (tag == 0) {
-            uint8_t ch = 0;
-            esp_wifi_get_channel(&ch, nullptr);
-            recordProbe(addr2, rssi, ch,
-                        reinterpret_cast<const char *>(body + pos + 2), tlen);
-            break;
-          }
-          pos += 2 + tlen;
-        }
+      char ssid[33];
+      uint8_t ssidLen = 0;
+      if (extractSSID(frame, pkt->rx_ctrl.sig_len, 24, ssid, ssidLen)) {
+        uint8_t ch = 0;
+        esp_wifi_get_channel(&ch, nullptr);
+        recordProbe(addr2, rssi, ch, ssid, ssidLen);
+      } else {
+        uint8_t ch = 0;
+        esp_wifi_get_channel(&ch, nullptr);
+        recordProbe(addr2, rssi, ch, "", 0);
+      }
+    } else if (subtype == 5) {
+      // Probe response: addr2 is the AP, addr3 is BSSID.
+      // Tagged params at offset 36 (24 header + 12 fixed fields).
+      char ssid[33];
+      uint8_t ssidLen = 0;
+      if (extractSSID(frame, pkt->rx_ctrl.sig_len, 36, ssid, ssidLen)) {
+        recordReveal(addr3, rssi, ssid, ssidLen);
       }
     } else if (subtype == 10 || subtype == 12) {
       // Disassociation (10) or deauthentication (12).
@@ -252,6 +312,13 @@ static void IRAM_ATTR promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t
     } else if (subtype == 0 || subtype == 2) {
       // Association / reassociation request: addr2 is the client, addr1 is the AP.
       recordStation(addr2, addr1, rssi, true);
+      // Try to reveal hidden SSID: tagged params at 28 (assoc) or 34 (reassoc).
+      const uint16_t taggedStart = (subtype == 0) ? 28 : 34;
+      char ssid[33];
+      uint8_t ssidLen = 0;
+      if (extractSSID(frame, pkt->rx_ctrl.sig_len, taggedStart, ssid, ssidLen)) {
+        recordReveal(addr1, rssi, ssid, ssidLen);
+      }
     } else if (subtype == 1 || subtype == 3) {
       // Association / reassociation response: addr1 is the client, addr2 is the AP.
       recordStation(addr1, addr2, rssi, true);
@@ -409,6 +476,17 @@ static void sendDeauth(const DeauthEntry &d) {
   sendMessage(msg, sizeof(msg));
 }
 
+static void sendReveal(const RevealEntry &r) {
+  uint8_t msg[11 + 32];
+  msg[0] = kMsgSSIDReveal;
+  putU16(msg + 1, scanId);
+  memcpy(msg + 3, r.bssid, 6);
+  msg[9] = static_cast<uint8_t>(r.rssi);
+  msg[10] = r.ssidLen;
+  memcpy(msg + 11, r.ssid, r.ssidLen);
+  sendMessage(msg, 11 + r.ssidLen);
+}
+
 static void sendScanFinished(uint16_t apCount, uint16_t staCount,
                              uint16_t probeCount, uint16_t durationMs) {
   uint8_t msg[11] = {kMsgScanFinished};
@@ -449,10 +527,9 @@ static void drawUi() {
   if (lastScanMs == 0) {
     d.print("S or Enter: scan");
   } else {
-    d.printf("%u AP %u STA %u PRB %lums", static_cast<unsigned>(lastResults.size()),
+    d.printf("%u AP %u STA %u PRB", static_cast<unsigned>(lastResults.size()),
              static_cast<unsigned>(lastStationCount),
-             static_cast<unsigned>(lastProbeCount),
-             static_cast<unsigned long>(lastScanDurationMs));
+             static_cast<unsigned>(lastProbeCount));
   }
 
   int y = 38;
@@ -487,6 +564,7 @@ static void sniffStations() {
   capturedStations.clear();
   capturedProbes.clear();
   capturedDeauths.clear();
+  capturedReveals.clear();
 
   // Remember our own STA MAC so we filter it out.
   esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
@@ -527,6 +605,18 @@ static void runScan() {
     lastResults.push_back({String(reinterpret_cast<const char *>(ap->ssid)), ap->rssi, ap->primary,
                            ap->authmode});
   }
+
+  // Build hidden-AP list before promiscuous sniffing so the callback can
+  // match probe responses and association requests against it.
+  hiddenAPs.clear();
+  for (int16_t i = 0; i < found; ++i) {
+    const auto *ap = static_cast<const wifi_ap_record_t *>(WiFi.getScanInfoByIndex(i));
+    if (ap && strnlen(reinterpret_cast<const char *>(ap->ssid), 32) == 0) {
+      HiddenAP h;
+      memcpy(h.bssid, ap->bssid, 6);
+      hiddenAPs.push_back(h);
+    }
+  }
   WiFi.scanDelete();
 
   std::sort(lastResults.begin(), lastResults.end(),
@@ -552,6 +642,10 @@ static void runScan() {
 
   for (const auto &d : capturedDeauths) {
     sendDeauth(d);
+  }
+
+  for (const auto &r : capturedReveals) {
+    sendReveal(r);
   }
 
   lastScanDurationMs = millis() - started;

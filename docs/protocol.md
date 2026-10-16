@@ -1,7 +1,7 @@
 # Spectra BLE protocol
 
 The Cardputer runs a GATT server; the iPhone is the central. Everything is
-little-endian. Version 3.
+little-endian. Version 4.
 
 ## Service
 
@@ -125,6 +125,21 @@ indicator of a deauth attack.
 | 23 | 1 | RSSI, dBm (`i8`) |
 | 24 | 1 | channel |
 | 25 | 2 | count of frames seen with this signature |
+
+### `0x16` SSID reveal (v4)
+
+When the sensor finds a hidden AP (empty SSID in a beacon) and then sees the
+real name in a probe response or an association request, it sends this message
+so the app can unmask the network.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x16` |
+| 1 | 2 | scan id |
+| 3 | 6 | BSSID of the hidden AP |
+| 9 | 1 | RSSI of the revealing frame, dBm (`i8`) |
+| 10 | 1 | SSID length *n* |
+| 11 | *n* | SSID bytes (UTF-8) |
 
 ### Auth modes
 

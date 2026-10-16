@@ -16,6 +16,9 @@ struct TrackedNetwork: Identifiable, Equatable {
     var missedScans = 0
     /// Clients associated with this AP in the latest scan.
     var clients: [WiFiClient] = []
+    /// SSID revealed from a probe response or association request when the
+    /// beacon hides it. Nil for networks that broadcast their name normally.
+    var revealedSSID: String?
 
     var id: BSSID { latest.bssid }
     var wasInLastScan: Bool { missedScans == 0 }
@@ -81,6 +84,11 @@ final class NetworkStore {
 
         case .deauth(_, let event):
             pendingDeauths.append(event)
+
+        case .ssidReveal(_, let bssid, _, let ssid):
+            if !ssid.isEmpty {
+                networks[bssid]?.revealedSSID = ssid
+            }
 
         case .scanFinished(let scanID, _, let duration, _, _):
             // A finish without its start (the app connected mid-scan) still

@@ -48,9 +48,15 @@ final class DemoSensor {
             probeSent += 1
         }
         for event in demoDeauths {
-            // Deauths don't appear every scan — ~30% chance.
             guard Double.random(in: 0...1) > 0.7 else { continue }
             emit(SensorProtocol.encode(.deauth(scanID: scanID, event: event)))
+        }
+        // Reveal the hidden network's SSID ~80% of the time.
+        if Double.random(in: 0...1) > 0.2 {
+            let hiddenBSSID = BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x77, 0xA7])
+            emit(SensorProtocol.encode(.ssidReveal(
+                scanID: scanID, bssid: hiddenBSSID, rssi: -76, ssid: "HiddenCam_Stream"
+            )))
         }
         emit(SensorProtocol.encode(.scanFinished(
             scanID: scanID, count: apSent,

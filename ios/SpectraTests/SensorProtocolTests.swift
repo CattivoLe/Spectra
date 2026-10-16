@@ -146,6 +146,20 @@ struct SensorProtocolTests {
         #expect(decoded == .deauth(scanID: 99, event: event))
     }
 
+    @Test func ssidRevealRoundTrips() throws {
+        let bssid = BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x77, 0xA7])
+        let message = SensorProtocol.Message.ssidReveal(scanID: 5, bssid: bssid, rssi: -76, ssid: "HiddenCam_Stream")
+        let data = SensorProtocol.encode(message)
+        #expect(data.count == 11 + 16)
+        let decoded = try #require(SensorProtocol.decode(data))
+        #expect(decoded == message)
+    }
+
+    @Test func ssidRevealEmptyRejects() {
+        let bytes: [UInt8] = [0x16, 0x01, 0x00, 0x50, 0xC7, 0xBF, 0x1E, 0x77, 0xA7, 0xB4, 0x00]
+        #expect(SensorProtocol.decode(Data(bytes)) == nil)
+    }
+
     @Test func deauthBroadcastSeverity() {
         let event = DeauthEvent(
             source: BSSID(bytes: [0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]),
@@ -214,6 +228,25 @@ struct NetworkStoreTests {
         #expect(store.networks.values.first?.isInRange == false)
         scan(store, id: 5, [reading(1, rssi: -61)])
         #expect(store.networks.values.first?.isInRange == true)
+    }
+
+    @Test func revealUpdatesHiddenNetwork() {
+        let store = NetworkStore()
+        let bssid = BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x77, 0xA7])
+        let hidden = AccessPointReading(
+            bssid: bssid, rssi: -81, channel: 11, secondaryChannel: .none,
+            auth: .wpa2PSK, pairwiseCipher: .ccmp, groupCipher: .ccmp,
+            capabilities: [.b, .g, .n], countryCode: nil, ssidBytes: Data()
+        )
+        store.handle(.scanStarted(scanID: 1))
+        store.handle(.accessPoint(scanID: 1, reading: hidden))
+        #expect(store.networks[bssid]?.latest.ssid == nil)
+
+        store.handle(.ssidReveal(scanID: 1, bssid: bssid, rssi: -76, ssid: "SecretNet"))
+        #expect(store.networks[bssid]?.revealedSSID == "SecretNet")
+
+        store.handle(.scanFinished(scanID: 1, count: 1, duration: .seconds(1), stationCount: 0, probeCount: 0))
+        #expect(store.networks[bssid]?.revealedSSID == "SecretNet")
     }
 }
 
