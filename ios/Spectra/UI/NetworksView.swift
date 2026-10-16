@@ -228,7 +228,8 @@ struct NetworkRow: View {
                 Group {
                     if network.wasInLastScan {
                         let clientSuffix = network.clients.isEmpty ? "" : " · 👤 \(network.clients.count)"
-                        Text("Ch \(reading.channel) · \(reading.auth.name) · \(reading.capabilities.generation)\(clientSuffix)")
+                        let trafficSuffix = network.traffic.map { " · ↕ \($0.formattedBytes)" } ?? ""
+                        Text("Ch \(reading.channel) · \(reading.auth.name) · \(reading.capabilities.generation)\(clientSuffix)\(trafficSuffix)")
                     } else if network.isInRange {
                         Text("Missed last scan")
                     } else {

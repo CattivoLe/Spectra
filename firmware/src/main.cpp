@@ -13,8 +13,8 @@
 #include <cstring>
 #include <vector>
 
-static constexpr char kFirmwareVersion[] = "0.4.0";
-static constexpr uint8_t kProtocolVersion = 4;
+static constexpr char kFirmwareVersion[] = "0.5.0";
+static constexpr uint8_t kProtocolVersion = 5;
 
 static constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
 static constexpr char kInfoUuid[] = "53500002-8F2D-4B6A-9C1E-737065637472";
@@ -31,6 +31,7 @@ static constexpr uint8_t kMsgStation = 0x13;
 static constexpr uint8_t kMsgProbeReq = 0x14;
 static constexpr uint8_t kMsgDeauth = 0x15;
 static constexpr uint8_t kMsgSSIDReveal = 0x16;
+static constexpr uint8_t kMsgTraffic = 0x17;
 
 // Time spent on each channel during an active scan. 13 channels at 120 ms
 // keeps a full sweep under two seconds.
@@ -83,6 +84,13 @@ struct RevealEntry {
   char ssid[33];
 };
 
+// Estimated traffic volume per AP, accumulated from data frames in promiscuous mode.
+struct TrafficEntry {
+  uint8_t bssid[6];
+  uint32_t bytes;
+  uint16_t packets;
+};
+
 static NimBLEServer *server = nullptr;
 static NimBLECharacteristic *infoChar = nullptr;
 static NimBLECharacteristic *resultsChar = nullptr;
@@ -107,6 +115,7 @@ static std::vector<StationEntry> capturedStations;
 static std::vector<ProbeEntry> capturedProbes;
 static std::vector<DeauthEntry> capturedDeauths;
 static std::vector<RevealEntry> capturedReveals;
+static std::vector<TrafficEntry> capturedTraffic;
 // BSSIDs of hidden APs from the latest scan, for filtering probe responses.
 struct HiddenAP { uint8_t bssid[6]; };
 static std::vector<HiddenAP> hiddenAPs;
@@ -245,6 +254,23 @@ static void recordReveal(const uint8_t *bssid, int8_t rssi,
   capturedReveals.push_back(entry);
 }
 
+/// Accumulate traffic volume for a BSSID.
+static void recordTraffic(const uint8_t *bssid, uint16_t frameLen) {
+  for (auto &t : capturedTraffic) {
+    if (macEqual(t.bssid, bssid)) {
+      t.bytes += frameLen;
+      t.packets++;
+      return;
+    }
+  }
+  if (capturedTraffic.size() >= 64) return;
+  TrafficEntry entry;
+  memcpy(entry.bssid, bssid, 6);
+  entry.bytes = frameLen;
+  entry.packets = 1;
+  capturedTraffic.push_back(entry);
+}
+
 // ---------------------------------------------------------------------------
 // Promiscuous-mode callback
 // ---------------------------------------------------------------------------
@@ -334,10 +360,12 @@ static void IRAM_ATTR promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t
       // ToDS=1, FromDS=0: client → AP.
       // Addr1 = BSSID, Addr2 = source (client), Addr3 = destination.
       recordStation(addr2, addr1, rssi, true);
+      recordTraffic(addr1, pkt->rx_ctrl.sig_len);
     } else if (ds == 0x02) {
       // ToDS=0, FromDS=1: AP → client.
       // Addr1 = destination (client), Addr2 = BSSID, Addr3 = source.
       recordStation(addr1, addr2, rssi, true);
+      recordTraffic(addr2, pkt->rx_ctrl.sig_len);
     }
   }
 }
@@ -487,6 +515,20 @@ static void sendReveal(const RevealEntry &r) {
   sendMessage(msg, 11 + r.ssidLen);
 }
 
+static void sendTraffic(const TrafficEntry &t) {
+  // 15 bytes: type(1) + scanId(2) + bssid(6) + bytes(4) + packets(2).
+  uint8_t msg[15];
+  msg[0] = kMsgTraffic;
+  putU16(msg + 1, scanId);
+  memcpy(msg + 3, t.bssid, 6);
+  msg[9] = t.bytes & 0xFF;
+  msg[10] = (t.bytes >> 8) & 0xFF;
+  msg[11] = (t.bytes >> 16) & 0xFF;
+  msg[12] = (t.bytes >> 24) & 0xFF;
+  putU16(msg + 13, t.packets);
+  sendMessage(msg, sizeof(msg));
+}
+
 static void sendScanFinished(uint16_t apCount, uint16_t staCount,
                              uint16_t probeCount, uint16_t durationMs) {
   uint8_t msg[11] = {kMsgScanFinished};
@@ -565,6 +607,7 @@ static void sniffStations() {
   capturedProbes.clear();
   capturedDeauths.clear();
   capturedReveals.clear();
+  capturedTraffic.clear();
 
   // Remember our own STA MAC so we filter it out.
   esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
@@ -646,6 +689,10 @@ static void runScan() {
 
   for (const auto &r : capturedReveals) {
     sendReveal(r);
+  }
+
+  for (const auto &t : capturedTraffic) {
+    sendTraffic(t);
   }
 
   lastScanDurationMs = millis() - started;

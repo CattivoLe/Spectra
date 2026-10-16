@@ -1,6 +1,34 @@
 import Foundation
 import Observation
 
+/// Traffic volume observed for an AP during one promiscuous-mode capture window.
+struct TrafficSnapshot: Equatable {
+    var bytes: UInt32
+    var packets: Int
+
+    var formattedBytes: String {
+        if bytes >= 1_000_000 {
+            String(format: "%.1f MB", Double(bytes) / 1_000_000)
+        } else if bytes >= 1_000 {
+            String(format: "%.1f KB", Double(bytes) / 1_000)
+        } else {
+            "\(bytes) B"
+        }
+    }
+
+    func estimatedBitrate(scanDuration: Duration) -> String? {
+        let seconds = Double(scanDuration / .milliseconds(1)) / 1000
+        guard seconds > 0 else { return nil }
+        let bitsPerSecond = Double(bytes) * 8 / seconds
+        if bitsPerSecond >= 1_000_000 {
+            return String(format: "%.1f Mbps", bitsPerSecond / 1_000_000)
+        } else if bitsPerSecond >= 1_000 {
+            return String(format: "%.0f Kbps", bitsPerSecond / 1_000)
+        }
+        return String(format: "%.0f bps", bitsPerSecond)
+    }
+}
+
 /// An access point followed across scans.
 struct TrackedNetwork: Identifiable, Equatable {
     struct Sample: Equatable {
@@ -19,6 +47,8 @@ struct TrackedNetwork: Identifiable, Equatable {
     /// SSID revealed from a probe response or association request when the
     /// beacon hides it. Nil for networks that broadcast their name normally.
     var revealedSSID: String?
+    /// Traffic volume from the latest scan's promiscuous capture.
+    var traffic: TrafficSnapshot?
 
     var id: BSSID { latest.bssid }
     var wasInLastScan: Bool { missedScans == 0 }
@@ -62,6 +92,7 @@ final class NetworkStore {
     private var pendingClients: [WiFiClient] = []
     private var pendingProbes: [ProbeRequest] = []
     private var pendingDeauths: [DeauthEvent] = []
+    private var pendingTraffic: [BSSID: TrafficSnapshot] = [:]
 
     func handle(_ message: SensorProtocol.Message, at date: Date = .now) {
         switch message {
@@ -71,6 +102,7 @@ final class NetworkStore {
             pendingClients = []
             pendingProbes = []
             pendingDeauths = []
+            pendingTraffic = [:]
             isScanning = true
 
         case .accessPoint(_, let reading):
@@ -90,6 +122,9 @@ final class NetworkStore {
                 networks[bssid]?.revealedSSID = ssid
             }
 
+        case .traffic(_, let bssid, let bytes, let packets):
+            pendingTraffic[bssid] = TrafficSnapshot(bytes: bytes, packets: packets)
+
         case .scanFinished(let scanID, _, let duration, _, _):
             // A finish without its start (the app connected mid-scan) still
             // delivered readings, but cannot say who was missed.
@@ -101,6 +136,13 @@ final class NetworkStore {
                 aggregateProbes()
                 deauthEvents = pendingDeauths.sorted { $0.count > $1.count }
                 pendingDeauths = []
+                for (bssid, snapshot) in pendingTraffic {
+                    networks[bssid]?.traffic = snapshot
+                }
+                for id in networks.keys where pendingTraffic[id] == nil {
+                    networks[id]?.traffic = nil
+                }
+                pendingTraffic = [:]
             }
             currentScanID = nil
             isScanning = false

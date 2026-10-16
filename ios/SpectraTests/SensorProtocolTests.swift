@@ -155,6 +155,22 @@ struct SensorProtocolTests {
         #expect(decoded == message)
     }
 
+    @Test func trafficRoundTrips() throws {
+        let bssid = BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x00, 0xA0])
+        let message = SensorProtocol.Message.traffic(scanID: 10, bssid: bssid, bytes: 185_000, packets: 312)
+        let data = SensorProtocol.encode(message)
+        #expect(data.count == 15)
+        let decoded = try #require(SensorProtocol.decode(data))
+        #expect(decoded == message)
+    }
+
+    @Test func trafficLargeValue() throws {
+        let bssid = BSSID(bytes: [0xAA, 0xBB, 0xCC, 0x01, 0x02, 0x03])
+        let message = SensorProtocol.Message.traffic(scanID: 1, bssid: bssid, bytes: 4_000_000_000, packets: 50000)
+        let decoded = try #require(SensorProtocol.decode(SensorProtocol.encode(message)))
+        #expect(decoded == message)
+    }
+
     @Test func ssidRevealEmptyRejects() {
         let bytes: [UInt8] = [0x16, 0x01, 0x00, 0x50, 0xC7, 0xBF, 0x1E, 0x77, 0xA7, 0xB4, 0x00]
         #expect(SensorProtocol.decode(Data(bytes)) == nil)
@@ -228,6 +244,23 @@ struct NetworkStoreTests {
         #expect(store.networks.values.first?.isInRange == false)
         scan(store, id: 5, [reading(1, rssi: -61)])
         #expect(store.networks.values.first?.isInRange == true)
+    }
+
+    @Test func trafficAppliedOnScanFinished() {
+        let store = NetworkStore()
+        let bssid = BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x00, 0xA0])
+        let ap = AccessPointReading(
+            bssid: bssid, rssi: -50, channel: 6, secondaryChannel: .none,
+            auth: .wpa2PSK, pairwiseCipher: .ccmp, groupCipher: .ccmp,
+            capabilities: [.n], countryCode: nil, ssidBytes: Data("Home".utf8)
+        )
+        store.handle(.scanStarted(scanID: 1))
+        store.handle(.accessPoint(scanID: 1, reading: ap))
+        store.handle(.traffic(scanID: 1, bssid: bssid, bytes: 185_000, packets: 312))
+        #expect(store.networks[bssid]?.traffic == nil)
+        store.handle(.scanFinished(scanID: 1, count: 1, duration: .seconds(3), stationCount: 0, probeCount: 0))
+        #expect(store.networks[bssid]?.traffic?.bytes == 185_000)
+        #expect(store.networks[bssid]?.traffic?.packets == 312)
     }
 
     @Test func revealUpdatesHiddenNetwork() {

@@ -1698,6 +1698,56 @@
         }
       }
     },
+    "Traffic" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Трафик"
+          }
+        }
+      }
+    },
+    "Volume" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Объём"
+          }
+        }
+      }
+    },
+    "Packets" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пакеты"
+          }
+        }
+      }
+    },
+    "Est. bitrate" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Расч. битрейт"
+          }
+        }
+      }
+    },
+    "Data frames seen during the promiscuous-mode capture window. A high bitrate may indicate streaming (cameras, microphones)." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Кадры данных, захваченные в промискуитет-режиме. Высокий битрейт может указывать на стриминг (камеры, микрофоны)."
+          }
+        }
+      }
+    },
     "Targeted deauth" : {
       "localizations" : {
         "ru" : {

@@ -119,6 +119,21 @@ struct NetworkDetailView: View {
                 }
             }
 
+            if let traffic = network.traffic {
+                Section {
+                    InfoRow("Volume", value: traffic.formattedBytes)
+                    InfoRow("Packets", value: "\(traffic.packets)")
+                    if let duration = store.lastScanDuration,
+                       let bitrate = traffic.estimatedBitrate(scanDuration: duration) {
+                        InfoRow("Est. bitrate", value: bitrate)
+                    }
+                } header: {
+                    Text("Traffic")
+                } footer: {
+                    Text("Data frames seen during the promiscuous-mode capture window. A high bitrate may indicate streaming (cameras, microphones).")
+                }
+            }
+
             Section("Observed") {
                 InfoRow("First seen") { Text(network.firstSeen, style: .time) }
                 InfoRow("Last seen") { Text(network.lastSeen, style: .relative) }

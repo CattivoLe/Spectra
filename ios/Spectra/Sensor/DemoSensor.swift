@@ -58,6 +58,27 @@ final class DemoSensor {
                 scanID: scanID, bssid: hiddenBSSID, rssi: -76, ssid: "HiddenCam_Stream"
             )))
         }
+        // Traffic volume per active AP.
+        for (index, network) in networks.enumerated() {
+            guard network.reading != nil else { continue }
+            let isHotspot = network.base.ssid?.hasPrefix("iPhone") == true
+                || network.base.ssid?.hasPrefix("DIRECT") == true
+            let bssid = BSSID(bytes: [
+                isHotspot ? 0x7A : 0x50, 0xC7, 0xBF, 0x1E,
+                UInt8(index * 17), UInt8(0xA0 + index),
+            ])
+            let base: UInt32 = switch index {
+            case 0: 185_000  // Home — active
+            case 7: 420_000  // Hidden cam — suspicious streaming
+            default: UInt32.random(in: 200...15_000)
+            }
+            let jitter = Int32.random(in: -Int32(base / 5)...Int32(base / 5))
+            let bytes = UInt32(clamping: Int64(base) + Int64(jitter))
+            let packets = Int(bytes / UInt32.random(in: 400...1200))
+            emit(SensorProtocol.encode(.traffic(
+                scanID: scanID, bssid: bssid, bytes: bytes, packets: packets
+            )))
+        }
         emit(SensorProtocol.encode(.scanFinished(
             scanID: scanID, count: apSent,
             duration: .milliseconds(4800),

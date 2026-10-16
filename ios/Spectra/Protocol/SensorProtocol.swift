@@ -4,7 +4,7 @@ import Foundation
 /// The BLE contract with the Cardputer firmware. docs/protocol.md is the
 /// source of truth; keep the two in step.
 nonisolated enum SensorProtocol {
-    static let version = 4
+    static let version = 5
 
     static let service = CBUUID(string: "53500001-8F2D-4B6A-9C1E-737065637472")
     static let info = CBUUID(string: "53500002-8F2D-4B6A-9C1E-737065637472")
@@ -33,6 +33,7 @@ nonisolated enum SensorProtocol {
         case probeReq(scanID: UInt16, probe: ProbeRequest)
         case deauth(scanID: UInt16, event: DeauthEvent)
         case ssidReveal(scanID: UInt16, bssid: BSSID, rssi: Int, ssid: String)
+        case traffic(scanID: UInt16, bssid: BSSID, bytes: UInt32, packets: Int)
     }
 
     enum MessageType: UInt8 {
@@ -43,6 +44,7 @@ nonisolated enum SensorProtocol {
         case probeReq = 0x14
         case deauth = 0x15
         case ssidReveal = 0x16
+        case traffic = 0x17
     }
 
     /// Decodes one Results notification, or returns nil for anything malformed
@@ -144,6 +146,16 @@ nonisolated enum SensorProtocol {
             guard ssidLen > 0, ssidLen <= 32, bytes.count >= 11 + ssidLen else { return nil }
             let ssid = String(bytes: bytes[11..<(11 + ssidLen)], encoding: .utf8) ?? ""
             return .ssidReveal(scanID: scanID, bssid: bssid, rssi: rssi, ssid: ssid)
+
+        case .traffic:
+            guard bytes.count >= 15 else { return nil }
+            let bssid = BSSID(bytes: Array(bytes[3..<9]))
+            let totalBytes = UInt32(bytes[9])
+                | UInt32(bytes[10]) << 8
+                | UInt32(bytes[11]) << 16
+                | UInt32(bytes[12]) << 24
+            let packets = Int(u16(bytes, 13))
+            return .traffic(scanID: scanID, bssid: bssid, bytes: totalBytes, packets: packets)
         }
     }
 
@@ -222,6 +234,16 @@ nonisolated enum SensorProtocol {
             let ssidBytes = Array(ssid.utf8.prefix(32))
             bytes.append(UInt8(ssidBytes.count))
             bytes.append(contentsOf: ssidBytes)
+
+        case .traffic(let scanID, let bssid, let totalBytes, let packets):
+            bytes.append(MessageType.traffic.rawValue)
+            put16(scanID)
+            bytes.append(contentsOf: bssid.bytes)
+            bytes.append(UInt8(totalBytes & 0xFF))
+            bytes.append(UInt8((totalBytes >> 8) & 0xFF))
+            bytes.append(UInt8((totalBytes >> 16) & 0xFF))
+            bytes.append(UInt8((totalBytes >> 24) & 0xFF))
+            put16(UInt16(clamping: packets))
         }
         return Data(bytes)
     }

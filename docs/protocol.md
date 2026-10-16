@@ -1,7 +1,7 @@
 # Spectra BLE protocol
 
 The Cardputer runs a GATT server; the iPhone is the central. Everything is
-little-endian. Version 4.
+little-endian. Version 5.
 
 ## Service
 
@@ -140,6 +140,20 @@ so the app can unmask the network.
 | 9 | 1 | RSSI of the revealing frame, dBm (`i8`) |
 | 10 | 1 | SSID length *n* |
 | 11 | *n* | SSID bytes (UTF-8) |
+
+### `0x17` Traffic (v5)
+
+Estimated traffic volume per AP, accumulated from data frames captured in
+promiscuous mode during the sniffing window. Useful for spotting streaming
+devices (cameras, microphones) that generate continuous traffic.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x17` |
+| 1 | 2 | scan id |
+| 3 | 6 | BSSID |
+| 9 | 4 | total bytes (`u32`, all data frames to/from this AP) |
+| 13 | 2 | total packets (`u16`) |
 
 ### Auth modes
 
