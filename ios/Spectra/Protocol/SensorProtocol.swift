@@ -4,7 +4,7 @@ import Foundation
 /// The BLE contract with the Cardputer firmware. docs/protocol.md is the
 /// source of truth; keep the two in step.
 nonisolated enum SensorProtocol {
-    static let version = 5
+    static let version = 6
 
     static let service = CBUUID(string: "53500001-8F2D-4B6A-9C1E-737065637472")
     static let info = CBUUID(string: "53500002-8F2D-4B6A-9C1E-737065637472")
@@ -35,6 +35,8 @@ nonisolated enum SensorProtocol {
         case deauth(scanID: UInt16, event: DeauthEvent)
         case ssidReveal(scanID: UInt16, bssid: BSSID, rssi: Int, ssid: String)
         case traffic(scanID: UInt16, bssid: BSSID, bytes: UInt32, packets: Int)
+        case vendorIE(scanID: UInt16, bssid: BSSID, deviceName: String, manufacturer: String)
+        case battery(scanID: UInt16, level: Int, isCharging: Bool)
     }
 
     enum MessageType: UInt8 {
@@ -46,6 +48,8 @@ nonisolated enum SensorProtocol {
         case deauth = 0x15
         case ssidReveal = 0x16
         case traffic = 0x17
+        case vendorIE = 0x18
+        case battery = 0x19
     }
 
     /// Decodes one Results notification, or returns nil for anything malformed
@@ -157,6 +161,29 @@ nonisolated enum SensorProtocol {
                 | UInt32(bytes[12]) << 24
             let packets = Int(u16(bytes, 13))
             return .traffic(scanID: scanID, bssid: bssid, bytes: totalBytes, packets: packets)
+
+        case .vendorIE:
+            guard bytes.count >= 11 else { return nil }
+            let bssid = BSSID(bytes: Array(bytes[3..<9]))
+            let dnLen = Int(bytes[9])
+            guard dnLen <= 32, bytes.count >= 11 + dnLen else { return nil }
+            let deviceName = dnLen > 0
+                ? String(bytes: bytes[10..<(10 + dnLen)], encoding: .utf8) ?? ""
+                : ""
+            let mfOff = 10 + dnLen
+            let mfLen = Int(bytes[mfOff])
+            guard mfLen <= 32, bytes.count >= mfOff + 1 + mfLen else { return nil }
+            let manufacturer = mfLen > 0
+                ? String(bytes: bytes[(mfOff + 1)..<(mfOff + 1 + mfLen)], encoding: .utf8) ?? ""
+                : ""
+            guard !deviceName.isEmpty || !manufacturer.isEmpty else { return nil }
+            return .vendorIE(scanID: scanID, bssid: bssid, deviceName: deviceName, manufacturer: manufacturer)
+
+        case .battery:
+            guard bytes.count >= 5 else { return nil }
+            let level = Int(bytes[3])
+            let charging = (bytes[4] & 0x01) != 0
+            return .battery(scanID: scanID, level: min(level, 100), isCharging: charging)
         }
     }
 
@@ -245,6 +272,23 @@ nonisolated enum SensorProtocol {
             bytes.append(UInt8((totalBytes >> 16) & 0xFF))
             bytes.append(UInt8((totalBytes >> 24) & 0xFF))
             put16(UInt16(clamping: packets))
+
+        case .vendorIE(let scanID, let bssid, let deviceName, let manufacturer):
+            bytes.append(MessageType.vendorIE.rawValue)
+            put16(scanID)
+            bytes.append(contentsOf: bssid.bytes)
+            let dnBytes = Array(deviceName.utf8.prefix(32))
+            bytes.append(UInt8(dnBytes.count))
+            bytes.append(contentsOf: dnBytes)
+            let mfBytes = Array(manufacturer.utf8.prefix(32))
+            bytes.append(UInt8(mfBytes.count))
+            bytes.append(contentsOf: mfBytes)
+
+        case .battery(let scanID, let level, let isCharging):
+            bytes.append(MessageType.battery.rawValue)
+            put16(scanID)
+            bytes.append(UInt8(clamping: level))
+            bytes.append(isCharging ? 0x01 : 0x00)
         }
         return Data(bytes)
     }
@@ -263,20 +307,25 @@ nonisolated struct SensorInfo: Equatable {
     var bands: [String]
     var interval: Int
     var ota: Bool
+    var batteryLevel: Int?
+    var isCharging: Bool?
 
-    init(proto: Int, fw: String, chip: String, bands: [String], interval: Int, ota: Bool = false) {
+    init(proto: Int, fw: String, chip: String, bands: [String], interval: Int, ota: Bool = false,
+         batteryLevel: Int? = nil, isCharging: Bool? = nil) {
         self.proto = proto
         self.fw = fw
         self.chip = chip
         self.bands = bands
         self.interval = interval
         self.ota = ota
+        self.batteryLevel = batteryLevel
+        self.isCharging = isCharging
     }
 }
 
 extension SensorInfo: Decodable {
     private enum CodingKeys: String, CodingKey {
-        case proto, fw, chip, bands, interval, ota
+        case proto, fw, chip, bands, interval, ota, bat, chg
     }
 
     init(from decoder: Decoder) throws {
@@ -287,5 +336,7 @@ extension SensorInfo: Decodable {
         bands = try container.decode([String].self, forKey: .bands)
         interval = try container.decode(Int.self, forKey: .interval)
         ota = try container.decodeIfPresent(Bool.self, forKey: .ota) ?? false
+        batteryLevel = try container.decodeIfPresent(Int.self, forKey: .bat)
+        isCharging = try container.decodeIfPresent(Bool.self, forKey: .chg)
     }
 }

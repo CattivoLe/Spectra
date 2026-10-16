@@ -85,6 +85,12 @@ struct NetworkDetailView: View {
                 if let country = reading.countryCode {
                     InfoRow("Country", value: Locale.current.localizedString(forRegionCode: country) ?? country)
                 }
+                if let vendor = network.vendorInfo, !vendor.deviceName.isEmpty {
+                    InfoRow("Device name", value: vendor.deviceName)
+                }
+                if let vendor = network.vendorInfo, !vendor.manufacturer.isEmpty {
+                    InfoRow("Manufacturer", value: vendor.manufacturer)
+                }
             }
 
             Section("Radio") {

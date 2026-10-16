@@ -1,7 +1,7 @@
 # Spectra BLE protocol
 
 The Cardputer runs a GATT server; the iPhone is the central. Everything is
-little-endian. Version 5.
+little-endian. Version 6.
 
 ## Service
 
@@ -23,12 +23,14 @@ The device advertises the service UUID and the name `Spectra-XXXX`, where
 UTF-8 JSON, for example:
 
 ```json
-{"proto":5,"fw":"0.6.0","chip":"ESP32-S3","bands":["2.4"],"interval":5,"ota":true}
+{"proto":6,"fw":"0.7.0","chip":"ESP32-S3","bands":["2.4"],"interval":5,"ota":true,"bat":85,"chg":false}
 ```
 
 `interval` is the current automatic scan interval in seconds, 0 when off.
 `ota` is true when the Firmware characteristic is present. Firmware that
 predates updates omits the field; treat that as false.
+`bat` is the battery level (0–100); absent when the hardware has no battery
+monitor. `chg` is true when USB power is charging the battery.
 
 ## Control (write)
 
@@ -183,6 +185,34 @@ devices (cameras, microphones) that generate continuous traffic.
 | 3 | 6 | BSSID |
 | 9 | 4 | total bytes (`u32`, all data frames to/from this AP) |
 | 13 | 2 | total packets (`u16`) |
+
+### `0x18` Vendor IE (v6)
+
+WPS device info extracted from vendor-specific Information Elements (tag 221)
+in beacons and probe responses during the promiscuous-mode capture window.
+Only APs that advertise WPS produce an entry.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x18` |
+| 1 | 2 | scan id |
+| 3 | 6 | BSSID |
+| 9 | 1 | device name length *n* |
+| 10 | *n* | device name (UTF-8, from WPS attribute 0x1011) |
+| 10+*n* | 1 | manufacturer length *m* |
+| 11+*n* | *m* | manufacturer (UTF-8, from WPS attribute 0x1021) |
+
+### `0x19` Battery (v6)
+
+Battery level and charging state of the sensor. Sent once per scan cycle,
+before `scanFinished`. Absent when the hardware has no battery monitor.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x19` |
+| 1 | 2 | scan id |
+| 3 | 1 | battery level, 0–100 % |
+| 4 | 1 | flags: bit 0 = charging |
 
 ### `0x30` Update status
 

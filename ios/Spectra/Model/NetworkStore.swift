@@ -1,6 +1,12 @@
 import Foundation
 import Observation
 
+/// WPS device info extracted from vendor-specific IEs in beacons/probe responses.
+struct VendorDeviceInfo: Equatable {
+    var deviceName: String
+    var manufacturer: String
+}
+
 /// Traffic volume observed for an AP during one promiscuous-mode capture window.
 struct TrafficSnapshot: Equatable {
     var bytes: UInt32
@@ -47,6 +53,8 @@ struct TrackedNetwork: Identifiable, Equatable {
     /// SSID revealed from a probe response or association request when the
     /// beacon hides it. Nil for networks that broadcast their name normally.
     var revealedSSID: String?
+    /// WPS device info from vendor-specific IEs.
+    var vendorInfo: VendorDeviceInfo?
     /// Traffic volume from the latest scan's promiscuous capture.
     var traffic: TrafficSnapshot?
 
@@ -122,8 +130,16 @@ final class NetworkStore {
                 networks[bssid]?.revealedSSID = ssid
             }
 
+        case .vendorIE(_, let bssid, let deviceName, let manufacturer):
+            networks[bssid]?.vendorInfo = VendorDeviceInfo(
+                deviceName: deviceName, manufacturer: manufacturer
+            )
+
         case .traffic(_, let bssid, let bytes, let packets):
             pendingTraffic[bssid] = TrafficSnapshot(bytes: bytes, packets: packets)
+
+        case .battery:
+            break
 
         case .scanFinished(let scanID, _, let duration, _, _):
             // A finish without its start (the app connected mid-scan) still

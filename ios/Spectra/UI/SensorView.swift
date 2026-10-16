@@ -22,6 +22,12 @@ struct SensorView: View {
                     status
                 }
 
+                if let update = link.firmwareUpdate {
+                    Section {
+                        firmwareStatus(update)
+                    }
+                }
+
                 switch link.state {
                 case .searching:
                     Section {
@@ -69,15 +75,12 @@ struct SensorView: View {
                         InfoRow("Scans this session", value: "\(store.scanCount)")
                     }
 
-                    if let update = link.firmwareUpdate {
-                        Section {
-                            firmwareStatus(update)
-                        }
-                    }
-
                     if let info = link.info {
                         Section {
                             InfoRow("Firmware", value: info.fw)
+                            if let level = link.batteryLevel {
+                                InfoRow("Battery", value: batteryText(level, charging: link.isCharging == true))
+                            }
                             InfoRow("Chip", value: info.chip)
                             InfoRow("Bands", value: info.bands.compactMap(Double.init).map(Units.gigahertz).formatted(.list(type: .and)))
                             if info.proto != SensorProtocol.version {
@@ -212,6 +215,14 @@ struct SensorView: View {
             Button("Dismiss") {
                 link.dismissFirmwareUpdate()
             }
+        }
+    }
+
+    private func batteryText(_ level: Int, charging: Bool) -> String {
+        if charging {
+            String(format: String(localized: "%lld%%, charging"), level)
+        } else {
+            "\(level)%"
         }
     }
 

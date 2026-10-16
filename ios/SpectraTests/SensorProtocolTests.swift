@@ -155,6 +155,43 @@ struct SensorProtocolTests {
         #expect(decoded == message)
     }
 
+    @Test func vendorIERoundTrips() throws {
+        let bssid = BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x33, 0xA3])
+        let message = SensorProtocol.Message.vendorIE(
+            scanID: 4, bssid: bssid, deviceName: "Archer C6", manufacturer: "TP-Link"
+        )
+        let data = SensorProtocol.encode(message)
+        #expect(data.count == 11 + 9 + 7)
+        let decoded = try #require(SensorProtocol.decode(data))
+        #expect(decoded == message)
+    }
+
+    @Test func vendorIERejectsWhenBothNamesAreEmpty() {
+        let bytes: [UInt8] = [0x18, 0x01, 0x00, 0x50, 0xC7, 0xBF, 0x1E, 0x00, 0xA0, 0x00, 0x00]
+        #expect(SensorProtocol.decode(Data(bytes)) == nil)
+    }
+
+    @Test func batteryRoundTrips() throws {
+        let message = SensorProtocol.Message.battery(scanID: 8, level: 85, isCharging: false)
+        let data = SensorProtocol.encode(message)
+        #expect(data.count == 5)
+        #expect(SensorProtocol.decode(data) == message)
+        let charging = SensorProtocol.Message.battery(scanID: 8, level: 140, isCharging: true)
+        guard case .battery(_, let level, let isCharging) = SensorProtocol.decode(SensorProtocol.encode(charging)) else {
+            Issue.record("not a battery message")
+            return
+        }
+        #expect(level == 100)
+        #expect(isCharging)
+    }
+
+    @Test func infoDecodesBattery() throws {
+        let json = #"{"proto":6,"fw":"0.7.0","chip":"ESP32-S3","bands":["2.4"],"interval":5,"ota":true,"bat":85,"chg":false}"#
+        let info = try JSONDecoder().decode(SensorInfo.self, from: Data(json.utf8))
+        #expect(info.batteryLevel == 85)
+        #expect(info.isCharging == false)
+    }
+
     @Test func trafficRoundTrips() throws {
         let bssid = BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x00, 0xA0])
         let message = SensorProtocol.Message.traffic(scanID: 10, bssid: bssid, bytes: 185_000, packets: 312)
@@ -276,10 +313,25 @@ struct NetworkStoreTests {
         #expect(store.networks[bssid]?.latest.ssid == nil)
 
         store.handle(.ssidReveal(scanID: 1, bssid: bssid, rssi: -76, ssid: "SecretNet"))
+        store.handle(.vendorIE(scanID: 1, bssid: bssid, deviceName: "Cam", manufacturer: "Hikvision"))
         #expect(store.networks[bssid]?.revealedSSID == "SecretNet")
+        #expect(store.networks[bssid]?.vendorInfo == VendorDeviceInfo(deviceName: "Cam", manufacturer: "Hikvision"))
 
         store.handle(.scanFinished(scanID: 1, count: 1, duration: .seconds(1), stationCount: 0, probeCount: 0))
         #expect(store.networks[bssid]?.revealedSSID == "SecretNet")
+    }
+}
+
+struct OUIDatabaseTests {
+    @Test func disputedPrefixesKeepOneOwner() {
+        #expect(OUIDatabase.lookup("A4:5E:60") == "Apple")
+        #expect(OUIDatabase.lookup("78:31:C1") == "Apple")
+        #expect(OUIDatabase.lookup("64:B5:C6") == "Nintendo")
+        #expect(OUIDatabase.lookup("8C:EC:4B") == "Dell")
+        #expect(OUIDatabase.lookup("00:24:6C") == "Aruba")
+        #expect(OUIDatabase.lookup("00:17:D5") == "Samsung")
+        #expect(OUIDatabase.lookup("08:08:C2") == "Samsung")
+        #expect(OUIDatabase.lookup("F0:18:98") == "Apple")
     }
 }
 

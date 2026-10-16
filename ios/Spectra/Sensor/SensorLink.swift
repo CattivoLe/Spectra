@@ -29,6 +29,8 @@ final class SensorLink: NSObject {
     private(set) var state: State = .bluetoothUnavailable(.starting)
     private(set) var discovered: [DiscoveredSensor] = []
     private(set) var info: SensorInfo?
+    private(set) var batteryLevel: Int?
+    private(set) var isCharging: Bool?
     /// Set while an application image is being sent to the sensor.
     private(set) var firmwareUpdate: FirmwareUpdateProgress?
 
@@ -61,6 +63,9 @@ final class SensorLink: NSObject {
     private var pendingStatuses: [FirmwareUpdate.Status] = []
     private var firmwareCancel = false
     private var updateTask: Task<Void, Never>?
+    /// Set when a drop should be followed by a scan, not by sitting on
+    /// "Not connected". A firmware install and a reboot both set it.
+    private var shouldReconnect = false
     private var demo: DemoSensor?
 
     private enum Keys {
@@ -81,13 +86,7 @@ final class SensorLink: NSObject {
     // MARK: Actions
 
     func startSearching() {
-        guard central.state == .poweredOn, sensor == nil else { return }
-        discovered = []
-        state = .searching
-        central.scanForPeripherals(
-            withServices: [SensorProtocol.service],
-            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
-        )
+        beginScan(autoConnect: false)
     }
 
     func stopSearching() {
@@ -108,6 +107,7 @@ final class SensorLink: NSObject {
 
     func disconnect() {
         userDisconnected = true
+        shouldReconnect = false
         UserDefaults.standard.removeObject(forKey: Keys.lastSensor)
         if let sensor {
             central.cancelPeripheralConnection(sensor)
@@ -126,10 +126,6 @@ final class SensorLink: NSObject {
 
     func installFirmware(_ image: Data) {
         guard firmwareUpdate?.isRunning != true else { return }
-        guard case .connected = state, firmware != nil else {
-            firmwareUpdate = FirmwareUpdateProgress(stage: .failed(FirmwareUpdate.TransferError.notConnected.message))
-            return
-        }
         do {
             try FirmwareUpdate.validate(image)
         } catch let error as FirmwareUpdate.ImageError {
@@ -143,6 +139,16 @@ final class SensorLink: NSObject {
         pendingStatuses.removeAll()
         firmwareUpdate = FirmwareUpdateProgress(stage: .preparing)
         updateTask = Task {
+            guard await self.waitUntilReadyForUpdate() else {
+                if self.firmwareCancel {
+                    self.firmwareUpdate = FirmwareUpdateProgress(stage: .failed(FirmwareUpdate.TransferError.cancelled.message))
+                } else {
+                    self.firmwareUpdate = FirmwareUpdateProgress(stage: .failed(FirmwareUpdate.TransferError.notConnected.message))
+                    self.shouldReconnect = true
+                    self.beginScan(autoConnect: true)
+                }
+                return
+            }
             await self.runFirmwareUpdate(image)
         }
     }
@@ -169,6 +175,8 @@ final class SensorLink: NSObject {
             demo.interval = liveInterval
             self.demo = demo
             info = SensorInfo(proto: SensorProtocol.version, fw: String(localized: "Demo"), chip: String(localized: "Simulated"), bands: ["2.4"], interval: liveInterval)
+            batteryLevel = 72
+            isCharging = false
             state = .demo
             demo.scan()
         } else {
@@ -193,6 +201,10 @@ final class SensorLink: NSObject {
             return
         }
         if let message = SensorProtocol.decode(data) {
+            if case .battery(_, let level, let charging) = message {
+                batteryLevel = level
+                isCharging = charging
+            }
             store.handle(message)
         }
     }
@@ -206,6 +218,8 @@ final class SensorLink: NSObject {
         control = nil
         firmware = nil
         info = nil
+        batteryLevel = nil
+        isCharging = nil
         store.abandonScan()
         finishFirmwareWrite(FirmwareUpdate.TransferError.linkLost)
     }
@@ -221,14 +235,50 @@ final class SensorLink: NSObject {
     }
 
     /// Reconnects to the sensor used last time, if iOS still knows it.
-    private func restoreLastSensor() {
+    @discardableResult
+    private func restoreLastSensor() -> Bool {
         guard sensor == nil,
               let saved = UserDefaults.standard.string(forKey: Keys.lastSensor),
               let id = UUID(uuidString: saved),
               let peripheral = central.retrievePeripherals(withIdentifiers: [id]).first
-        else { return }
+        else { return false }
         peripherals[id] = peripheral
         connect(to: id)
+        return true
+    }
+
+    private func beginScan(autoConnect: Bool) {
+        guard central.state == .poweredOn, sensor == nil else { return }
+        shouldReconnect = autoConnect
+        discovered = []
+        state = .searching
+        central.scanForPeripherals(
+            withServices: [SensorProtocol.service],
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+        )
+    }
+
+    /// The file picker and a reboot both drop the link. Wait until the
+    /// characteristics are back before sending an image.
+    private func waitUntilReadyForUpdate() async -> Bool {
+        if case .connected = state, firmware != nil { return true }
+        shouldReconnect = true
+        if case .connecting = state {
+            // A connection request is already pending.
+        } else if !restoreLastSensor() {
+            beginScan(autoConnect: true)
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(25))
+        while ContinuousClock.now < deadline {
+            if firmwareCancel { return false }
+            if case .connected = state, firmware != nil { return true }
+            if case .idle = state {
+                shouldReconnect = true
+                if !restoreLastSensor() { beginScan(autoConnect: true) }
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        return false
     }
 
     // MARK: Firmware update
@@ -321,13 +371,18 @@ final class SensorLink: NSObject {
     }
 
     private func waitForReboot() async {
+        shouldReconnect = true
         var sawDrop = false
         let deadline = ContinuousClock.now.advanced(by: .seconds(45))
         while ContinuousClock.now < deadline {
             switch state {
-            case .connecting, .idle, .searching, .bluetoothUnavailable:
+            case .connecting, .searching, .bluetoothUnavailable:
                 sawDrop = true
+            case .idle:
+                sawDrop = true
+                beginScan(autoConnect: true)
             case .connected where sawDrop && info != nil:
+                shouldReconnect = false
                 firmwareUpdate = FirmwareUpdateProgress(stage: .succeeded(version: info?.fw ?? ""))
                 return
             default:
@@ -335,7 +390,11 @@ final class SensorLink: NSObject {
             }
             try? await Task.sleep(for: .milliseconds(250))
         }
-        firmwareUpdate = FirmwareUpdateProgress(stage: .succeeded(version: ""))
+        firmwareUpdate = FirmwareUpdateProgress(
+            stage: .failed(String(localized: "The sensor rebooted, but the app could not reconnect. It is looking for the Cardputer again."))
+        )
+        shouldReconnect = true
+        beginScan(autoConnect: true)
     }
 
     private func currentChunkSize() -> Int {
@@ -399,6 +458,9 @@ extension SensorLink: CBCentralManagerDelegate {
         rssi RSSI: NSNumber
     ) {
         peripherals[peripheral.identifier] = peripheral
+        if shouldReconnect, case .searching = state {
+            connect(to: peripheral.identifier)
+        }
         let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? name(of: peripheral)
         let found = DiscoveredSensor(
             id: peripheral.identifier, name: name, rssi: RSSI.intValue, lastSeen: .now
@@ -416,8 +478,13 @@ extension SensorLink: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        let retry = shouldReconnect
         resetConnection()
-        updateIdleState()
+        if retry, central.state == .poweredOn {
+            beginScan(autoConnect: true)
+        } else {
+            updateIdleState()
+        }
     }
 
     func centralManager(
@@ -427,7 +494,9 @@ extension SensorLink: CBCentralManagerDelegate {
     ) {
         guard peripheral == sensor, !userDisconnected else { return }
         // Out of range or rebooted: keep a connection request pending, which
-        // iOS completes whenever the sensor comes back.
+        // iOS completes whenever the sensor comes back. If that request
+        // fails, didFailToConnect scans again.
+        shouldReconnect = true
         control = nil
         firmware = nil
         info = nil
@@ -487,7 +556,13 @@ extension SensorLink: CBPeripheralDelegate {
         case SensorProtocol.results:
             receive(data)
         case SensorProtocol.info:
-            info = try? JSONDecoder().decode(SensorInfo.self, from: data)
+            if let decoded = try? JSONDecoder().decode(SensorInfo.self, from: data) {
+                info = decoded
+                if let bat = decoded.batteryLevel {
+                    batteryLevel = bat
+                    isCharging = decoded.isCharging ?? false
+                }
+            }
         default:
             break
         }

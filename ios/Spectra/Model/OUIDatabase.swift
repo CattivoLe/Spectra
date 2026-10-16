@@ -80,7 +80,7 @@ enum OUIDatabase {
         "40:0E:85": "Samsung", "44:6D:6C": "Samsung", "48:44:F7": "Samsung",
         "4C:BC:98": "Samsung", "50:01:BB": "Samsung", "50:85:69": "Samsung",
         "50:B7:C3": "Samsung", "54:40:AD": "Samsung", "5C:49:7D": "Samsung",
-        "5C:A3:9D": "Samsung", "60:AF:6D": "Samsung", "64:B5:C6": "Samsung",
+        "5C:A3:9D": "Samsung", "60:AF:6D": "Samsung",
         "68:48:98": "Samsung", "6C:F3:73": "Samsung", "70:F9:27": "Samsung",
         "74:45:CE": "Samsung", "78:47:1D": "Samsung", "78:AB:BB": "Samsung",
         "80:65:6D": "Samsung", "84:25:DB": "Samsung", "84:55:A5": "Samsung",
@@ -368,7 +368,7 @@ enum OUIDatabase {
         "00:1F:6B": "LG", "00:1F:E3": "LG",
         "00:22:A9": "LG", "00:24:83": "LG",
         "00:25:E5": "LG", "00:26:E2": "LG",
-        "00:AA:70": "LG", "08:08:C2": "LG",
+        "00:AA:70": "LG",
         "10:68:3F": "LG", "14:C9:13": "LG",
         "20:3D:BD": "LG", "2C:54:CF": "LG",
         "30:B4:9E": "LG", "34:4D:F7": "LG",
@@ -452,7 +452,7 @@ enum OUIDatabase {
         "28:D2:44": "Lenovo", "40:B8:9A": "Lenovo",
         "54:EE:75": "Lenovo", "5C:C5:D4": "Lenovo",
         "70:F1:A1": "Lenovo", "78:E4:00": "Lenovo",
-        "8C:EC:4B": "Lenovo", "98:FA:9B": "Lenovo",
+        "98:FA:9B": "Lenovo",
         "C8:5B:A0": "Lenovo", "E8:2A:44": "Lenovo",
 
         // Raspberry Pi Foundation
@@ -503,12 +503,10 @@ enum OUIDatabase {
         "00:E0:4C": "Realtek", "00:E2:69": "Realtek",
         "48:5D:60": "Realtek", "50:E0:85": "Realtek",
         "52:54:00": "Realtek", "7C:8B:B5": "Realtek",
-        "8C:EC:4B": "Realtek",
 
         // Qualcomm / Atheros
         "00:03:7F": "Qualcomm", "00:0B:6B": "Qualcomm",
         "00:0E:6D": "Qualcomm", "00:13:74": "Qualcomm",
-        "00:24:6C": "Qualcomm",
 
         // Roku
         "00:0D:4B": "Roku", "08:05:81": "Roku",
@@ -547,7 +545,7 @@ enum OUIDatabase {
         "E8:23:B4": "Canon",
 
         // Brother
-        "00:17:D5": "Brother", "00:1B:A9": "Brother",
+        "00:1B:A9": "Brother",
         "00:80:77": "Brother", "18:C2:1D": "Brother",
         "30:05:5C": "Brother", "30:C9:AB": "Brother",
         "AC:3F:A4": "Brother",
@@ -575,7 +573,7 @@ enum OUIDatabase {
         "40:F3:85": "ZTE", "54:22:F8": "ZTE",
         "5C:3A:45": "ZTE", "64:13:6C": "ZTE",
         "68:77:24": "ZTE", "74:4A:A4": "ZTE",
-        "78:31:C1": "ZTE", "84:74:2A": "ZTE",
+        "84:74:2A": "ZTE",
         "8C:68:C8": "ZTE", "90:D8:F3": "ZTE",
         "9C:D2:4B": "ZTE", "A4:5D:36": "ZTE",
         "B0:75:0C": "ZTE", "B4:B3:62": "ZTE",
@@ -611,11 +609,14 @@ enum OUIDatabase {
         "64:B5:C6": "Nintendo", "78:A2:A0": "Nintendo",
         "7C:BB:8A": "Nintendo", "8C:CD:E8": "Nintendo",
         "98:41:5C": "Nintendo", "98:B6:E9": "Nintendo",
-        "A4:5E:60": "Nintendo", "A4:C0:E1": "Nintendo",
+        "A4:C0:E1": "Nintendo",
         "B8:AE:6E": "Nintendo", "CC:FB:65": "Nintendo",
         "D8:6B:F7": "Nintendo", "E0:0C:7F": "Nintendo",
         "E0:E7:51": "Nintendo", "E8:4E:CE": "Nintendo",
         "EC:0B:AE": "Nintendo",
+
+        // Dell
+        "8C:EC:4B": "Dell",
 
         // Yandex
         "98:AA:FC": "Yandex",

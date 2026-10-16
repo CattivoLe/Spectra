@@ -4,6 +4,10 @@
 <dict>
 	<!-- Merged into the generated Info.plist. Keep in sync with
 	     bonjourServiceTypes in Spectra/Model/LANScanner.swift. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+	</array>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_device-info._tcp</string>

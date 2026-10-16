@@ -16,6 +16,7 @@ final class DemoSensor {
     private let demoClients = DemoSensor.makeClients()
     private let demoProbes = DemoSensor.makeProbes()
     private let demoDeauths = DemoSensor.makeDeauths()
+    private var demoBattery = 72
 
     init(emit: @escaping (Data) -> Void) {
         self.emit = emit
@@ -79,6 +80,9 @@ final class DemoSensor {
                 scanID: scanID, bssid: bssid, bytes: bytes, packets: packets
             )))
         }
+        emitVendorInfo()
+        demoBattery = min(100, max(8, demoBattery + Int.random(in: -1...1)))
+        emit(SensorProtocol.encode(.battery(scanID: scanID, level: demoBattery, isCharging: demoBattery < 25)))
         emit(SensorProtocol.encode(.scanFinished(
             scanID: scanID, count: apSent,
             duration: .milliseconds(4800),
@@ -117,6 +121,22 @@ final class DemoSensor {
         mutating func drift() {
             current += Double.random(in: -3...3)
             current += (Double(centre) - current) * 0.3
+        }
+    }
+
+    /// WPS names for a couple of the made-up access points.
+    private func emitVendorInfo() {
+        let entries: [(Int, String, String)] = [
+            (2, "Keenetic Extra", "Keenetic"),
+            (3, "Archer C6", "TP-Link"),
+        ]
+        for (index, name, maker) in entries {
+            let bssid = BSSID(bytes: [
+                0x50, 0xC7, 0xBF, 0x1E, UInt8(index * 17), UInt8(0xA0 + index),
+            ])
+            emit(SensorProtocol.encode(.vendorIE(
+                scanID: scanID, bssid: bssid, deviceName: name, manufacturer: maker
+            )))
         }
     }
 

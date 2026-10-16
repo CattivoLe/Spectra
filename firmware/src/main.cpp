@@ -14,8 +14,8 @@
 #include <cstring>
 #include <vector>
 
-static constexpr char kFirmwareVersion[] = "0.6.0";
-static constexpr uint8_t kProtocolVersion = 5;
+static constexpr char kFirmwareVersion[] = "0.7.0";
+static constexpr uint8_t kProtocolVersion = 6;
 
 static constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
 static constexpr char kInfoUuid[] = "53500002-8F2D-4B6A-9C1E-737065637472";
@@ -34,6 +34,8 @@ static constexpr uint8_t kMsgProbeReq = 0x14;
 static constexpr uint8_t kMsgDeauth = 0x15;
 static constexpr uint8_t kMsgSSIDReveal = 0x16;
 static constexpr uint8_t kMsgTraffic = 0x17;
+static constexpr uint8_t kMsgVendorIE = 0x18;
+static constexpr uint8_t kMsgBattery = 0x19;
 static constexpr uint8_t kMsgUpdate = 0x30;
 
 static constexpr uint8_t kOtaBegin = 0x01;
@@ -115,6 +117,13 @@ struct TrafficEntry {
   uint16_t packets;
 };
 
+// WPS device info extracted from vendor-specific IEs in beacons/probe responses.
+struct VendorIEEntry {
+  uint8_t bssid[6];
+  char deviceName[33];
+  char manufacturer[33];
+};
+
 static NimBLEServer *server = nullptr;
 static NimBLECharacteristic *infoChar = nullptr;
 static NimBLECharacteristic *resultsChar = nullptr;
@@ -157,6 +166,7 @@ static std::vector<ProbeEntry> capturedProbes;
 static std::vector<DeauthEntry> capturedDeauths;
 static std::vector<RevealEntry> capturedReveals;
 static std::vector<TrafficEntry> capturedTraffic;
+static std::vector<VendorIEEntry> capturedVendorIEs;
 // BSSIDs of hidden APs from the latest scan, for filtering probe responses.
 struct HiddenAP { uint8_t bssid[6]; };
 static std::vector<HiddenAP> hiddenAPs;
@@ -312,6 +322,69 @@ static void recordTraffic(const uint8_t *bssid, uint16_t frameLen) {
   capturedTraffic.push_back(entry);
 }
 
+/// Record WPS vendor info for a BSSID, deduplicating.
+static void recordVendorIE(const uint8_t *bssid,
+                           const char *devName, const char *mfr) {
+  for (const auto &v : capturedVendorIEs) {
+    if (macEqual(v.bssid, bssid)) return;
+  }
+  if (capturedVendorIEs.size() >= 32) return;
+  VendorIEEntry entry;
+  memcpy(entry.bssid, bssid, 6);
+  strncpy(entry.deviceName, devName, 32);
+  entry.deviceName[32] = '\0';
+  strncpy(entry.manufacturer, mfr, 32);
+  entry.manufacturer[32] = '\0';
+  capturedVendorIEs.push_back(entry);
+}
+
+/// Parse tagged parameters for a WPS vendor-specific IE (tag 0xDD, OUI 00:50:F2,
+/// type 4) and extract Device Name (0x1011) and Manufacturer (0x1021).
+static void extractWPSInfo(const uint8_t *frame, uint16_t frameLen,
+                           uint16_t taggedStart, const uint8_t *bssid) {
+  // Skip if we already have info for this BSSID.
+  for (const auto &v : capturedVendorIEs) {
+    if (macEqual(v.bssid, bssid)) return;
+  }
+  if (frameLen <= taggedStart) return;
+  const uint8_t *body = frame + taggedStart;
+  const uint16_t bodyLen = frameLen - taggedStart;
+
+  char deviceName[33] = "";
+  char manufacturer[33] = "";
+  uint16_t pos = 0;
+  while (pos + 2 <= bodyLen) {
+    const uint8_t tag = body[pos];
+    const uint8_t tlen = body[pos + 1];
+    if (pos + 2 + tlen > bodyLen) break;
+    if (tag == 0xDD && tlen >= 4 &&
+        body[pos + 2] == 0x00 && body[pos + 3] == 0x50 &&
+        body[pos + 4] == 0xF2 && body[pos + 5] == 0x04) {
+      const uint8_t *wps = body + pos + 6;
+      const uint16_t wpsLen = tlen - 4;
+      uint16_t wpos = 0;
+      while (wpos + 4 <= wpsLen) {
+        const uint16_t attrType = (static_cast<uint16_t>(wps[wpos]) << 8) | wps[wpos + 1];
+        const uint16_t attrLen = (static_cast<uint16_t>(wps[wpos + 2]) << 8) | wps[wpos + 3];
+        if (wpos + 4 + attrLen > wpsLen) break;
+        if (attrType == 0x1011 && attrLen > 0 && attrLen <= 32) {
+          memcpy(deviceName, wps + wpos + 4, attrLen);
+          deviceName[attrLen] = '\0';
+        } else if (attrType == 0x1021 && attrLen > 0 && attrLen <= 32) {
+          memcpy(manufacturer, wps + wpos + 4, attrLen);
+          manufacturer[attrLen] = '\0';
+        }
+        wpos += 4 + attrLen;
+      }
+      break;
+    }
+    pos += 2 + tlen;
+  }
+  if (deviceName[0] != '\0' || manufacturer[0] != '\0') {
+    recordVendorIE(bssid, deviceName, manufacturer);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Promiscuous-mode callback
 // ---------------------------------------------------------------------------
@@ -366,6 +439,10 @@ static void IRAM_ATTR promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t
       if (extractSSID(frame, pkt->rx_ctrl.sig_len, 36, ssid, ssidLen)) {
         recordReveal(addr3, rssi, ssid, ssidLen);
       }
+      extractWPSInfo(frame, pkt->rx_ctrl.sig_len, 36, addr3);
+    } else if (subtype == 8) {
+      // Beacon: addr3 is BSSID, tagged params at offset 36.
+      extractWPSInfo(frame, pkt->rx_ctrl.sig_len, 36, addr3);
     } else if (subtype == 10 || subtype == 12) {
       // Disassociation (10) or deauthentication (12).
       // Reason code is the first 2 bytes of the frame body.
@@ -415,11 +492,32 @@ static void IRAM_ATTR promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t
 // BLE protocol
 // ---------------------------------------------------------------------------
 
+static int readBatteryPercent() {
+  const int level = M5Cardputer.Power.getBatteryLevel();
+  if (level < 0) {
+    return -1;
+  }
+  return std::min(level, 100);
+}
+
+// isCharging() also returns "unknown", which is not zero, so it must not be
+// used as a boolean.
+static bool readBatteryCharging() {
+  return M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging;
+}
+
 static void updateInfo() {
-  char json[160];
+  char json[200];
+  const int bat = readBatteryPercent();
+  char batJson[32] = "";
+  if (bat >= 0) {
+    snprintf(batJson, sizeof(batJson), ",\"bat\":%d,\"chg\":%s", bat,
+             readBatteryCharging() ? "true" : "false");
+  }
   snprintf(json, sizeof(json),
-           "{\"proto\":%u,\"fw\":\"%s\",\"chip\":\"ESP32-S3\",\"bands\":[\"2.4\"],\"interval\":%u%s}",
-           kProtocolVersion, kFirmwareVersion, scanIntervalSec, otaCrcOk ? ",\"ota\":true" : "");
+           "{\"proto\":%u,\"fw\":\"%s\",\"chip\":\"ESP32-S3\",\"bands\":[\"2.4\"],\"interval\":%u%s%s}",
+           kProtocolVersion, kFirmwareVersion, scanIntervalSec,
+           otaCrcOk ? ",\"ota\":true" : "", batJson);
   infoChar->setValue(json);
 }
 
@@ -580,6 +678,33 @@ static void sendTraffic(const TrafficEntry &t) {
   sendMessage(msg, sizeof(msg));
 }
 
+static void sendVendorIE(const VendorIEEntry &v) {
+  const uint8_t dnLen = static_cast<uint8_t>(strnlen(v.deviceName, 32));
+  const uint8_t mfLen = static_cast<uint8_t>(strnlen(v.manufacturer, 32));
+  uint8_t msg[11 + 64];
+  msg[0] = kMsgVendorIE;
+  putU16(msg + 1, scanId);
+  memcpy(msg + 3, v.bssid, 6);
+  msg[9] = dnLen;
+  memcpy(msg + 10, v.deviceName, dnLen);
+  msg[10 + dnLen] = mfLen;
+  memcpy(msg + 11 + dnLen, v.manufacturer, mfLen);
+  sendMessage(msg, 11 + dnLen + mfLen);
+}
+
+static void sendBattery() {
+  const int level = readBatteryPercent();
+  if (level < 0) {
+    return;
+  }
+  uint8_t msg[5];
+  msg[0] = kMsgBattery;
+  putU16(msg + 1, scanId);
+  msg[3] = static_cast<uint8_t>(level);
+  msg[4] = readBatteryCharging() ? 0x01 : 0x00;
+  sendMessage(msg, sizeof(msg));
+}
+
 static void sendScanFinished(uint16_t apCount, uint16_t staCount,
                              uint16_t probeCount, uint16_t durationMs) {
   uint8_t msg[11] = {kMsgScanFinished};
@@ -705,7 +830,12 @@ static void otaBegin(uint32_t size, uint32_t crc) {
     notifyOta(kOtaFailed, slot != 0 && size > slot ? kOtaErrTooLarge : kOtaErrBegin);
     return;
   }
-  WiFi.mode(WIFI_OFF);
+  // Do not call WiFi.mode(WIFI_OFF) here. That deinits the Wi-Fi driver, and
+  // on the ESP32-S3 the shared radio goes with it, so the BLE link carrying
+  // this update drops before the first chunk. Scanning is already blocked
+  // by otaActive; an idle STA interface does not get in the way.
+  esp_wifi_set_promiscuous(false);
+  esp_wifi_scan_stop();
   if (!Update.begin(size)) {
     otaCleanup(true);
     notifyOta(kOtaFailed, kOtaErrBegin);
@@ -849,11 +979,17 @@ static void drawUi() {
   d.setTextSize(1);
   d.fillScreen(TFT_BLACK);
 
-  char header[48];
+  const int bat = readBatteryPercent();
+  char batStr[12] = "";
+  if (bat >= 0) {
+    snprintf(batStr, sizeof(batStr), " %d%%%s", bat, readBatteryCharging() ? "+" : "");
+  }
+
+  char header[64];
   if (isConnected()) {
-    snprintf(header, sizeof(header), "%s  linked  %us", deviceName, scanIntervalSec);
+    snprintf(header, sizeof(header), "%s  linked  %us%s", deviceName, scanIntervalSec, batStr);
   } else {
-    snprintf(header, sizeof(header), "%s  waiting for app", deviceName);
+    snprintf(header, sizeof(header), "%s  waiting%s", deviceName, batStr);
   }
   drawStatus(header);
 
@@ -901,6 +1037,7 @@ static void sniffStations() {
   capturedDeauths.clear();
   capturedReveals.clear();
   capturedTraffic.clear();
+  capturedVendorIEs.clear();
 
   // Remember our own STA MAC so we filter it out.
   esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
@@ -991,6 +1128,12 @@ static void runScan() {
     sendTraffic(t);
   }
 
+  for (const auto &v : capturedVendorIEs) {
+    sendVendorIE(v);
+  }
+
+  sendBattery();
+
   lastScanDurationMs = millis() - started;
   lastScanMs = millis();
 
@@ -1024,13 +1167,15 @@ static void setupBle() {
   NimBLECharacteristic *firmware = service->createCharacteristic(
       kFirmwareUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   firmware->setCallbacks(new FirmwareCallbacks());
-  updateInfo();
 
+  // Advertise before the battery read. A stuck power-chip transaction must
+  // not leave the sensor invisible.
   NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
   advertising->addServiceUUID(kServiceUuid);
   advertising->setName(deviceName);
   advertising->enableScanResponse(true);
   advertising->start();
+  updateInfo();
 }
 
 static void handleKeyboard() {
