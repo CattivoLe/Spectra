@@ -1,1613 +1,1646 @@
 {
-  "sourceLanguage" : "en",
-  "strings" : {
-    "—" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "—"
+  "sourceLanguage": "en",
+  "strings": {
+    "—": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "—"
           }
         }
       }
     },
-    "%@ (secondary above)" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ (дополнительный канал выше)"
+    "%@ (secondary above)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (дополнительный канал выше)"
           }
         }
       }
     },
-    "%@ (secondary below)" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ (дополнительный канал ниже)"
+    "%@ (secondary below)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (дополнительный канал ниже)"
           }
         }
       }
     },
-    "%@ %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        }
-      }
-    },
-    "%@ is obsolete and can be broken in minutes." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ устарел, его можно взломать за минуты."
-          }
-        }
-      }
-    },
-    "%lld" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld"
-          }
-        }
-      }
-    },
-    "%lld dBm" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld дБм"
-          }
-        }
-      }
-    },
-    "%lld devices" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld устройств"
-          }
-        }
-      }
-    },
-    "%lld hosts" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld хостов"
-          }
-        }
-      }
-    },
-    "%lld in last scan" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "В последнем скане: %lld"
-          }
-        }
-      }
-    },
-    "%lld networks, %lld%% busy" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld networks, %2$lld%% busy"
+    "%@ %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$@ %2$@"
           }
         },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сетей: %1$lld, занятость %2$lld%%"
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ %2$@"
           }
         }
       }
     },
-    "About the sensor" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "О сенсоре"
+    "%@ is obsolete and can be broken in minutes.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ устарел, его можно взломать за минуты."
           }
         }
       }
     },
-    "Address type" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Тип адреса"
+    "%lld": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld"
           }
         }
       }
     },
-    "Authentication" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Аутентификация"
+    "%lld dBm": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld дБм"
           }
         }
       }
     },
-    "Automatic scan" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Автосканирование"
+    "%lld devices": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld устройств"
           }
         }
       }
     },
-    "avg %lld · min %lld · max %lld" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "avg %1$lld · min %2$lld · max %3$lld"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "сред. %1$lld · мин. %2$lld · макс. %3$lld"
+    "%lld hosts": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld хостов"
           }
         }
       }
     },
-    "Band" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Диапазон"
+    "%lld in last scan": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В последнем скане: %lld"
           }
         }
       }
     },
-    "Bands" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Диапазоны"
-          }
-        }
-      }
-    },
-    "Bluetooth is off. Turn it on in Control Centre." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bluetooth выключен. Включите его в Пункте управления."
-          }
-        }
-      }
-    },
-    "BSSID" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "BSSID"
-          }
-        }
-      }
-    },
-    "Cancel" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Отменить"
-          }
-        }
-      }
-    },
-    "Ch %lld · %@ · %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Ch %1$lld · %2$@ · %3$@"
+    "%lld networks, %lld%% busy": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld networks, %2$lld%% busy"
           }
         },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Канал %1$lld · %2$@ · %3$@"
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сетей: %1$lld, занятость %2$lld%%"
           }
         }
       }
     },
-    "Channel" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Канал"
+    "About the sensor": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "О сенсоре"
           }
         }
       }
     },
-    "Channel %lld" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Канал %lld"
+    "Address type": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тип адреса"
           }
         }
       }
     },
-    "Channel use is drawn from the networks the sensor finds." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Загрузка каналов строится по сетям, которые находит сенсор."
+    "Authentication": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аутентификация"
           }
         }
       }
     },
-    "Channels" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Каналы"
+    "Automatic scan": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автосканирование"
           }
         }
       }
     },
-    "Chip" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Чип"
-          }
-        }
-      }
-    },
-    "Clear list" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Очистить список"
-          }
-        }
-      }
-    },
-    "Connect" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Подключить"
-          }
-        }
-      }
-    },
-    "Connect a Cardputer to see networks" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Подключите Cardputer, чтобы увидеть сети"
-          }
-        }
-      }
-    },
-    "Connect to a Wi-Fi network to scan devices on it." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Подключитесь к Wi-Fi, чтобы сканировать устройства в сети."
-          }
-        }
-      }
-    },
-    "Connecting…" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Подключение…"
-          }
-        }
-      }
-    },
-    "Copy BSSID" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Скопировать BSSID"
-          }
-        }
-      }
-    },
-    "Copy IP" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Скопировать IP"
-          }
-        }
-      }
-    },
-    "Copy MAC" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Скопировать MAC"
-          }
-        }
-      }
-    },
-    "Copy name" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Скопировать название"
-          }
-        }
-      }
-    },
-    "Country" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Страна"
-          }
-        }
-      }
-    },
-    "dBm" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "дБм"
-          }
-        }
-      }
-    },
-    "Demo" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Демо"
-          }
-        }
-      }
-    },
-    "Demo sensor" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Демо-сенсор"
-          }
-        }
-      }
-    },
-    "Device" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Устройство"
-          }
-        }
-      }
-    },
-    "Device cleared" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Устройство удалено"
-          }
-        }
-      }
-    },
-    "Disconnect" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Отключить"
-          }
-        }
-      }
-    },
-    "Discovering devices…" : {
-      "comment" : "Scanning progress phase when using TCP port discovery.",
-      "isCommentAutoGenerated" : true
-    },
-    "Each hump is one network: its width is the channels it covers, its height how loud it is here." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Каждый холм — одна сеть: ширина показывает, какие каналы она занимает, высота — насколько громко она слышна здесь."
-          }
-        }
-      }
-    },
-    "Every %lld s" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Каждые %lld с"
-          }
-        }
-      }
-    },
-    "Excellent" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Отличный"
-          }
-        }
-      }
-    },
-    "Fair" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Средний"
-          }
-        }
-      }
-    },
-    "Find devices, their MAC addresses and open ports on the network your iPhone is on." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Находит устройства, их MAC-адреса и открытые порты в сети, к которой подключён iPhone."
-          }
-        }
-      }
-    },
-    "Find sensor" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Найти сенсор"
-          }
-        }
-      }
-    },
-    "Fine Timing Measurement" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Измерение расстояния (FTM)"
-          }
-        }
-      }
-    },
-    "Firmware" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Прошивка"
-          }
-        }
-      }
-    },
-    "First seen" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Впервые замечена"
-          }
-        }
-      }
-    },
-    "Floor" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Нижняя граница"
-          }
-        }
-      }
-    },
-    "Frequency" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Частота"
-          }
-        }
-      }
-    },
-    "Gateway" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Шлюз"
-          }
-        }
-      }
-    },
-    "gateway %@" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "шлюз %@"
-          }
-        }
-      }
-    },
-    "Generation" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Поколение"
-          }
-        }
-      }
-    },
-    "Good" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Хороший"
-          }
-        }
-      }
-    },
-    "Group cipher" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Групповой шифр"
-          }
-        }
-      }
-    },
-    "Hidden network" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Скрытая сеть"
-          }
-        }
-      }
-    },
-    "Hostname" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Имя хоста"
-          }
-        }
-      }
-    },
-    "Identity" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Идентификация"
-          }
-        }
-      }
-    },
-    "IP address" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "IP-адрес"
-          }
-        }
-      }
-    },
-    "IP, name or MAC" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "IP, имя или MAC"
-          }
-        }
-      }
-    },
-    "iPhone apps cannot list nearby Wi-Fi networks, so Spectra uses a Cardputer as its radio. Its ESP32-S3 hears the 2.4 GHz band only; 5 GHz networks do not appear." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Приложения на iPhone не могут получить список сетей Wi-Fi вокруг, поэтому Spectra использует Cardputer как радиомодуль. Его ESP32-S3 слышит только диапазон 2,4 ГГц, сети на 5 ГГц не видны."
-          }
-        }
-      }
-    },
-    "iPhone cannot list nearby Wi-Fi networks by itself. Spectra hears them through a Cardputer." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iPhone сам не может показать сети Wi-Fi вокруг. Spectra слышит их через Cardputer."
-          }
-        }
-      }
-    },
-    "Join a Wi-Fi network first" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сначала подключитесь к Wi-Fi"
-          }
-        }
-      }
-    },
-    "LAN" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сеть"
-          }
-        }
-      }
-    },
-    "Last seen" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Последний раз"
-          }
-        }
-      }
-    },
-    "Last sweep" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Последний проход"
-          }
-        }
-      }
-    },
-    "Listening" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Слушаю эфир"
-          }
-        }
-      }
-    },
-    "Local network" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Локальная сеть"
-          }
-        }
-      }
-    },
-    "Looking for Cardputers running Spectra…" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ищу Cardputer с прошивкой Spectra…"
-          }
-        }
-      }
-    },
-    "MAC address" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "MAC-адрес"
-          }
-        }
-      }
-    },
-    "Made-up networks with drifting signal, for trying the app without a Cardputer." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Вымышленные сети с плавающим сигналом, чтобы попробовать приложение без Cardputer."
-          }
-        }
-      }
-    },
-    "Maker-assigned (%@)" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Назначен производителем (%@)"
-          }
-        }
-      }
-    },
-    "Maker-assigned (OUI %@)" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Заводской (OUI %@)"
-          }
-        }
-      }
-    },
-    "Missed last scan" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Не попала в последний скан"
-          }
-        }
-      }
-    },
-    "Name" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Название"
-          }
-        }
-      }
-    },
-    "Name or BSSID" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Название или BSSID"
-          }
-        }
-      }
-    },
-    "Nearby sensors" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сенсоры рядом"
-          }
-        }
-      }
-    },
-    "Network" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сеть"
-          }
-        }
-      }
-    },
-    "Network cleared" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сеть удалена из списка"
-          }
-        }
-      }
-    },
-    "Networks" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сети"
-          }
-        }
-      }
-    },
-    "Networks appear here after the first scan." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сети появятся здесь после первого скана."
-          }
-        }
-      }
-    },
-    "Networks per channel" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сети по каналам"
-          }
-        }
-      }
-    },
-    "No open ports found" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Открытых портов не найдено"
-          }
-        }
-      }
-    },
-    "No sensor" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Нет сенсора"
-          }
-        }
-      }
-    },
-    "No Wi-Fi" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Нет Wi-Fi"
-          }
-        }
-      }
-    },
-    "None" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Нет"
-          }
-        }
-      }
-    },
-    "Not connected" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Нет подключения"
-          }
-        }
-      }
-    },
-    "Notes" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Замечания"
-          }
-        }
-      }
-    },
-    "Nothing on the air yet" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "В эфире пока пусто"
-          }
-        }
-      }
-    },
-    "Observed" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Наблюдения"
-          }
-        }
-      }
-    },
-    "Of the non-overlapping channels 1, 6 and 11, this one meets the least interference. Set it on your router if you control one." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Из непересекающихся каналов 1, 6 и 11 на этом меньше всего помех. Выберите его в настройках роутера, если он ваш."
-          }
-        }
-      }
-    },
-    "Off" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Выкл."
-          }
-        }
-      }
-    },
-    "On" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Вкл."
-          }
-        }
-      }
-    },
-    "Open" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Открытая"
-          }
-        }
-      }
-    },
-    "Open network: traffic is not encrypted, anyone nearby can read it." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Открытая сеть: трафик не шифруется, его может прочитать любой поблизости."
-          }
-        }
-      }
-    },
-    "Open Settings" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Открыть Настройки"
-          }
-        }
-      }
-    },
-    "Options" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Параметры"
-          }
-        }
-      }
-    },
-    "Other" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Другое"
-          }
-        }
-      }
-    },
-    "OUI" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "OUI"
-          }
-        }
-      }
-    },
-    "Out of range" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Вне зоны"
-          }
-        }
-      }
-    },
-    "Out of range · %@" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Вне зоны · %@"
-          }
-        }
-      }
-    },
-    "Pairwise cipher" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Парный шифр"
-          }
-        }
-      }
-    },
-    "Poor" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Плохой"
-          }
-        }
-      }
-    },
-    "Ports" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Порты"
-          }
-        }
-      }
-    },
-    "ports %@%@" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "порты %@%@"
-          }
-        }
-      }
-    },
-    "Probes %lld common TCP ports with a 1.5 s timeout each." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Проверяет %lld популярных TCP-портов с таймаутом 1,5 с на каждый."
-          }
-        }
-      }
-    },
-    "Probing the subnet…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Опрос подсети…"
-          }
-        }
-      }
-    },
-    "Quietest channel here" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Самый тихий канал здесь"
-          }
-        }
-      }
-    },
-    "Radio" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Радио"
-          }
-        }
-      }
-    },
-    "Randomised" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Случайный"
-          }
-        }
-      }
-    },
-    "Randomised address: usually a phone hotspot, a guest network or a mesh node." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Случайный адрес: обычно это точка доступа телефона, гостевая сеть или узел mesh-системы."
-          }
-        }
-      }
-    },
-    "Reading ARP table…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Чтение ARP-таблицы…"
-          }
-        }
-      }
-    },
-    "Readings" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Замеров"
-          }
-        }
-      }
-    },
-    "Rescan ports" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Повторить сканирование"
-          }
-        }
-      }
-    },
-    "Resolving names…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Определение имён…"
-          }
-        }
-      }
-    },
-    "Scanning ports…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сканирование портов…"
-          }
-        }
-      }
-    },
-    "Scan" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сканировать"
-          }
-        }
-      }
-    },
-    "Scan now" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сканировать"
-          }
-        }
-      }
-    },
-    "Scan ports" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сканировать порты"
-          }
-        }
-      }
-    },
-    "Scanning" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сканирование"
-          }
-        }
-      }
-    },
-    "Scanning…" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сканирую…"
-          }
-        }
-      }
-    },
-    "Scans this session" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сканов за сеанс"
-          }
-        }
-      }
-    },
-    "Searching…" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Поиск…"
-          }
-        }
-      }
-    },
-    "Security" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Безопасность"
-          }
-        }
-      }
-    },
-    "Sensor" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сенсор"
-          }
-        }
-      }
-    },
-    "Show out of range" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Показывать сети вне зоны"
-          }
-        }
-      }
-    },
-    "Signal" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сигнал"
-          }
-        }
-      }
-    },
-    "Simulated" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Симуляция"
-          }
-        }
-      }
-    },
-    "Sort by" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сортировка"
-          }
-        }
-      }
-    },
-    "Spectra is not allowed to use Bluetooth." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Spectra не разрешено использовать Bluetooth."
-          }
-        }
-      }
-    },
-    "Spectra sensor" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сенсор Spectra"
-          }
-        }
-      }
-    },
-    "Standards" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Стандарты"
-          }
-        }
-      }
-    },
-    "Starting Bluetooth…" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Запуск Bluetooth…"
-          }
-        }
-      }
-    },
-    "Stop" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Остановить"
-          }
-        }
-      }
-    },
-    "Supported" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Поддерживается"
-          }
-        }
-      }
-    },
-    "Tap Scan to find devices" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Нажмите «Сканировать», чтобы найти устройства"
-          }
-        }
-      }
-    },
-    "The graph fills in as scans come in" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "График заполнится по мере сканирования"
-          }
-        }
-      }
-    },
-    "This device" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Это устройство"
-          }
-        }
-      }
-    },
-    "This device has no Bluetooth Low Energy." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "На этом устройстве нет Bluetooth Low Energy."
-          }
-        }
-      }
-    },
-    "This firmware speaks protocol %lld; the app expects %lld. Update the one that is older." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This firmware speaks protocol %1$lld; the app expects %2$lld. Update the one that is older."
+    "avg %lld · min %lld · max %lld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "avg %1$lld · min %2$lld · max %3$lld"
           }
         },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Прошивка использует протокол %1$lld, а приложение ждёт %2$lld. Обновите то, что старее."
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сред. %1$lld · мин. %2$lld · макс. %3$lld"
           }
         }
       }
     },
-    "Time" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Время"
+    "Band": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диапазон"
           }
         }
       }
     },
-    "TKIP is enabled for old devices and weakens the whole network." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Включён TKIP для старых устройств, он ослабляет защиту всей сети."
+    "Bands": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диапазоны"
           }
         }
       }
     },
-    "Unknown" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Неизвестно"
+    "Bluetooth is off. Turn it on in Control Centre.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth выключен. Включите его в Пункте управления."
           }
         }
       }
     },
-    "Updated %@ ago" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Обновлено %@ назад"
+    "BSSID": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BSSID"
           }
         }
       }
     },
-    "Waiting for replies…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ожидание ответов…"
+    "Cancel": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отменить"
           }
         }
       }
     },
-    "Waiting for the first scan" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Жду первого скана"
+    "Ch %lld · %@ · %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Ch %1$lld · %2$@ · %3$@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Канал %1$lld · %2$@ · %3$@"
           }
         }
       }
     },
-    "Weak" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Слабый"
+    "Channel": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Канал"
           }
         }
       }
     },
-    "Width" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ширина"
+    "Channel %lld": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Канал %lld"
           }
         }
       }
     },
-    "WPS" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WPS"
+    "Channel use is drawn from the networks the sensor finds.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка каналов строится по сетям, которые находит сенсор."
           }
         }
       }
     },
-    "WPS is on. Its PIN method is a known weak point; turn it off if this is your router." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WPS включён. Его PIN-метод — известное слабое место; отключите WPS, если это ваш роутер."
+    "Channels": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Каналы"
+          }
+        }
+      }
+    },
+    "Chip": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чип"
+          }
+        }
+      }
+    },
+    "Clear list": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очистить список"
+          }
+        }
+      }
+    },
+    "Connect": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключить"
+          }
+        }
+      }
+    },
+    "Connect a Cardputer to see networks": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключите Cardputer, чтобы увидеть сети"
+          }
+        }
+      }
+    },
+    "Connect to a Wi-Fi network to scan devices on it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключитесь к Wi-Fi, чтобы сканировать устройства в сети."
+          }
+        }
+      }
+    },
+    "Connecting…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключение…"
+          }
+        }
+      }
+    },
+    "Copy BSSID": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировать BSSID"
+          }
+        }
+      }
+    },
+    "Copy IP": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировать IP"
+          }
+        }
+      }
+    },
+    "Copy MAC": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировать MAC"
+          }
+        }
+      }
+    },
+    "Copy name": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировать название"
+          }
+        }
+      }
+    },
+    "Country": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Страна"
+          }
+        }
+      }
+    },
+    "dBm": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "дБм"
+          }
+        }
+      }
+    },
+    "Demo": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Демо"
+          }
+        }
+      }
+    },
+    "Demo sensor": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Демо-сенсор"
+          }
+        }
+      }
+    },
+    "Device": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Устройство"
+          }
+        }
+      }
+    },
+    "Device cleared": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Устройство удалено"
+          }
+        }
+      }
+    },
+    "Disconnect": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отключить"
+          }
+        }
+      }
+    },
+    "Discovering devices…": {
+      "comment": "Scanning progress phase when using TCP port discovery.",
+      "isCommentAutoGenerated": true
+    },
+    "Each hump is one network: its width is the channels it covers, its height how loud it is here.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Каждый холм — одна сеть: ширина показывает, какие каналы она занимает, высота — насколько громко она слышна здесь."
+          }
+        }
+      }
+    },
+    "Every %lld s": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Каждые %lld с"
+          }
+        }
+      }
+    },
+    "Excellent": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отличный"
+          }
+        }
+      }
+    },
+    "Fair": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Средний"
+          }
+        }
+      }
+    },
+    "Find devices, their MAC addresses and open ports on the network your iPhone is on.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Находит устройства, их MAC-адреса и открытые порты в сети, к которой подключён iPhone."
+          }
+        }
+      }
+    },
+    "Find sensor": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Найти сенсор"
+          }
+        }
+      }
+    },
+    "Fine Timing Measurement": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Измерение расстояния (FTM)"
+          }
+        }
+      }
+    },
+    "Firmware": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Прошивка"
+          }
+        }
+      }
+    },
+    "First seen": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Впервые замечена"
+          }
+        }
+      }
+    },
+    "Floor": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нижняя граница"
+          }
+        }
+      }
+    },
+    "Frequency": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Частота"
+          }
+        }
+      }
+    },
+    "Gateway": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Шлюз"
+          }
+        }
+      }
+    },
+    "gateway %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "шлюз %@"
+          }
+        }
+      }
+    },
+    "Generation": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поколение"
+          }
+        }
+      }
+    },
+    "Good": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хороший"
+          }
+        }
+      }
+    },
+    "Group cipher": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповой шифр"
+          }
+        }
+      }
+    },
+    "Hidden network": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрытая сеть"
+          }
+        }
+      }
+    },
+    "Hostname": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Имя хоста"
+          }
+        }
+      }
+    },
+    "Identity": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Идентификация"
+          }
+        }
+      }
+    },
+    "IP address": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "IP-адрес"
+          }
+        }
+      }
+    },
+    "IP, name or MAC": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "IP, имя или MAC"
+          }
+        }
+      }
+    },
+    "iPhone apps cannot list nearby Wi-Fi networks, so Spectra uses a Cardputer as its radio. Its ESP32-S3 hears the 2.4 GHz band only; 5 GHz networks do not appear.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приложения на iPhone не могут получить список сетей Wi-Fi вокруг, поэтому Spectra использует Cardputer как радиомодуль. Его ESP32-S3 слышит только диапазон 2,4 ГГц, сети на 5 ГГц не видны."
+          }
+        }
+      }
+    },
+    "iPhone cannot list nearby Wi-Fi networks by itself. Spectra hears them through a Cardputer.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhone сам не может показать сети Wi-Fi вокруг. Spectra слышит их через Cardputer."
+          }
+        }
+      }
+    },
+    "Join a Wi-Fi network first": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала подключитесь к Wi-Fi"
+          }
+        }
+      }
+    },
+    "LAN": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сеть"
+          }
+        }
+      }
+    },
+    "Last seen": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Последний раз"
+          }
+        }
+      }
+    },
+    "Last sweep": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Последний проход"
+          }
+        }
+      }
+    },
+    "Listening": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слушаю эфир"
+          }
+        }
+      }
+    },
+    "Local network": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальная сеть"
+          }
+        }
+      }
+    },
+    "Looking for Cardputers running Spectra…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ищу Cardputer с прошивкой Spectra…"
+          }
+        }
+      }
+    },
+    "MAC address": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MAC-адрес"
+          }
+        }
+      }
+    },
+    "Made-up networks with drifting signal, for trying the app without a Cardputer.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вымышленные сети с плавающим сигналом, чтобы попробовать приложение без Cardputer."
+          }
+        }
+      }
+    },
+    "Maker-assigned (%@)": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Назначен производителем (%@)"
+          }
+        }
+      }
+    },
+    "Maker-assigned (OUI %@)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заводской (OUI %@)"
+          }
+        }
+      }
+    },
+    "Missed last scan": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не попала в последний скан"
+          }
+        }
+      }
+    },
+    "Name": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Название"
+          }
+        }
+      }
+    },
+    "Name or BSSID": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Название или BSSID"
+          }
+        }
+      }
+    },
+    "Nearby sensors": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сенсоры рядом"
+          }
+        }
+      }
+    },
+    "Network": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сеть"
+          }
+        }
+      }
+    },
+    "Network cleared": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сеть удалена из списка"
+          }
+        }
+      }
+    },
+    "Networks": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сети"
+          }
+        }
+      }
+    },
+    "Networks appear here after the first scan.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сети появятся здесь после первого скана."
+          }
+        }
+      }
+    },
+    "Networks per channel": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сети по каналам"
+          }
+        }
+      }
+    },
+    "No open ports found": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открытых портов не найдено"
+          }
+        }
+      }
+    },
+    "No sensor": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет сенсора"
+          }
+        }
+      }
+    },
+    "No Wi-Fi": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет Wi-Fi"
+          }
+        }
+      }
+    },
+    "None": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет"
+          }
+        }
+      }
+    },
+    "Not connected": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет подключения"
+          }
+        }
+      }
+    },
+    "Notes": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Замечания"
+          }
+        }
+      }
+    },
+    "Nothing on the air yet": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В эфире пока пусто"
+          }
+        }
+      }
+    },
+    "Observed": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Наблюдения"
+          }
+        }
+      }
+    },
+    "Of the non-overlapping channels 1, 6 and 11, this one meets the least interference. Set it on your router if you control one.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Из непересекающихся каналов 1, 6 и 11 на этом меньше всего помех. Выберите его в настройках роутера, если он ваш."
+          }
+        }
+      }
+    },
+    "Off": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выкл."
+          }
+        }
+      }
+    },
+    "On": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вкл."
+          }
+        }
+      }
+    },
+    "Open": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открытая"
+          }
+        }
+      }
+    },
+    "Open network: traffic is not encrypted, anyone nearby can read it.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открытая сеть: трафик не шифруется, его может прочитать любой поблизости."
+          }
+        }
+      }
+    },
+    "Open Settings": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть Настройки"
+          }
+        }
+      }
+    },
+    "Options": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Параметры"
+          }
+        }
+      }
+    },
+    "Other": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Другое"
+          }
+        }
+      }
+    },
+    "OUI": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OUI"
+          }
+        }
+      }
+    },
+    "Out of range": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вне зоны"
+          }
+        }
+      }
+    },
+    "Out of range · %@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вне зоны · %@"
+          }
+        }
+      }
+    },
+    "Pairwise cipher": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Парный шифр"
+          }
+        }
+      }
+    },
+    "Poor": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Плохой"
+          }
+        }
+      }
+    },
+    "Ports": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Порты"
+          }
+        }
+      }
+    },
+    "ports %@%@": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "порты %@%@"
+          }
+        }
+      }
+    },
+    "Probes %lld common TCP ports with a 1.5 s timeout each.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверяет %lld популярных TCP-портов с таймаутом 1,5 с на каждый."
+          }
+        }
+      }
+    },
+    "Probing the subnet…": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Опрос подсети…"
+          }
+        }
+      }
+    },
+    "Quietest channel here": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Самый тихий канал здесь"
+          }
+        }
+      }
+    },
+    "Radio": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Радио"
+          }
+        }
+      }
+    },
+    "Randomised": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Случайный"
+          }
+        }
+      }
+    },
+    "Randomised address: usually a phone hotspot, a guest network or a mesh node.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Случайный адрес: обычно это точка доступа телефона, гостевая сеть или узел mesh-системы."
+          }
+        }
+      }
+    },
+    "Reading ARP table…": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтение ARP-таблицы…"
+          }
+        }
+      }
+    },
+    "Readings": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Замеров"
+          }
+        }
+      }
+    },
+    "Rescan ports": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторить сканирование"
+          }
+        }
+      }
+    },
+    "Resolving names…": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Определение имён…"
+          }
+        }
+      }
+    },
+    "Scanning ports…": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сканирование портов…"
+          }
+        }
+      }
+    },
+    "Scan": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сканировать"
+          }
+        }
+      }
+    },
+    "Scan now": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сканировать"
+          }
+        }
+      }
+    },
+    "Scan ports": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сканировать порты"
+          }
+        }
+      }
+    },
+    "Scanning": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сканирование"
+          }
+        }
+      }
+    },
+    "Scanning…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сканирую…"
+          }
+        }
+      }
+    },
+    "Scans this session": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сканов за сеанс"
+          }
+        }
+      }
+    },
+    "Searching…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поиск…"
+          }
+        }
+      }
+    },
+    "Security": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Безопасность"
+          }
+        }
+      }
+    },
+    "Sensor": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сенсор"
+          }
+        }
+      }
+    },
+    "Show out of range": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показывать сети вне зоны"
+          }
+        }
+      }
+    },
+    "Signal": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сигнал"
+          }
+        }
+      }
+    },
+    "Simulated": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Симуляция"
+          }
+        }
+      }
+    },
+    "Sort by": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сортировка"
+          }
+        }
+      }
+    },
+    "Spectra is not allowed to use Bluetooth.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spectra не разрешено использовать Bluetooth."
+          }
+        }
+      }
+    },
+    "Spectra sensor": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сенсор Spectra"
+          }
+        }
+      }
+    },
+    "Standards": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стандарты"
+          }
+        }
+      }
+    },
+    "Starting Bluetooth…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запуск Bluetooth…"
+          }
+        }
+      }
+    },
+    "Stop": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Остановить"
+          }
+        }
+      }
+    },
+    "Supported": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поддерживается"
+          }
+        }
+      }
+    },
+    "Tap Scan to find devices": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нажмите «Сканировать», чтобы найти устройства"
+          }
+        }
+      }
+    },
+    "The graph fills in as scans come in": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "График заполнится по мере сканирования"
+          }
+        }
+      }
+    },
+    "This device": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Это устройство"
+          }
+        }
+      }
+    },
+    "This device has no Bluetooth Low Energy.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На этом устройстве нет Bluetooth Low Energy."
+          }
+        }
+      }
+    },
+    "This firmware speaks protocol %lld; the app expects %lld. Update the one that is older.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "This firmware speaks protocol %1$lld; the app expects %2$lld. Update the one that is older."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Прошивка использует протокол %1$lld, а приложение ждёт %2$lld. Обновите то, что старее."
+          }
+        }
+      }
+    },
+    "Time": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Время"
+          }
+        }
+      }
+    },
+    "TKIP is enabled for old devices and weakens the whole network.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включён TKIP для старых устройств, он ослабляет защиту всей сети."
+          }
+        }
+      }
+    },
+    "Unknown": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неизвестно"
+          }
+        }
+      }
+    },
+    "Updated %@ ago": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновлено %@ назад"
+          }
+        }
+      }
+    },
+    "Waiting for replies…": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ожидание ответов…"
+          }
+        }
+      }
+    },
+    "Waiting for the first scan": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Жду первого скана"
+          }
+        }
+      }
+    },
+    "Weak": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слабый"
+          }
+        }
+      }
+    },
+    "Width": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ширина"
+          }
+        }
+      }
+    },
+    "WPS": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WPS"
+          }
+        }
+      }
+    },
+    "WPS is on. Its PIN method is a known weak point; turn it off if this is your router.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WPS включён. Его PIN-метод — известное слабое место; отключите WPS, если это ваш роутер."
+          }
+        }
+      }
+    },
+    "%lld clients": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld клиентов"
+          }
+        }
+      }
+    },
+    "Devices connected to this network, found through promiscuous-mode frame capture on the sensor.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Устройства, подключённые к этой сети. Найдены через захват фреймов в эфире на сенсоре."
+          }
+        }
+      }
+    },
+    "Random": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Случ."
           }
         }
       }
     }
   },
-  "version" : "1.1"
+  "version": "1.1"
 }

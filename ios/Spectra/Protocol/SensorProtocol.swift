@@ -4,7 +4,7 @@ import Foundation
 /// The BLE contract with the Cardputer firmware. docs/protocol.md is the
 /// source of truth; keep the two in step.
 nonisolated enum SensorProtocol {
-    static let version = 1
+    static let version = 2
 
     static let service = CBUUID(string: "53500001-8F2D-4B6A-9C1E-737065637472")
     static let info = CBUUID(string: "53500002-8F2D-4B6A-9C1E-737065637472")
@@ -28,13 +28,15 @@ nonisolated enum SensorProtocol {
     enum Message: Equatable {
         case scanStarted(scanID: UInt16)
         case accessPoint(scanID: UInt16, reading: AccessPointReading)
-        case scanFinished(scanID: UInt16, count: Int, duration: Duration)
+        case scanFinished(scanID: UInt16, count: Int, duration: Duration, stationCount: Int)
+        case station(scanID: UInt16, client: WiFiClient)
     }
 
     enum MessageType: UInt8 {
         case scanStarted = 0x10
         case accessPoint = 0x11
         case scanFinished = 0x12
+        case station = 0x13
     }
 
     /// Decodes one Results notification, or returns nil for anything malformed
@@ -52,10 +54,13 @@ nonisolated enum SensorProtocol {
 
         case .scanFinished:
             guard bytes.count >= 7 else { return nil }
+            // v2 adds station count at offset 7; v1 messages are only 7 bytes.
+            let staCount = bytes.count >= 9 ? Int(u16(bytes, 7)) : 0
             return .scanFinished(
                 scanID: scanID,
                 count: Int(u16(bytes, 3)),
-                duration: .milliseconds(Int(u16(bytes, 5)))
+                duration: .milliseconds(Int(u16(bytes, 5))),
+                stationCount: staCount
             )
 
         case .accessPoint:
@@ -81,6 +86,21 @@ nonisolated enum SensorProtocol {
                 ssidBytes: Data(bytes[19..<(19 + ssidLength)])
             )
             return .accessPoint(scanID: scanID, reading: reading)
+
+        case .station:
+            guard bytes.count >= 17 else { return nil }
+            let clientMAC = BSSID(bytes: Array(bytes[3..<9]))
+            let apBSSID = BSSID(bytes: Array(bytes[9..<15]))
+            let rssi = Int(Int8(bitPattern: bytes[15]))
+            let associated = (bytes[16] & 0x01) != 0
+            let zeroBSSID = apBSSID.bytes.allSatisfy { $0 == 0 }
+            let client = WiFiClient(
+                mac: clientMAC,
+                apBSSID: zeroBSSID ? nil : apBSSID,
+                rssi: rssi,
+                isAssociated: associated
+            )
+            return .station(scanID: scanID, client: client)
         }
     }
 
@@ -97,11 +117,12 @@ nonisolated enum SensorProtocol {
             bytes.append(MessageType.scanStarted.rawValue)
             put16(scanID)
 
-        case .scanFinished(let scanID, let count, let duration):
+        case .scanFinished(let scanID, let count, let duration, let stationCount):
             bytes.append(MessageType.scanFinished.rawValue)
             put16(scanID)
             put16(UInt16(clamping: count))
             put16(UInt16(clamping: Int(duration / .milliseconds(1))))
+            put16(UInt16(clamping: stationCount))
 
         case .accessPoint(let scanID, let reading):
             bytes.append(MessageType.accessPoint.rawValue)
@@ -119,6 +140,14 @@ nonisolated enum SensorProtocol {
             let ssid = reading.ssidBytes.prefix(32)
             bytes.append(UInt8(ssid.count))
             bytes.append(contentsOf: ssid)
+
+        case .station(let scanID, let client):
+            bytes.append(MessageType.station.rawValue)
+            put16(scanID)
+            bytes.append(contentsOf: client.mac.bytes)
+            bytes.append(contentsOf: (client.apBSSID ?? BSSID(bytes: [0, 0, 0, 0, 0, 0])).bytes)
+            bytes.append(UInt8(bitPattern: Int8(clamping: client.rssi)))
+            bytes.append(client.isAssociated ? 0x01 : 0x00)
         }
         return Data(bytes)
     }

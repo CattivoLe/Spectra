@@ -96,6 +96,19 @@ struct NetworkDetailView: View {
                 InfoRow("WPS", value: reading.capabilities.contains(.wps) ? String(localized: "On") : String(localized: "Off"))
             }
 
+            // Clients (stations associated with this AP).
+            if !network.clients.isEmpty {
+                Section {
+                    ForEach(network.clients) { client in
+                        ClientRow(client: client)
+                    }
+                } header: {
+                    Text("\(network.clients.count) clients")
+                } footer: {
+                    Text("Devices connected to this network, found through promiscuous-mode frame capture on the sensor.")
+                }
+            }
+
             Section("Observed") {
                 InfoRow("First seen") { Text(network.firstSeen, style: .time) }
                 InfoRow("Last seen") { Text(network.lastSeen, style: .relative) }

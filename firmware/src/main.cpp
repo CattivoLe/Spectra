@@ -1,7 +1,8 @@
 // Spectra sensor firmware for the M5Stack Cardputer.
 //
-// Scans for Wi-Fi access points and sends each result to the Spectra iOS app
-// over BLE. The wire format is described in docs/protocol.md.
+// Scans for Wi-Fi access points and nearby stations (clients), then sends the
+// results to the Spectra iOS app over BLE. The wire format is described in
+// docs/protocol.md.
 
 #include <M5Cardputer.h>
 #include <NimBLEDevice.h>
@@ -9,10 +10,11 @@
 #include <esp_mac.h>
 #include <esp_wifi.h>
 #include <algorithm>
+#include <cstring>
 #include <vector>
 
-static constexpr char kFirmwareVersion[] = "0.1.0";
-static constexpr uint8_t kProtocolVersion = 1;
+static constexpr char kFirmwareVersion[] = "0.2.0";
+static constexpr uint8_t kProtocolVersion = 2;
 
 static constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
 static constexpr char kInfoUuid[] = "53500002-8F2D-4B6A-9C1E-737065637472";
@@ -25,16 +27,29 @@ static constexpr uint8_t kCmdSetInterval = 0x02;
 static constexpr uint8_t kMsgScanStarted = 0x10;
 static constexpr uint8_t kMsgAccessPoint = 0x11;
 static constexpr uint8_t kMsgScanFinished = 0x12;
+static constexpr uint8_t kMsgStation = 0x13;
 
 // Time spent on each channel during an active scan. 13 channels at 120 ms
 // keeps a full sweep under two seconds.
 static constexpr uint32_t kMsPerChannel = 120;
+
+// How long promiscuous mode listens on each channel for clients.
+static constexpr uint32_t kSniffMsPerChannel = 250;
+static constexpr uint8_t kSniffChannels[] = {1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
 
 struct ApSummary {
   String ssid;
   int8_t rssi;
   uint8_t channel;
   wifi_auth_mode_t auth;
+};
+
+// A station (client device) seen through promiscuous-mode frame capture.
+struct StationEntry {
+  uint8_t mac[6];
+  uint8_t bssid[6];  // all zeros when the client is only probing
+  int8_t rssi;       // strongest signal seen
+  bool associated;   // true if seen in a data/association frame
 };
 
 static NimBLEServer *server = nullptr;
@@ -52,9 +67,116 @@ static uint16_t scanId = 0;
 static uint32_t lastScanMs = 0;
 static uint32_t lastScanDurationMs = 0;
 static std::vector<ApSummary> lastResults;
+static uint16_t lastStationCount = 0;
 static bool uiDirty = true;
 
+// Collected during promiscuous-mode capture; accessed only from loop().
+static std::vector<StationEntry> capturedStations;
+static uint8_t ownMac[6];
+
 static bool isConnected() { return server != nullptr && server->getConnectedCount() > 0; }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+static bool macEqual(const uint8_t *a, const uint8_t *b) { return memcmp(a, b, 6) == 0; }
+
+static bool isBroadcast(const uint8_t *mac) {
+  static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  static const uint8_t zero[6] = {0, 0, 0, 0, 0, 0};
+  return macEqual(mac, bcast) || macEqual(mac, zero);
+}
+
+static bool isMulticast(const uint8_t *mac) { return (mac[0] & 0x01) != 0; }
+
+/// Record a station, merging into an existing entry when we already know it.
+static void recordStation(const uint8_t *mac, const uint8_t *bssid, int8_t rssi, bool assoc) {
+  if (isBroadcast(mac) || isMulticast(mac) || macEqual(mac, ownMac)) return;
+  for (auto &s : capturedStations) {
+    if (macEqual(s.mac, mac)) {
+      if (rssi > s.rssi) s.rssi = rssi;
+      if (assoc && !s.associated) {
+        s.associated = true;
+        memcpy(s.bssid, bssid, 6);
+      }
+      return;
+    }
+  }
+  // New entry, cap at 128 to stay within RAM.
+  if (capturedStations.size() >= 128) return;
+  StationEntry entry;
+  memcpy(entry.mac, mac, 6);
+  memcpy(entry.bssid, bssid, 6);
+  entry.rssi = rssi;
+  entry.associated = assoc;
+  capturedStations.push_back(entry);
+}
+
+// ---------------------------------------------------------------------------
+// Promiscuous-mode callback
+// ---------------------------------------------------------------------------
+
+// 802.11 MAC header, simplified: first 24 bytes are always present.
+// FC (2) + Duration (2) + Addr1 (6) + Addr2 (6) + Addr3 (6) + SeqCtrl (2).
+//
+// Frame types we care about:
+//   Management (type 0): probe request (subtype 4), probe response (5),
+//     association request (0), association response (1), reassociation (2/3).
+//   Data (type 2): any data frame, including QoS data.
+
+static void IRAM_ATTR promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t type) {
+  if (type != WIFI_PKT_MGMT && type != WIFI_PKT_DATA) return;
+
+  const auto *pkt = static_cast<const wifi_promiscuous_pkt_t *>(buf);
+  if (pkt->rx_ctrl.sig_len < 24) return;
+
+  const uint8_t *frame = pkt->payload;
+  const uint8_t fc0 = frame[0];
+  const uint8_t frameType = (fc0 >> 2) & 0x03;
+  const uint8_t subtype = (fc0 >> 4) & 0x0F;
+  const int8_t rssi = pkt->rx_ctrl.rssi;
+
+  const uint8_t *addr1 = frame + 4;   // receiver / destination
+  const uint8_t *addr2 = frame + 10;  // transmitter / source
+  const uint8_t *addr3 = frame + 16;  // BSSID (in most cases)
+
+  static const uint8_t zeroBssid[6] = {0, 0, 0, 0, 0, 0};
+
+  if (frameType == 0) {
+    // Management frame.
+    if (subtype == 4) {
+      // Probe request: addr2 is the client, no associated AP.
+      recordStation(addr2, zeroBssid, rssi, false);
+    } else if (subtype == 0 || subtype == 2) {
+      // Association / reassociation request: addr2 is the client, addr1 is the AP.
+      recordStation(addr2, addr1, rssi, true);
+    } else if (subtype == 1 || subtype == 3) {
+      // Association / reassociation response: addr1 is the client, addr2 is the AP.
+      recordStation(addr1, addr2, rssi, true);
+    }
+  } else if (frameType == 2) {
+    // Data frame.
+    const uint8_t toDS = (fc0 >> 0) & 0x01;   // actually fc1 bit 0
+    const uint8_t fromDS = (fc0 >> 1) & 0x01;  // actually fc1 bit 1
+    // Re-read from fc1 which is frame[1].
+    const uint8_t ds = frame[1] & 0x03;
+
+    if (ds == 0x01) {
+      // ToDS=1, FromDS=0: client → AP.
+      // Addr1 = BSSID, Addr2 = source (client), Addr3 = destination.
+      recordStation(addr2, addr1, rssi, true);
+    } else if (ds == 0x02) {
+      // ToDS=0, FromDS=1: AP → client.
+      // Addr1 = destination (client), Addr2 = BSSID, Addr3 = source.
+      recordStation(addr1, addr2, rssi, true);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// BLE protocol
+// ---------------------------------------------------------------------------
 
 static void updateInfo() {
   char json[96];
@@ -147,13 +269,30 @@ static void sendAccessPoint(const wifi_ap_record_t &ap) {
   sendMessage(msg, 19 + ssidLength);
 }
 
-static void sendScanFinished(uint16_t count, uint16_t durationMs) {
-  uint8_t msg[7] = {kMsgScanFinished};
+static void sendStation(const StationEntry &sta) {
+  // 17 bytes: type(1) + scanId(2) + clientMAC(6) + apBSSID(6) + rssi(1) + flags(1).
+  uint8_t msg[17];
+  msg[0] = kMsgStation;
   putU16(msg + 1, scanId);
-  putU16(msg + 3, count);
-  putU16(msg + 5, durationMs);
+  memcpy(msg + 3, sta.mac, 6);
+  memcpy(msg + 9, sta.bssid, 6);
+  msg[15] = static_cast<uint8_t>(sta.rssi);
+  msg[16] = sta.associated ? 0x01 : 0x00;
   sendMessage(msg, sizeof(msg));
 }
+
+static void sendScanFinished(uint16_t apCount, uint16_t staCount, uint16_t durationMs) {
+  uint8_t msg[9] = {kMsgScanFinished};
+  putU16(msg + 1, scanId);
+  putU16(msg + 3, apCount);
+  putU16(msg + 5, durationMs);
+  putU16(msg + 7, staCount);
+  sendMessage(msg, sizeof(msg));
+}
+
+// ---------------------------------------------------------------------------
+// Display
+// ---------------------------------------------------------------------------
 
 static void drawStatus(const char *line) {
   auto &d = M5Cardputer.Display;
@@ -180,7 +319,8 @@ static void drawUi() {
   if (lastScanMs == 0) {
     d.print("S or Enter: scan");
   } else {
-    d.printf("%u networks  %lu ms  S: scan", static_cast<unsigned>(lastResults.size()),
+    d.printf("%u AP  %u STA  %lu ms", static_cast<unsigned>(lastResults.size()),
+             static_cast<unsigned>(lastStationCount),
              static_cast<unsigned long>(lastScanDurationMs));
   }
 
@@ -207,25 +347,50 @@ static void drawUi() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Scan
+// ---------------------------------------------------------------------------
+
+/// Sniff Wi-Fi frames in promiscuous mode to discover client stations.
+static void sniffStations() {
+  capturedStations.clear();
+
+  // Remember our own STA MAC so we filter it out.
+  esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
+
+  esp_wifi_set_promiscuous_rx_filter(
+      &(wifi_promiscuous_filter_t){.filter_mask =
+                                       WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA});
+  esp_wifi_set_promiscuous(true);
+  esp_wifi_set_promiscuous_cb(promiscuousCallback);
+
+  for (uint8_t ch : kSniffChannels) {
+    esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+    delay(kSniffMsPerChannel);
+  }
+
+  esp_wifi_set_promiscuous(false);
+}
+
 static void runScan() {
   ++scanId;
-  drawStatus("Scanning...");
+  drawStatus("Scanning APs...");
   sendScanStarted();
 
   const uint32_t started = millis();
+
+  // Phase 1: standard AP scan.
   const int16_t found = WiFi.scanNetworks(false, true, false, kMsPerChannel);
-  lastScanDurationMs = millis() - started;
-  lastScanMs = millis();
 
   lastResults.clear();
-  uint16_t sent = 0;
+  uint16_t apSent = 0;
   for (int16_t i = 0; i < found; ++i) {
     const auto *ap = static_cast<const wifi_ap_record_t *>(WiFi.getScanInfoByIndex(i));
     if (ap == nullptr) {
       continue;
     }
     sendAccessPoint(*ap);
-    ++sent;
+    ++apSent;
     lastResults.push_back({String(reinterpret_cast<const char *>(ap->ssid)), ap->rssi, ap->primary,
                            ap->authmode});
   }
@@ -233,9 +398,29 @@ static void runScan() {
 
   std::sort(lastResults.begin(), lastResults.end(),
             [](const ApSummary &a, const ApSummary &b) { return a.rssi > b.rssi; });
-  sendScanFinished(sent, static_cast<uint16_t>(std::min<uint32_t>(lastScanDurationMs, 0xFFFF)));
+
+  // Phase 2: promiscuous-mode station sniffing.
+  drawStatus("Sniffing clients...");
+  sniffStations();
+
+  uint16_t staSent = 0;
+  for (const auto &sta : capturedStations) {
+    sendStation(sta);
+    ++staSent;
+  }
+  lastStationCount = staSent;
+
+  lastScanDurationMs = millis() - started;
+  lastScanMs = millis();
+
+  sendScanFinished(apSent, staSent,
+                   static_cast<uint16_t>(std::min<uint32_t>(lastScanDurationMs, 0xFFFF)));
   uiDirty = true;
 }
+
+// ---------------------------------------------------------------------------
+// BLE setup
+// ---------------------------------------------------------------------------
 
 static void setupBle() {
   uint8_t mac[6];

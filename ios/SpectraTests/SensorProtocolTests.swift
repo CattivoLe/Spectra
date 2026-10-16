@@ -52,8 +52,48 @@ struct SensorProtocolTests {
     }
 
     @Test func scanFinishedRoundTrips() {
-        let message = SensorProtocol.Message.scanFinished(scanID: 65535, count: 23, duration: .milliseconds(1640))
+        let message = SensorProtocol.Message.scanFinished(scanID: 65535, count: 23, duration: .milliseconds(1640), stationCount: 7)
         #expect(SensorProtocol.decode(SensorProtocol.encode(message)) == message)
+    }
+
+    @Test func scanFinishedV1HasZeroStations() throws {
+        // v1 messages are only 7 bytes, no station count.
+        let bytes: [UInt8] = [0x12, 0xFF, 0xFF, 0x05, 0x00, 0x68, 0x06]
+        guard case .scanFinished(_, _, _, let staCount) = SensorProtocol.decode(Data(bytes)) else {
+            Issue.record("not decoded as scanFinished")
+            return
+        }
+        #expect(staCount == 0)
+    }
+
+    @Test func stationRoundTrips() throws {
+        let client = WiFiClient(
+            mac: BSSID(bytes: [0xAA, 0xBB, 0xCC, 0x01, 0x02, 0x03]),
+            apBSSID: BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x22, 0xA1]),
+            rssi: -58,
+            isAssociated: true
+        )
+        let message = SensorProtocol.Message.station(scanID: 42, client: client)
+        let data = SensorProtocol.encode(message)
+        #expect(data.count == 17)
+        let decoded = try #require(SensorProtocol.decode(data))
+        #expect(decoded == message)
+    }
+
+    @Test func probingStationHasNilBSSID() throws {
+        let client = WiFiClient(
+            mac: BSSID(bytes: [0x7A, 0x12, 0x34, 0x56, 0x78, 0x9A]),
+            apBSSID: nil,
+            rssi: -74,
+            isAssociated: false
+        )
+        let data = SensorProtocol.encode(.station(scanID: 1, client: client))
+        guard case .station(_, let decoded) = SensorProtocol.decode(data) else {
+            Issue.record("not decoded as station")
+            return
+        }
+        #expect(decoded.apBSSID == nil)
+        #expect(!decoded.isAssociated)
     }
 
     @Test(arguments: [
@@ -85,7 +125,7 @@ struct NetworkStoreTests {
     private func scan(_ store: NetworkStore, id: UInt16, _ readings: [AccessPointReading]) {
         store.handle(.scanStarted(scanID: id))
         for r in readings { store.handle(.accessPoint(scanID: id, reading: r)) }
-        store.handle(.scanFinished(scanID: id, count: readings.count, duration: .seconds(1)))
+        store.handle(.scanFinished(scanID: id, count: readings.count, duration: .seconds(1), stationCount: 0))
     }
 
     @Test func networkGoesOutOfRangeAfterMissedScans() {
@@ -157,9 +197,9 @@ struct LastScanTests {
         )
         store.handle(.scanStarted(scanID: 1))
         store.handle(.accessPoint(scanID: 1, reading: weak))
-        store.handle(.scanFinished(scanID: 1, count: 1, duration: .seconds(1)))
+        store.handle(.scanFinished(scanID: 1, count: 1, duration: .seconds(1), stationCount: 0))
         store.handle(.scanStarted(scanID: 2))
-        store.handle(.scanFinished(scanID: 2, count: 0, duration: .seconds(1)))
+        store.handle(.scanFinished(scanID: 2, count: 0, duration: .seconds(1), stationCount: 0))
 
         let network = store.networks[weak.bssid]
         #expect(network?.wasInLastScan == false)

@@ -1,7 +1,7 @@
 # Spectra BLE protocol
 
 The Cardputer runs a GATT server; the iPhone is the central. Everything is
-little-endian. Version 1.
+little-endian. Version 2.
 
 ## Service
 
@@ -22,7 +22,7 @@ The device advertises the service UUID and the name `Spectra-XXXX`, where
 UTF-8 JSON, for example:
 
 ```json
-{"proto":1,"fw":"0.1.0","chip":"ESP32-S3","bands":["2.4"],"interval":5}
+{"proto":2,"fw":"0.2.0","chip":"ESP32-S3","bands":["2.4"],"interval":5}
 ```
 
 `interval` is the current automatic scan interval in seconds, 0 when off.
@@ -76,6 +76,20 @@ must negotiate an ATT MTU of at least 64 (iOS always does).
 | 1 | 2 | scan id |
 | 3 | 2 | number of access points sent |
 | 5 | 2 | scan duration, ms |
+| 7 | 2 | number of stations sent (v2; absent in v1) |
+
+### `0x13` Station (v2)
+
+A client device (station) seen through promiscuous-mode frame capture.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x13` |
+| 1 | 2 | scan id |
+| 3 | 6 | client MAC address |
+| 9 | 6 | AP BSSID (all zeros when the client is only probing, not associated) |
+| 15 | 1 | RSSI, dBm (`i8`) |
+| 16 | 1 | flags: bit0 = associated (client is connected to the AP in BSSID) |
 
 ### Auth modes
 
