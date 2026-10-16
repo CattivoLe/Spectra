@@ -57,7 +57,8 @@ struct NetworksView: View {
                             }
                         }
                     } header: {
-                        Text("\(store.networks.values.filter(\.isInRange).count) in range")
+                        // Matches the count on the Cardputer's screen.
+                        Text("\(store.networks.values.filter(\.wasInLastScan).count) in last scan")
                     }
                 }
             }
@@ -193,8 +194,10 @@ struct NetworkRow: View {
                         .foregroundStyle(reading.securityColor)
                 }
                 Group {
-                    if network.isInRange {
+                    if network.wasInLastScan {
                         Text("Ch \(reading.channel) · \(reading.auth.name) · \(reading.capabilities.generation)")
+                    } else if network.isInRange {
+                        Text("Missed last scan")
                     } else {
                         Text("Out of range · \(network.lastSeen, style: .relative)")
                     }
@@ -219,7 +222,7 @@ struct NetworkRow: View {
                 .frame(minWidth: 32, alignment: .trailing)
                 .accessibilityLabel("\(reading.rssi) dBm")
         }
-        .opacity(network.isInRange ? 1 : 0.6)
+        .opacity(network.wasInLastScan ? 1 : network.isInRange ? 0.8 : 0.6)
         .contentTransition(.numericText())
         .animation(.default, value: reading.rssi)
     }

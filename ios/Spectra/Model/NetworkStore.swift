@@ -16,6 +16,9 @@ struct TrackedNetwork: Identifiable, Equatable {
     var missedScans = 0
 
     var id: BSSID { latest.bssid }
+    var wasInLastScan: Bool { missedScans == 0 }
+    /// Still counted as nearby after a few misses: weak networks drop out of
+    /// single scans, and the list should not flicker with them.
     var isInRange: Bool { missedScans < NetworkStore.scansBeforeOutOfRange }
 
     var strongestRSSI: Int { samples.map(\.rssi).max() ?? latest.rssi }

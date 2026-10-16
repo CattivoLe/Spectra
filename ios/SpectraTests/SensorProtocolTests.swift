@@ -146,3 +146,23 @@ struct ChannelAdvisorTests {
         #expect(ChannelAdvisor.congestion(on: 11, from: [wide]) > 0)
     }
 }
+
+struct LastScanTests {
+    @Test func heldNetworkIsNotInLastScan() {
+        let store = NetworkStore()
+        let weak = AccessPointReading(
+            bssid: BSSID(bytes: [0, 0, 0, 0, 0, 9]), rssi: -88, channel: 13, secondaryChannel: .none,
+            auth: .wpa2PSK, pairwiseCipher: .ccmp, groupCipher: .ccmp, capabilities: [.n],
+            countryCode: nil, ssidBytes: Data("weak".utf8)
+        )
+        store.handle(.scanStarted(scanID: 1))
+        store.handle(.accessPoint(scanID: 1, reading: weak))
+        store.handle(.scanFinished(scanID: 1, count: 1, duration: .seconds(1)))
+        store.handle(.scanStarted(scanID: 2))
+        store.handle(.scanFinished(scanID: 2, count: 0, duration: .seconds(1)))
+
+        let network = store.networks[weak.bssid]
+        #expect(network?.wasInLastScan == false)
+        #expect(network?.isInRange == true)
+    }
+}

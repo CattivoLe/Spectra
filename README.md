@@ -17,6 +17,11 @@ cd firmware
 pio run -t upload
 ```
 
+Or install through Launcher: copy `firmware/.pio/build/m5stack-cardputer-adv/firmware.bin`
+(after `pio run`, also saved as `firmware/Spectra.bin`) to the SD card and
+choose **SD** → file → **Install**. Use the app image, not a merged one with
+bootloader and partitions, or it overwrites Launcher.
+
 The Cardputer advertises as `Spectra-XXXX`. Its screen shows the link state
 and the strongest networks; **S** or **Enter** scans from the keyboard.
 

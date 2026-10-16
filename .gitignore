@@ -14,3 +14,4 @@ ios/Config/Signing.local.xcconfig
 # PlatformIO
 firmware/.pio/
 firmware/.vscode/
+firmware/*.bin
