@@ -33,6 +33,9 @@ struct DeviceDetailView: View {
                                 if device.isGateway {
                                     badge("Gateway", color: .orange)
                                 }
+                                if let notable = device.notable {
+                                    badge(notable == .camera ? "Camera" : "IoT", color: notable == .camera ? .red : .orange)
+                                }
                                 if let mfr = device.manufacturer {
                                     Text(mfr)
                                         .font(.subheadline)
@@ -75,6 +78,35 @@ struct DeviceDetailView: View {
                 }
             }
 
+            if !device.profile.isEmpty {
+                Section("Services") {
+                    if let upnp = device.profile.upnp {
+                        if let name = upnp.friendlyName { InfoRow("UPnP name", value: name) }
+                        if let model = upnp.model { InfoRow("Model", value: model) }
+                        if let maker = upnp.manufacturer { InfoRow("Manufacturer", value: maker) }
+                        if let type = upnp.deviceType { InfoRow("Device type", value: type) }
+                        if let server = upnp.server { InfoRow("Server", value: server) }
+                    }
+                    if let windows = device.profile.windows {
+                        if let name = windows.computerName { InfoRow("Windows name", value: name) }
+                        if let domain = windows.domain { InfoRow("Domain", value: domain) }
+                        if windows.shares.isEmpty, windows.guestSession {
+                            Text("Guest connection found no shared folders.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        } else if !windows.shares.isEmpty {
+                            InfoRow("Shares", value: windows.shares.formatted(.list(type: .and)))
+                        }
+                    }
+                    ForEach(device.profile.banners) { banner in
+                        portLine(banner.secure ? "HTTPS \(banner.port)" : "HTTP \(banner.port)", detail: banner.summary)
+                    }
+                    ForEach(device.profile.rtsp) { service in
+                        portLine("RTSP \(service.port)", detail: service.summary ?? "")
+                    }
+                }
+            }
+
             // Ports
             Section {
                 if device.portsScanned {
@@ -84,13 +116,15 @@ struct DeviceDetailView: View {
                             .font(.subheadline)
                     } else {
                         ForEach(device.openPorts) { port in
-                            HStack {
-                                Text("\(port.number)")
+                            HStack(spacing: 12) {
+                                Text(port.number, format: .number.grouping(.never))
                                     .font(.body.monospacedDigit().weight(.semibold))
-                                    .frame(width: 56, alignment: .trailing)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                                 Text(port.service)
                                     .foregroundStyle(.secondary)
-                                Spacer()
+                                    .lineLimit(1)
+                                Spacer(minLength: 8)
                                 Image(systemName: "circle.fill")
                                     .font(.system(size: 8))
                                     .foregroundStyle(.green)
@@ -99,15 +133,28 @@ struct DeviceDetailView: View {
                     }
                 }
 
-                Button {
-                    scanner.scanPorts(for: ip)
-                } label: {
-                    Label(device.portsScanned ? "Rescan ports" : "Scan ports", systemImage: "magnifyingglass")
+                if let fraction = device.portScanFraction {
+                    ProgressView(value: fraction) {
+                        Text("Scanning ports…")
+                    }
+                } else {
+                    Button {
+                        scanner.scanPorts(for: ip)
+                    } label: {
+                        Label(device.portsScanned ? "Rescan ports" : "Scan ports", systemImage: "magnifyingglass")
+                    }
+                    .disabled(scanner.isScanning)
+                    Button {
+                        scanner.scanPorts(for: ip, scope: .all)
+                    } label: {
+                        Label("Scan all ports", systemImage: "checklist")
+                    }
+                    .disabled(scanner.isScanning)
                 }
             } header: {
                 Text("Ports")
             } footer: {
-                Text("Probes \(DiscoveredPort.commonPorts.count) common TCP ports with a 1.5 s timeout each.")
+                Text("Checks \(DiscoveredPort.commonPorts.count) common TCP ports, or every TCP port from 1 to 65535.")
             }
 
             // Timestamps
@@ -118,6 +165,22 @@ struct DeviceDetailView: View {
         }
         .navigationTitle(device.ipAddress)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func portLine(_ title: LocalizedStringKey, detail: String) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.body.monospacedDigit().weight(.semibold))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            if !detail.isEmpty {
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
     }
 
     private func badge(_ text: LocalizedStringKey, color: Color) -> some View {

@@ -65,10 +65,6 @@ struct SensorView: View {
                                 }
                             }
                         }
-                        Button("Scan now", systemImage: "arrow.clockwise") {
-                            link.scanNow()
-                        }
-                        .disabled(store.isScanning || link.firmwareUpdate?.isRunning == true)
                         if let duration = store.lastScanDuration {
                             InfoRow("Last sweep", value: duration.formatted(.units(allowed: [.seconds, .milliseconds], width: .narrow)))
                         }

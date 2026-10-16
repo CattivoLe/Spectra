@@ -60,7 +60,7 @@ struct SubnetInfo {
 
 // MARK: - IP helpers
 
-nonisolated private func parseIP(_ ip: String) -> UInt32? {
+nonisolated func parseIP(_ ip: String) -> UInt32? {
     var addr = in_addr()
     guard inet_pton(AF_INET, ip, &addr) == 1 else { return nil }
     return UInt32(bigEndian: addr.s_addr)
@@ -321,7 +321,7 @@ nonisolated private func resolveHostname(_ ip: String) -> String? {
     }
     guard result == 0 else { return nil }
     let name = String(cString: hostname)
-    return name == ip ? nil : name
+    return LANDevice.usefulHostname(name, ip: ip) == nil ? nil : name
 }
 
 // MARK: - Bonjour
@@ -464,6 +464,7 @@ final class LANScanner {
     private(set) var lastScanDate: Date?
 
     private var scanTask: Task<Void, Never>?
+    private var portScanTask: Task<Void, Never>?
 
     var sortedDevices: [LANDevice] {
         devices.values.sorted { a, b in
@@ -484,27 +485,53 @@ final class LANScanner {
 
     func scan() {
         scanTask?.cancel()
+        portScanTask?.cancel()
         scanTask = Task { @MainActor in await performScan() }
     }
 
     func stop() {
         scanTask?.cancel()
+        portScanTask?.cancel()
         scanTask = nil
         if isScanning { state = .idle }
     }
 
-    func scanPorts(for ip: String) {
-        guard let device = devices[ip] else { return }
-        Task { @MainActor in
-            device.portsScanned = false
-            device.openPorts = []
-            let ports = await scanPorts(on: [ip])[ip] ?? []
+    /// `common` probes the short list. `all` probes every TCP port on this one host.
+    func scanPorts(for ip: String, scope: PortScope = .common) {
+        guard let device = devices[ip], !isScanning else { return }
+        portScanTask?.cancel()
+        portScanTask = Task { @MainActor in
+            device.portScanFraction = 0
+            let ports: [DiscoveredPort]
+            switch scope {
+            case .common:
+                let found = await scanPorts(on: [ip]) { fraction in
+                    device.portScanFraction = fraction
+                }
+                ports = found[ip] ?? []
+            case .all:
+                ports = await scanEveryPort(on: ip) { fraction in
+                    device.portScanFraction = fraction
+                }
+            }
+            guard !Task.isCancelled, devices[ip] === device else {
+                device.portScanFraction = nil
+                return
+            }
             device.openPorts = ports
             device.portsScanned = true
+            device.portScanFraction = nil
+            await enrich([device])
         }
     }
 
+    enum PortScope {
+        case common
+        case all
+    }
+
     func clear() {
+        portScanTask?.cancel()
         devices = [:]
         subnetInfo = nil
         scanCount = 0
@@ -529,6 +556,8 @@ final class LANScanner {
             ("192.168.1.40",  [0x30, 0xAE, 0xA4, 0x07, 0x08, 0x09], "ESP32-Sensor.local",  false, false, []),
             ("192.168.1.50",  [0x78, 0x28, 0xCA, 0x0A, 0x0B, 0x0C], "Sonos-One.local",     false, false, [.init(number: 1443, service: "HTTPS"), .init(number: 1400, service: "HTTP")]),
             ("192.168.1.55",  [0x00, 0x17, 0x88, 0x0D, 0x0E, 0x0F], "Philips-hue.local",   false, false, [.init(number: 80, service: "HTTP"), .init(number: 443, service: "HTTPS")]),
+            ("192.168.1.60",  [0x44, 0x19, 0xB6, 0x10, 0x20, 0x30], nil,                   false, false, [.init(number: 80, service: "HTTP"), .init(number: 554, service: "RTSP"), .init(number: 8000, service: "HTTP")]),
+            ("192.168.1.70",  [0x8C, 0xEC, 0x4B, 0x21, 0x32, 0x43], nil,                   false, false, [.init(number: 445, service: "SMB"), .init(number: 139, service: "NetBIOS")]),
         ]
         var result: [String: LANDevice] = [:]
         for (ip, mac, hostname, gw, local, ports) in demoDevices {
@@ -544,6 +573,14 @@ final class LANScanner {
                 lastSeen: now
             )
         }
+        result["192.168.1.60"]?.profile = LANProfile(
+            upnp: UPnPIdentity(friendlyName: "Front door", manufacturer: "Hikvision", model: "DS-2CD2043", deviceType: "DigitalSecurityCamera", server: "Hikvision-Webs"),
+            banners: [HTTPBanner(port: 80, secure: false, status: 200, server: "Webs", poweredBy: nil, title: "Hikvision", realm: "DS-2CD2043")],
+            rtsp: [RTSPService(port: 554, server: "Hikvision streaming", methods: "OPTIONS, DESCRIBE, SETUP, PLAY")]
+        )
+        result["192.168.1.70"]?.profile = LANProfile(
+            windows: WindowsHost(computerName: "OFFICE-PC", domain: "HOME", shares: ["Users", "Public"], guestSession: true)
+        )
         devices = result
         scanCount = 1
         lastScanDate = now
@@ -648,50 +685,60 @@ final class LANScanner {
         var newDevices: [String: LANDevice] = [:]
         for ip in aliveIPs {
             let existing = devices[ip]
-            newDevices[ip] = LANDevice(
+            let keptNames = (existing?.hostnames ?? []).filter { LANDevice.usefulHostname($0, ip: ip) != nil }
+            let device = LANDevice(
                 ipAddress: ip,
                 macAddress: arpByIP[ip] ?? existing?.macAddress,
-                hostnames: existing?.hostnames ?? [],
+                hostnames: keptNames.isEmpty ? (bonjourNames[ip] ?? []) : keptNames,
                 openPorts: existing?.openPorts ?? [],
                 portsScanned: existing?.portsScanned ?? false,
                 isGateway: ip == info.gateway,
                 isLocalDevice: ip == info.localIP,
+                profile: existing?.profile ?? LANProfile(),
                 firstSeen: existing?.firstSeen ?? now,
                 lastSeen: now
             )
+            device.preservePinnedName(from: existing)
+            newDevices[ip] = device
         }
 
         devices = newDevices
 
         // Phase 5: Open ports on every host found.
-        state = .scanning(progress: 0.6, phase: String(localized: "Scanning ports…"))
+        state = .scanning(progress: 0.55, phase: String(localized: "Scanning ports…"))
         let found = newDevices.keys.sorted { (parseIP($0) ?? 0) < (parseIP($1) ?? 0) }
         let portsByIP = await scanPorts(on: found) { fraction in
-            self.state = .scanning(progress: 0.6 + 0.3 * fraction, phase: String(localized: "Scanning ports…"))
+            self.state = .scanning(progress: 0.55 + 0.25 * fraction, phase: String(localized: "Scanning ports…"))
         }
         if Task.isCancelled { return }
         for (ip, ports) in portsByIP {
             newDevices[ip]?.openPorts = ports
             newDevices[ip]?.portsScanned = true
         }
+        devices = newDevices
+
+        state = .scanning(progress: 0.82, phase: String(localized: "Identifying devices…"))
+        await enrich(found.compactMap { newDevices[$0] }.filter { !$0.isLocalDevice })
+        if Task.isCancelled { return }
 
         // Phase 6: Hostname resolution.
-        state = .scanning(progress: 0.9, phase: String(localized: "Resolving names…"))
+        state = .scanning(progress: 0.92, phase: String(localized: "Resolving names…"))
 
         await withTaskGroup(of: (String, String?).self) { group in
-            for (ip, device) in newDevices where device.hostnames.isEmpty {
+            for (ip, device) in newDevices where !device.hostnames.contains(where: { LANDevice.usefulHostname($0, ip: ip) != nil }) {
                 group.addTask { @Sendable in
                     (ip, resolveHostname(ip))
                 }
             }
             for await (ip, hostname) in group {
-                if let hostname, let device = devices[ip], device.hostnames.isEmpty {
-                    device.hostnames = [hostname]
-                }
+                guard let hostname, LANDevice.usefulHostname(hostname, ip: ip) != nil,
+                      let device = devices[ip],
+                      !device.hostnames.contains(where: { LANDevice.usefulHostname($0, ip: ip) != nil }) else { continue }
+                device.hostnames = [hostname]
             }
         }
         for (ip, names) in bonjourNames {
-            if let device = newDevices[ip], device.hostnames.isEmpty {
+            if let device = newDevices[ip], !device.hostnames.contains(where: { LANDevice.usefulHostname($0, ip: ip) != nil }) {
                 device.hostnames = names
             }
         }
@@ -723,5 +770,49 @@ final class LANScanner {
             result[ip]?.append(DiscoveredPort(number: entry.port, service: entry.name))
         }
         return result
+    }
+
+    /// Every TCP port on one host. Closed ports reset at once, so a batch
+    /// usually finishes well inside the timeout.
+    private func scanEveryPort(
+        on ip: String,
+        progress: @MainActor (Double) -> Void = { _ in }
+    ) async -> [DiscoveredPort] {
+        let targets = (UInt16(1)...UInt16(65535)).map { (ip: ip, port: $0) }
+        let outcomes = await probeTCP(targets, timeout: .milliseconds(1500), progress: progress)
+        if Task.isCancelled { return [] }
+        var open: [DiscoveredPort] = []
+        for (index, outcome) in outcomes.enumerated() where outcome == .open {
+            let port = Int(targets[index].port)
+            open.append(DiscoveredPort(number: port, service: DiscoveredPort.serviceName(for: port)))
+        }
+        return open
+    }
+
+    /// UPnP, web banners, RTSP and Windows names. A few hosts at a time, so a
+    /// quiet device cannot hold the whole scan for its timeouts.
+    private func enrich(_ hosts: [LANDevice]) async {
+        let chunkSize = 8
+        var start = 0
+        while start < hosts.count {
+            if Task.isCancelled { return }
+            let end = min(start + chunkSize, hosts.count)
+            let chunk = Array(hosts[start..<end])
+            await withTaskGroup(of: (String, LANProfile).self) { group in
+                for device in chunk {
+                    let ip = device.ipAddress
+                    let ports = device.openPorts
+                    group.addTask {
+                        let profile = await runInBackground { LANProbes.profile(ip: ip, ports: ports) }
+                        return (ip, profile)
+                    }
+                }
+                for await (ip, profile) in group {
+                    guard let device = devices[ip] else { continue }
+                    device.profile = profile.filled(from: device.profile)
+                }
+            }
+            start = end
+        }
     }
 }

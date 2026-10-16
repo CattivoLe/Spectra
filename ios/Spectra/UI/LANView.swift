@@ -190,6 +190,8 @@ struct DeviceRow: View {
                         badge("This device", color: .teal)
                     } else if device.isGateway {
                         badge("Gateway", color: .orange)
+                    } else if let notable = device.notable {
+                        badge(notable == .camera ? "Camera" : "IoT", color: notable == .camera ? .red : .orange)
                     }
                 }
                 if !subtitleText.isEmpty {

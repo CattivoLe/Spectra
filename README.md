@@ -46,6 +46,11 @@ reconnects to the last one by itself. The **Demo sensor** switch feeds made-up
 networks through the same protocol, so the app can be worked on without the
 hardware; in the simulator, which has no Bluetooth, it turns on by itself.
 
+The Bluetooth tab listens from the iPhone itself, with CoreBluetooth. It
+lists nearby Bluetooth Low Energy devices — name, signal, company, services
+and the Apple messages they broadcast (AirPods, Find My, HomeKit). iOS does
+not reveal the hardware address, and it does not hear classic Bluetooth.
+
 ## Protocol
 
 See [docs/protocol.md](docs/protocol.md). The app's `SensorProtocol` and the

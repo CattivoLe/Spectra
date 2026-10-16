@@ -32,13 +32,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Spectra connects to your Cardputer over Bluetooth to receive the Wi-Fi networks it finds."
+            "value" : "Spectra uses Bluetooth to connect to your Cardputer and to scan for nearby Bluetooth devices."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Spectra подключается к Cardputer по Bluetooth, чтобы получать найденные им сети Wi-Fi."
+            "value" : "Spectra использует Bluetooth, чтобы подключаться к Cardputer и сканировать устройства поблизости."
           }
         }
       }

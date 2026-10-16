@@ -21,11 +21,22 @@ struct DiscoveredPort: Identifiable, Equatable, Sendable {
     var service: String
     var id: Int { number }
 
+    nonisolated static func serviceName(for port: Int) -> String {
+        namesByPort[port] ?? "TCP"
+    }
+
+    private nonisolated static let namesByPort: [Int: String] = {
+        var names: [Int: String] = [:]
+        for entry in commonPorts { names[entry.port] = entry.name }
+        return names
+    }()
+
     nonisolated(unsafe) static let commonPorts: [(port: Int, name: String)] = [
         (21, "FTP"), (22, "SSH"), (23, "Telnet"), (25, "SMTP"), (53, "DNS"),
         (80, "HTTP"), (81, "HTTP"), (110, "POP3"), (111, "RPC"), (135, "MS RPC"),
         (139, "NetBIOS"), (143, "IMAP"), (443, "HTTPS"), (445, "SMB"), (515, "LPD"),
         (548, "AFP"), (554, "RTSP"), (631, "IPP"), (993, "IMAPS"), (1400, "Sonos"),
+        (8554, "RTSP"),
         (1883, "MQTT"), (2049, "NFS"), (3000, "Dev"), (3283, "Apple Remote"),
         (3306, "MySQL"), (3389, "RDP"), (3689, "DAAP"), (5000, "UPnP"), (5001, "HTTPS"),
         (5357, "WSD"), (5432, "PostgreSQL"), (5555, "ADB"), (5900, "VNC"),
@@ -41,29 +52,98 @@ struct DiscoveredPort: Identifiable, Equatable, Sendable {
 final class LANDevice: Identifiable {
     var ipAddress: String
     var macAddress: MACAddress?
-    var hostnames: [String]
+    var hostnames: [String] {
+        didSet { refreshPinnedName() }
+    }
     var openPorts: [DiscoveredPort]
     var portsScanned: Bool
     var isGateway: Bool
     var isLocalDevice: Bool
+    var profile: LANProfile {
+        didSet { refreshPinnedName() }
+    }
+    /// Set while a manual port scan of this host is in progress, 0...1.
+    var portScanFraction: Double?
     var firstSeen: Date
     var lastSeen: Date
+
+    /// Best name learned for this host. Later probes can improve it, never clear it.
+    private(set) var pinnedName: String?
+    private var pinnedRank = 0
 
     var id: String { ipAddress }
 
     var displayName: String {
-        if let first = hostnames.first {
-            return first.hasSuffix(".local") ? String(first.dropLast(6)) : first
-        }
+        if let pinnedName { return pinnedName }
         if let mfr = macAddress?.manufacturer { return mfr }
         return ipAddress
     }
 
-    var manufacturer: String? { macAddress?.manufacturer }
+    /// A hostname worth showing. Blank, "." and the address itself are not:
+    /// those used to replace a real name with an empty title.
+    nonisolated static func usefulHostname(_ name: String, ip: String) -> String? {
+        guard let shown = presentable(name), shown.caseInsensitiveCompare(ip) != .orderedSame else { return nil }
+        return shown
+    }
+
+    /// Carries a name across a rescan when the new device has not learned a better one.
+    func preservePinnedName(from other: LANDevice?) {
+        guard let other, other.pinnedRank > pinnedRank else { return }
+        pinnedName = other.pinnedName
+        pinnedRank = other.pinnedRank
+    }
+
+    private func refreshPinnedName() {
+        consider(profile.upnp?.friendlyName, rank: 3)
+        consider(profile.windows?.computerName, rank: 2)
+        for name in hostnames {
+            consider(name, rank: 2)
+        }
+    }
+
+    private func consider(_ raw: String?, rank: Int) {
+        guard let raw, let shown = Self.presentable(raw) else { return }
+        guard shown.caseInsensitiveCompare(ipAddress) != .orderedSame else { return }
+        let quality = rank
+        guard quality > pinnedRank || (quality == pinnedRank && quality >= 2 && shown != pinnedName) else { return }
+        pinnedName = shown
+        pinnedRank = quality
+    }
+
+    /// Strips a trailing `.local` and rejects blanks, placeholders and addresses.
+    private nonisolated static func presentable(_ raw: String) -> String? {
+        guard var shown = LANIdentity.presentableName(raw) else { return nil }
+        if shown.hasSuffix(".local") {
+            shown = String(shown.dropLast(6)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let again = LANIdentity.presentableName(shown) else { return nil }
+            shown = again
+        }
+        return shown
+    }
+
+    /// Camera and IoT vendors, plus anything that actually speaks RTSP.
+    var notable: NotableDevice? {
+        NotableDevice.classify(
+            manufacturer: manufacturer,
+            oui: macAddress?.oui,
+            upnpType: profile.upnp?.deviceType,
+            hasRTSP: !profile.rtsp.isEmpty
+        )
+    }
+
+    var manufacturer: String? {
+        guard let mac = macAddress else { return nil }
+        return mac.manufacturer ?? SuspiciousOUI.names[mac.oui.uppercased()]
+    }
 
     var deviceIcon: String {
         if isGateway { return "wifi.router" }
         if isLocalDevice { return "iphone" }
+        switch notable {
+        case .camera: return "video"
+        case .iot: return "sensor"
+        case nil: break
+        }
         let name = displayName.lowercased()
         if name.contains("mac") || name.contains("imac") || name.contains("book") { return "laptopcomputer" }
         if name.contains("iphone") { return "iphone" }
@@ -97,6 +177,7 @@ final class LANDevice: Identifiable {
         portsScanned: Bool = false,
         isGateway: Bool = false,
         isLocalDevice: Bool = false,
+        profile: LANProfile = LANProfile(),
         firstSeen: Date = .now,
         lastSeen: Date = .now
     ) {
@@ -107,7 +188,11 @@ final class LANDevice: Identifiable {
         self.portsScanned = portsScanned
         self.isGateway = isGateway
         self.isLocalDevice = isLocalDevice
+        self.profile = profile
         self.firstSeen = firstSeen
         self.lastSeen = lastSeen
+        self.pinnedName = nil
+        self.pinnedRank = 0
+        refreshPinnedName()
     }
 }

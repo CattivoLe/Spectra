@@ -5,6 +5,7 @@ struct SpectraApp: App {
     @State private var store: NetworkStore
     @State private var link: SensorLink
     @State private var lanScanner = LANScanner()
+    @State private var bleScanner = BLEScanner()
 
     init() {
         let store = NetworkStore()
@@ -18,12 +19,13 @@ struct SpectraApp: App {
                 .environment(store)
                 .environment(link)
                 .environment(lanScanner)
+                .environment(bleScanner)
         }
     }
 }
 
 struct RootView: View {
-    enum Tab: Hashable { case networks, channels, lan, sensor }
+    enum Tab: Hashable { case networks, channels, lan, bluetooth, sensor }
 
     @State private var tab: Tab = .networks
 
@@ -38,6 +40,9 @@ struct RootView: View {
             LANView()
                 .tabItem { Label("LAN", systemImage: "network") }
                 .tag(Tab.lan)
+            BLEView()
+                .tabItem { Label("Bluetooth", systemImage: "wave.3.right") }
+                .tag(Tab.bluetooth)
             SensorView()
                 .tabItem { Label("Sensor", systemImage: "antenna.radiowaves.left.and.right") }
                 .tag(Tab.sensor)
