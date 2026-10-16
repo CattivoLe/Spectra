@@ -358,11 +358,11 @@ static void sniffStations() {
   // Remember our own STA MAC so we filter it out.
   esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
 
-  esp_wifi_set_promiscuous_rx_filter(
-      &(wifi_promiscuous_filter_t){.filter_mask =
-                                       WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA});
+  wifi_promiscuous_filter_t filt = {
+      .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA};
+  esp_wifi_set_promiscuous_filter(&filt);
+  esp_wifi_set_promiscuous_rx_cb(promiscuousCallback);
   esp_wifi_set_promiscuous(true);
-  esp_wifi_set_promiscuous_cb(promiscuousCallback);
 
   for (uint8_t ch : kSniffChannels) {
     esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
