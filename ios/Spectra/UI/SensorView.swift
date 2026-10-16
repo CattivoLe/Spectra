@@ -55,16 +55,16 @@ struct SensorView: View {
                         }
                         .disabled(store.isScanning)
                         if let duration = store.lastScanDuration {
-                            LabeledContent("Last sweep", value: duration.formatted(.units(allowed: [.seconds, .milliseconds], width: .narrow)))
+                            InfoRow("Last sweep", value: duration.formatted(.units(allowed: [.seconds, .milliseconds], width: .narrow)))
                         }
-                        LabeledContent("Scans this session", value: "\(store.scanCount)")
+                        InfoRow("Scans this session", value: "\(store.scanCount)")
                     }
 
                     if let info = link.info {
                         Section("Device") {
-                            LabeledContent("Firmware", value: info.fw)
-                            LabeledContent("Chip", value: info.chip)
-                            LabeledContent("Bands", value: info.bands.map { "\($0) GHz" }.formatted(.list(type: .and)))
+                            InfoRow("Firmware", value: info.fw)
+                            InfoRow("Chip", value: info.chip)
+                            InfoRow("Bands", value: info.bands.compactMap(Double.init).map(Units.gigahertz).formatted(.list(type: .and)))
                             if info.proto != SensorProtocol.version {
                                 Label("This firmware speaks protocol \(info.proto); the app expects \(SensorProtocol.version). Update the one that is older.", systemImage: "exclamationmark.triangle.fill")
                                     .symbolRenderingMode(.multicolor)

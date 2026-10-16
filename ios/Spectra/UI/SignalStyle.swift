@@ -107,3 +107,16 @@ extension AccessPointReading {
         }
     }
 }
+
+/// Frequencies in the reader's own notation ("2,4 ГГц" in Russian).
+nonisolated enum Units {
+    static func megahertz(_ value: Int) -> String {
+        Measurement(value: Double(value), unit: UnitFrequency.megahertz)
+            .formatted(.measurement(width: .abbreviated, usage: .asProvided, numberFormatStyle: .number.grouping(.never)))
+    }
+
+    static func gigahertz(_ value: Double) -> String {
+        Measurement(value: value, unit: UnitFrequency.gigahertz)
+            .formatted(.measurement(width: .abbreviated, usage: .asProvided, numberFormatStyle: .number.precision(.fractionLength(0...1))))
+    }
+}

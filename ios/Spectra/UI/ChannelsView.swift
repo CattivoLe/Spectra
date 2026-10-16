@@ -27,7 +27,7 @@ struct ChannelsView: View {
                             .frame(height: 240)
                             .padding(.vertical, 8)
                     } header: {
-                        Text("2.4 GHz")
+                        Text(Units.gigahertz(2.4))
                     } footer: {
                         Text("Each hump is one network: its width is the channels it covers, its height how loud it is here.")
                     }
@@ -171,8 +171,12 @@ struct ChannelSpectrumChart: View {
                         Text(peak.name)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .frame(maxWidth: 90)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .frame(maxWidth: 150)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 4)
+                            .background(.background.opacity(0.7), in: .rect(cornerRadius: 4))
                     }
             }
         }

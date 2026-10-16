@@ -63,7 +63,16 @@ struct NetworksView: View {
                 }
             }
             .overlay {
-                if store.networks.isEmpty, link.isConnected {
+                if store.networks.isEmpty, !link.isConnected {
+                    ContentUnavailableView {
+                        Label("No sensor", systemImage: "antenna.radiowaves.left.and.right.slash")
+                    } description: {
+                        Text("iPhone cannot list nearby Wi-Fi networks by itself. Spectra hears them through a Cardputer.")
+                    } actions: {
+                        Button("Find sensor", action: openSensor)
+                            .buttonStyle(.borderedProminent)
+                    }
+                } else if store.networks.isEmpty {
                     ContentUnavailableView(
                         "Listening",
                         systemImage: "wifi",
@@ -183,16 +192,10 @@ struct NetworkRow: View {
                 .frame(width: 30)
 
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 5) {
-                    Text(reading.displayName)
-                        .font(.body.weight(.medium))
-                        .italic(reading.ssid == nil)
-                        .foregroundStyle(reading.ssid == nil ? .secondary : .primary)
-                        .lineLimit(1)
-                    Image(systemName: reading.securitySymbol)
-                        .font(.caption)
-                        .foregroundStyle(reading.securityColor)
-                }
+                // One Text, so the lock follows the last word when a long
+                // name wraps instead of hanging off to the side.
+                Text("\(nameText(reading)) \(lockText(reading))")
+                    .font(.body.weight(.medium))
                 Group {
                     if network.wasInLastScan {
                         Text("Ch \(reading.channel) · \(reading.auth.name) · \(reading.capabilities.generation)")
@@ -205,25 +208,49 @@ struct NetworkRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
-                .lineLimit(1)
             }
+            .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 8)
 
-            if network.isInRange {
-                Sparkline(values: network.samples.suffix(24).map(\.rssi), color: SignalQuality(rssi: reading.rssi).color)
-                    .frame(width: 44, height: 20)
-                    .accessibilityHidden(true)
+            // Level over its recent trend, in one narrow column, so the name
+            // keeps most of the row.
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("\(reading.rssi)")
+                    .font(.callout.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(network.isInRange ? .primary : .tertiary)
+                    .accessibilityLabel("\(reading.rssi) dBm")
+                if network.isInRange {
+                    Sparkline(values: network.samples.suffix(24).map(\.rssi), color: SignalQuality(rssi: reading.rssi).color)
+                        .frame(width: 40, height: 14)
+                        .accessibilityHidden(true)
+                }
             }
-
-            Text("\(reading.rssi)")
-                .font(.callout.monospacedDigit().weight(.semibold))
-                .foregroundStyle(network.isInRange ? .primary : .tertiary)
-                .frame(minWidth: 32, alignment: .trailing)
-                .accessibilityLabel("\(reading.rssi) dBm")
         }
         .opacity(network.wasInLastScan ? 1 : network.isInRange ? 0.8 : 0.6)
         .contentTransition(.numericText())
         .animation(.default, value: reading.rssi)
+        .contextMenu {
+            if let ssid = reading.ssid {
+                Button("Copy name", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = ssid
+                }
+            }
+            Button("Copy BSSID", systemImage: "number") {
+                UIPasteboard.general.string = reading.bssid.description
+            }
+        }
+    }
+
+    private func nameText(_ reading: AccessPointReading) -> Text {
+        Text(reading.displayName)
+            .italic(reading.ssid == nil)
+            .foregroundStyle(reading.ssid == nil ? .secondary : .primary)
+    }
+
+    private func lockText(_ reading: AccessPointReading) -> Text {
+        Text(Image(systemName: reading.securitySymbol))
+            .font(.caption)
+            .foregroundStyle(reading.securityColor)
     }
 }

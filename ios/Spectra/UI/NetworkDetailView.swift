@@ -20,22 +20,24 @@ struct NetworkDetailView: View {
 
         return List {
             Section {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(reading.displayName)
+                        .font(.title2.weight(.semibold))
+                        .italic(reading.ssid == nil)
+                        .fixedSize(horizontal: false, vertical: true)
                     HStack(alignment: .firstTextBaseline) {
                         Text("\(reading.rssi)")
                             .font(.system(size: 52, weight: .semibold, design: .rounded).monospacedDigit())
                             .contentTransition(.numericText())
                         Text("dBm").font(.title3).foregroundStyle(.secondary)
                         Spacer()
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text(network.isInRange ? quality.label : "Out of range")
-                                .font(.headline)
-                                .foregroundStyle(network.isInRange ? quality.color : .secondary)
-                            Text("avg \(network.averageRSSI) · min \(network.weakestRSSI) · max \(network.strongestRSSI)")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
+                        Text(network.isInRange ? quality.label : "Out of range")
+                            .font(.headline)
+                            .foregroundStyle(network.isInRange ? quality.color : .secondary)
                     }
+                    Text("avg \(network.averageRSSI) · min \(network.weakestRSSI) · max \(network.strongestRSSI)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
                     SignalHistoryChart(samples: network.samples, color: quality.color)
                         .frame(height: 140)
                 }
@@ -58,46 +60,46 @@ struct NetworkDetailView: View {
             }
 
             Section("Identity") {
-                LabeledContent("Name", value: reading.displayName)
-                LabeledContent("BSSID") {
+                InfoRow("Name", value: reading.displayName)
+                InfoRow("BSSID") {
                     Text(reading.bssid.description)
                         .monospaced()
                         .textSelection(.enabled)
                 }
-                LabeledContent(
+                InfoRow(
                     "Address type",
                     value: reading.bssid.isLocallyAdministered
                         ? String(localized: "Randomised")
                         : String(localized: "Maker-assigned (OUI \(reading.bssid.oui))")
                 )
                 if let country = reading.countryCode {
-                    LabeledContent("Country", value: Locale.current.localizedString(forRegionCode: country) ?? country)
+                    InfoRow("Country", value: Locale.current.localizedString(forRegionCode: country) ?? country)
                 }
             }
 
             Section("Radio") {
-                LabeledContent("Channel", value: "\(reading.channel)")
-                LabeledContent("Frequency", value: "\(reading.frequencyMHz) MHz")
-                LabeledContent("Band", value: reading.band.rawValue)
-                LabeledContent("Width", value: widthDescription(reading))
-                LabeledContent("Standards", value: reading.capabilities.standards)
-                LabeledContent("Generation", value: reading.capabilities.generation)
+                InfoRow("Channel", value: "\(reading.channel)")
+                InfoRow("Frequency", value: Units.megahertz(reading.frequencyMHz))
+                InfoRow("Band", value: Units.gigahertz(reading.band.gigahertz))
+                InfoRow("Width", value: widthDescription(reading))
+                InfoRow("Standards", value: reading.capabilities.standards)
+                InfoRow("Generation", value: reading.capabilities.generation)
                 if reading.capabilities.contains(.ftmResponder) {
-                    LabeledContent("Fine Timing Measurement", value: String(localized: "Supported"))
+                    InfoRow("Fine Timing Measurement", value: String(localized: "Supported"))
                 }
             }
 
             Section("Security") {
-                LabeledContent("Authentication", value: reading.auth.name)
-                LabeledContent("Pairwise cipher", value: reading.pairwiseCipher.name)
-                LabeledContent("Group cipher", value: reading.groupCipher.name)
-                LabeledContent("WPS", value: reading.capabilities.contains(.wps) ? String(localized: "On") : String(localized: "Off"))
+                InfoRow("Authentication", value: reading.auth.name)
+                InfoRow("Pairwise cipher", value: reading.pairwiseCipher.name)
+                InfoRow("Group cipher", value: reading.groupCipher.name)
+                InfoRow("WPS", value: reading.capabilities.contains(.wps) ? String(localized: "On") : String(localized: "Off"))
             }
 
             Section("Observed") {
-                LabeledContent("First seen") { Text(network.firstSeen, style: .time) }
-                LabeledContent("Last seen") { Text(network.lastSeen, style: .relative) }
-                LabeledContent("Readings", value: "\(network.samples.count)")
+                InfoRow("First seen") { Text(network.firstSeen, style: .time) }
+                InfoRow("Last seen") { Text(network.lastSeen, style: .relative) }
+                InfoRow("Readings", value: "\(network.samples.count)")
             }
         }
         .navigationTitle(reading.displayName)
@@ -106,9 +108,9 @@ struct NetworkDetailView: View {
 
     private func widthDescription(_ reading: AccessPointReading) -> String {
         switch reading.secondaryChannel {
-        case .none: "20 MHz"
-        case .above: String(localized: "40 MHz (secondary above)")
-        case .below: String(localized: "40 MHz (secondary below)")
+        case .none: Units.megahertz(20)
+        case .above: String(localized: "\(Units.megahertz(40)) (secondary above)")
+        case .below: String(localized: "\(Units.megahertz(40)) (secondary below)")
         }
     }
 
@@ -172,7 +174,9 @@ struct SignalHistoryChart: View {
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 4)) { _ in
                 AxisGridLine()
-                AxisValueLabel(format: .dateTime.hour().minute().second())
+                // Anchored at the trailing edge so the newest label, right
+                // at the end of the plot, is not clipped.
+                AxisValueLabel(format: .dateTime.hour().minute().second(), anchor: .topTrailing)
             }
         }
         .overlay {

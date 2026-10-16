@@ -123,7 +123,7 @@ final class SensorLink: NSObject {
             let demo = DemoSensor { [weak self] data in self?.receive(data) }
             demo.interval = liveInterval
             self.demo = demo
-            info = SensorInfo(proto: SensorProtocol.version, fw: "demo", chip: "Simulated", bands: ["2.4"], interval: liveInterval)
+            info = SensorInfo(proto: SensorProtocol.version, fw: String(localized: "Demo"), chip: String(localized: "Simulated"), bands: ["2.4"], interval: liveInterval)
             state = .demo
             demo.scan()
         } else {

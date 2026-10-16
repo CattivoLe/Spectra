@@ -63,6 +63,8 @@ nonisolated struct BSSID: Hashable, Sendable, CustomStringConvertible {
 nonisolated enum Band: String, Sendable {
     case twoPointFourGHz = "2.4 GHz"
     case fiveGHz = "5 GHz"
+
+    var gigahertz: Double { self == .fiveGHz ? 5 : 2.4 }
 }
 
 nonisolated enum SecondaryChannel: UInt8, Sendable {
@@ -87,7 +89,7 @@ nonisolated struct AuthMode: RawRepresentable, Hashable, Sendable {
 
     var name: String {
         switch rawValue {
-        case 0: "Open"
+        case 0: String(localized: "Open")
         case 1: "WEP"
         case 2: "WPA"
         case 3: "WPA2"
@@ -103,7 +105,7 @@ nonisolated struct AuthMode: RawRepresentable, Hashable, Sendable {
         case 13: "DPP"
         case 14: "WPA3 Enterprise"
         case 15: "WPA2/WPA3 Enterprise"
-        default: "Other"
+        default: String(localized: "Other")
         }
     }
 
@@ -135,7 +137,7 @@ nonisolated struct Cipher: RawRepresentable, Hashable, Sendable {
 
     var name: String {
         switch rawValue {
-        case 0: "None"
+        case 0: String(localized: "None")
         case 1: "WEP-40"
         case 2: "WEP-104"
         case 3: "TKIP"
@@ -147,7 +149,7 @@ nonisolated struct Cipher: RawRepresentable, Hashable, Sendable {
         case 9: "GCMP-256"
         case 10: "AES-GMAC-128"
         case 11: "AES-GMAC-256"
-        default: "Unknown"
+        default: String(localized: "Unknown")
         }
     }
 }
@@ -163,10 +165,11 @@ nonisolated struct Capabilities: OptionSet, Hashable, Sendable {
     static let wps = Capabilities(rawValue: 1 << 5)
     static let ftmResponder = Capabilities(rawValue: 1 << 6)
 
-    /// The newest Wi-Fi generation the access point offers.
+    /// The newest Wi-Fi generation the access point offers. Non-breaking
+    /// hyphen and space, so a wrapped line never splits "Wi-Fi 6".
     var generation: String {
-        if contains(.ax) { return "Wi-Fi 6" }
-        if contains(.n) { return "Wi-Fi 4" }
+        if contains(.ax) { return "Wi\u{2011}Fi\u{00A0}6" }
+        if contains(.n) { return "Wi\u{2011}Fi\u{00A0}4" }
         if contains(.g) { return "802.11g" }
         if contains(.b) { return "802.11b" }
         return "—"
