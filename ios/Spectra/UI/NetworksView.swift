@@ -47,9 +47,6 @@ struct NetworksView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    SensorStatusCard(openSensor: openSensor)
-                }
                 if !store.deauthEvents.isEmpty {
                     Section {
                         ForEach(store.deauthEvents) { event in
@@ -109,10 +106,14 @@ struct NetworksView: View {
             .searchable(text: $search, prompt: Text("Name or BSSID"))
             .refreshable { link.scanNow() }
             .navigationTitle("Networks")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: BSSID.self) { id in
                 NetworkDetailView(id: id)
             }
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    SensorBar(open: openSensor)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Picker("Sort by", selection: $sort) {
@@ -132,77 +133,74 @@ struct NetworksView: View {
     }
 }
 
-/// Where the data comes from, and whether it is fresh.
-struct SensorStatusCard: View {
-    var openSensor: () -> Void
+/// Connection, battery and scan state, shown in the Networks navigation bar.
+/// Tapping opens the Sensor tab.
+struct SensorBar: View {
+    var open: () -> Void
 
     @Environment(NetworkStore.self) private var store
     @Environment(SensorLink.self) private var link
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: link.isConnected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                .font(.title2)
-                .foregroundStyle(link.isConnected ? Color.accentColor : .secondary)
-                .symbolEffect(.variableColor.iterative, isActive: store.isScanning)
-                .frame(width: 36)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.headline)
-                subtitle
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 0)
-
-            if link.isConnected {
-                Button {
-                    link.scanNow()
-                } label: {
-                    if store.isScanning {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                    }
+        Button(action: open) {
+            HStack(spacing: 8) {
+                Image(systemName: link.isConnected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                    .font(.body)
+                    .foregroundStyle(link.isConnected ? Color.accentColor : .secondary)
+                    .symbolEffect(.variableColor.iterative, isActive: store.isScanning)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.circle)
-                .disabled(store.isScanning)
-                .accessibilityLabel("Scan now")
-            } else {
-                Button("Connect", action: openSensor)
-                    .buttonStyle(.borderedProminent)
             }
+            .frame(maxWidth: 220)
         }
-        .padding(.vertical, 4)
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title), \(detail)")
     }
 
     private var title: String {
         switch link.state {
-        case .connected(let name): name
-        case .connecting(let name): name
+        case .connected(let name), .connecting(let name): name
         case .demo: String(localized: "Demo sensor")
-        default: String(localized: "No sensor")
+        case .searching: String(localized: "Searching")
+        case .bluetoothUnavailable(.poweredOff): String(localized: "Bluetooth is off")
+        case .bluetoothUnavailable(.unauthorized): String(localized: "Bluetooth permission")
+        case .bluetoothUnavailable(.unsupported): String(localized: "No Bluetooth")
+        case .idle, .bluetoothUnavailable(.starting): String(localized: "No sensor")
         }
     }
 
-    @ViewBuilder private var subtitle: some View {
+    private var detail: String {
+        var parts: [String] = []
+        if store.isScanning { parts.append(String(localized: "Scanning")) }
+        if let level = link.batteryLevel {
+            parts.append(link.isCharging == true ? String(localized: "\(level)% charging") : "\(level)%")
+        }
+        if !parts.isEmpty { return parts.joined(separator: " · ") }
         switch link.state {
-        case .connecting:
-            Text("Connecting…")
         case .connected, .demo:
-            if store.isScanning {
-                Text("Scanning…")
-            } else if let date = store.lastScanFinished {
-                Text("Updated \(date, style: .relative) ago")
-            } else {
-                Text("Waiting for the first scan")
+            if let date = store.lastScanFinished {
+                let when = Self.relative.localizedString(for: date, relativeTo: .now)
+                return String(localized: "Updated \(when)")
             }
-        default:
-            Text("Connect a Cardputer to see networks")
+            return String(localized: "Connected")
+        case .connecting: return String(localized: "Connecting…")
+        case .searching: return String(localized: "Looking for a Cardputer")
+        default: return String(localized: "Tap to connect")
         }
     }
+
+    private static let relative: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
 }
 
 struct NetworkRow: View {

@@ -1,0 +1,590 @@
+package cattivole.spectra.ui
+
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import cattivole.spectra.SpectraModel
+import cattivole.spectra.core.AccessPointReading
+import cattivole.spectra.core.Band
+import cattivole.spectra.core.Capabilities
+import cattivole.spectra.core.ChannelAdvisor
+import cattivole.spectra.core.MacAddress
+import cattivole.spectra.core.RadioSource
+import cattivole.spectra.platform.DeviceBleScanner
+import cattivole.spectra.platform.PhoneWifiScanner
+import cattivole.spectra.platform.SensorLink
+
+@Composable
+fun NetworksScreen(model: SpectraModel, onOpen: (MacAddress) -> Unit, onSensor: () -> Unit) {
+    model.generation
+    var query by rememberSaveable { mutableStateOf("") }
+    var sort by rememberSaveable { mutableStateOf("signal") }
+    var showOut by rememberSaveable { mutableStateOf(true) }
+    var menu by rememberSaveable { mutableStateOf(false) }
+    val networks = model.store.networks().values.filter { network ->
+        (showOut || network.isInRange) && (
+            query.isBlank() ||
+                network.title.contains(query, ignoreCase = true) ||
+                network.id.text.contains(query, ignoreCase = true)
+            )
+    }.sortedWith { a, b ->
+        if (a.isInRange != b.isInRange) return@sortedWith if (a.isInRange) -1 else 1
+        when (sort) {
+            "name" -> a.title.compareTo(b.title, ignoreCase = true)
+            "channel" -> a.latest.channel.compareTo(b.latest.channel).takeIf { it != 0 } ?: b.latest.rssi.compareTo(a.latest.rssi)
+            else -> b.latest.rssi.compareTo(a.latest.rssi)
+        }
+    }
+    val sensorTint = if (model.link.isConnected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    ScreenColumn(
+        title = "Networks",
+        subtitle = "${sensorHeadline(model)} · ${sensorDetail(model)}",
+        onTitleClick = onSensor,
+        navigationIcon = {
+            IconButton(onClick = onSensor) {
+                if (model.store.isScanning) {
+                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = sensorTint)
+                } else {
+                    Icon(Icons.Default.Sensors, contentDescription = "Sensor", tint = sensorTint)
+                }
+            }
+        },
+        actions = {
+            IconButton(onClick = {
+                model.link.scanNow()
+                model.phone.refresh()
+            }) { Icon(Icons.Default.Refresh, contentDescription = "Scan") }
+            IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Options") }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(text = { Text("Sort by signal") }, onClick = { sort = "signal"; menu = false })
+                DropdownMenuItem(text = { Text("Sort by name") }, onClick = { sort = "name"; menu = false })
+                DropdownMenuItem(text = { Text("Sort by channel") }, onClick = { sort = "channel"; menu = false })
+                DropdownMenuItem(text = { Text(if (showOut) "Hide out of range" else "Show out of range") }, onClick = {
+                    showOut = !showOut
+                    menu = false
+                })
+                DropdownMenuItem(text = { Text("Clear list") }, onClick = { model.store.clear(); menu = false })
+            }
+        },
+    ) {
+        SimpleList {
+            item {
+                OutlinedTextField(
+                    query,
+                    { query = it },
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    label = { Text("Name or BSSID") },
+                    singleLine = true,
+                )
+                phoneRadioNote(model)?.let { note ->
+                    Text(
+                        note,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (model.store.deauthEvents.isNotEmpty()) {
+                item { SectionTitle("Deauth detected") }
+                items(model.store.deauthEvents, key = { it.id }) { event ->
+                    ListItem(
+                        headlineContent = { Text("${event.source.text} → ${if (event.isBroadcast) "broadcast" else event.target.text}") },
+                        supportingContent = { Text("${event.reasonDescription} · ${event.count} frames · ch ${event.channel}") },
+                        trailingContent = { Text(event.severity.name, color = MaterialTheme.colorScheme.error) },
+                    )
+                }
+                item {
+                    Text(
+                        "Deauthentication frames force devices off the network. A burst or a broadcast target suggests an active attack.",
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            item {
+                SectionTitle("${model.store.networks().values.count { it.wasInLastScan }} in the latest pass")
+            }
+            if (networks.isEmpty()) {
+                item {
+                    EmptyText(
+                        title = if (model.link.isConnected || model.phone.lastResults > 0) "Listening" else "No networks yet",
+                        body = "The phone lists what its own radio hears, including 5 GHz. A Cardputer adds clients, probe requests, deauth frames and hidden names.",
+                    )
+                }
+            }
+            items(networks, key = { it.id.text + it.source.name }) { network ->
+                ClickRow(
+                    title = network.title,
+                    subtitle = buildString {
+                        append(network.id.text)
+                        append(" · ch ")
+                        append(network.latest.channel)
+                        append(" · ")
+                        append(network.latest.auth.name)
+                        if (network.clients.isNotEmpty()) append(" · ${network.clients.size} clients")
+                    },
+                    trailing = "${network.latest.rssi}",
+                    onClick = { onOpen(network.id) },
+                )
+            }
+            if (model.store.probingDevices.isNotEmpty()) {
+                item { SectionTitle("${model.store.probingDevices.size} probing") }
+                items(model.store.probingDevices, key = { it.mac.text }) { device ->
+                    ListItem(
+                        headlineContent = { Text(device.displayName) },
+                        supportingContent = { Text(device.ssids.ifEmpty { listOf("broadcast") }.joinToString()) },
+                        trailingContent = { Text("${device.rssi}") },
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun phoneRadioNote(model: SpectraModel): String? = when (model.phone.status) {
+    PhoneWifiScanner.Status.THROTTLED -> "Android is limiting Wi-Fi scans. Showing the last results the system kept."
+    PhoneWifiScanner.Status.WIFI_OFF -> "Wi-Fi is off, so the phone radio is quiet."
+    PhoneWifiScanner.Status.PERMISSION -> "Nearby Wi-Fi permission is off, so network names stay hidden."
+    PhoneWifiScanner.Status.LOCATION_OFF -> "Location services must be on or this Android version returns an empty scan."
+    PhoneWifiScanner.Status.SCANNING, PhoneWifiScanner.Status.IDLE -> model.phone.note
+}
+
+@Composable
+fun NetworkDetail(model: SpectraModel, id: MacAddress?) {
+    model.generation
+    val network = id?.let { model.store.network(it) }
+    ScreenColumn(network?.title ?: "Network") {
+        if (network == null) {
+            EmptyText("Gone", "This network is no longer in the list.")
+            return@ScreenColumn
+        }
+        val reading = network.latest
+        SimpleList {
+            item {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SignalGlyph(reading.rssi, network.isInRange)
+                    Column {
+                        Text("${reading.rssi} dBm · ${cattivole.spectra.core.SignalQuality.of(reading.rssi).label}")
+                        SourceBadge(network.source)
+                    }
+                }
+                Sparkline(network.samples.map { it.rssi }, signalColor(reading.rssi), Modifier.padding(horizontal = 16.dp))
+            }
+            item { InfoLine("BSSID", reading.bssid.text) }
+            item { InfoLine("Band", reading.band.label) }
+            item { InfoLine("Channel", "${reading.channel} · ${reading.frequencyMHz} MHz · ${reading.channelWidthMHz} MHz") }
+            item { InfoLine("Security", "${reading.auth.name} · ${reading.pairwiseCipher.name}") }
+            item { InfoLine("Generation", Capabilities.generation(reading.capabilities, reading.phyNote)) }
+            item { InfoLine("Standards", Capabilities.standards(reading.capabilities)) }
+            reading.countryCode?.let { item { InfoLine("Country", it) } }
+            network.revealedSsid?.let { item { InfoLine("Revealed name", it) } }
+            network.vendorInfo?.let { info ->
+                item { InfoLine("WPS device", listOf(info.deviceName, info.manufacturer).filter { it.isNotEmpty() }.joinToString(" · ")) }
+            }
+            network.traffic?.let { traffic ->
+                item {
+                    InfoLine(
+                        "Traffic",
+                        listOfNotNull(traffic.formattedBytes, model.store.lastScanDurationMs?.let { traffic.estimatedBitrate(it) }).joinToString(" · "),
+                    )
+                }
+            }
+            if (network.source == RadioSource.PHONE) {
+                item {
+                    Text(
+                        "This sighting is from the phone. Android does not report the 40 MHz side, associated clients, or frames the network is not addressed to.",
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            if (network.clients.isNotEmpty()) {
+                item { SectionTitle("Clients") }
+            }
+            items(network.clients, key = { it.mac.text }) { client ->
+                ListItem(
+                    headlineContent = { Text(client.displayName) },
+                    supportingContent = { Text(client.mac.text) },
+                    trailingContent = { Text("${client.rssi}") },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ChannelsScreen(model: SpectraModel) {
+    model.generation
+    val readings = model.store.networks().values
+        .filter { it.isInRange && it.latest.band == Band.TWO_FOUR }
+        .map { it.latest }
+        .sortedByDescending { it.rssi }
+    val five = model.store.networks().values.filter { it.isInRange && it.latest.band != Band.TWO_FOUR }
+    val best = ChannelAdvisor.recommendation(readings)
+    ScreenColumn("Channels") {
+        SimpleList {
+            if (readings.isEmpty()) {
+                item {
+                    EmptyText(
+                        "Nothing on 2.4 GHz yet",
+                        "The chart uses networks in range. A phone scan draws 40 MHz networks as symmetric; the sensor knows whether they extend above or below.",
+                    )
+                }
+            } else {
+                item { SectionTitle("2.4 GHz") }
+                item { ChannelSpectrum(readings, Modifier.padding(16.dp)) }
+                item {
+                    ListItem(
+                        headlineContent = { Text("Quietest of 1, 6 and 11") },
+                        supportingContent = { Text("Set this on the router if you control one. Overlap is weighted by signal, not by how many names share a channel.") },
+                        trailingContent = { Text("$best", style = MaterialTheme.typography.headlineMedium) },
+                    )
+                }
+                items((1..13).toList()) { channel ->
+                    val level = ChannelAdvisor.level(ChannelAdvisor.congestion(channel, readings)).toFloat()
+                    val count = readings.count { it.channel == channel }
+                    Meter("Channel $channel", level, "$count networks")
+                }
+            }
+            if (five.isNotEmpty()) {
+                item { SectionTitle("5 and 6 GHz from the phone") }
+                items(five.toList(), key = { it.id.text }) { network ->
+                    ListItem(
+                        headlineContent = { Text(network.title) },
+                        supportingContent = { Text("${network.latest.band.label} · ch ${network.latest.channel} · ${network.latest.channelWidthMHz} MHz") },
+                        trailingContent = { Text("${network.latest.rssi}") },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LanScreen(model: SpectraModel, onOpen: (String) -> Unit) {
+    model.generation
+    ScreenColumn(
+        "LAN",
+        actions = {
+            TextButton(onClick = { if (model.lan.scanning) model.lan.stop() else model.lan.scan() }) {
+                Text(if (model.lan.scanning) "Stop" else "Scan")
+            }
+        },
+    ) {
+        SimpleList {
+            item {
+                val subnet = model.lan.subnet
+                Text(
+                    buildString {
+                        append(model.lan.progress.ifEmpty { "Scan lists neighbours on the Wi-Fi you are joined to." })
+                        if (subnet != null) append("\n${subnet.localIp}/${subnet.prefixLength}")
+                        subnet?.gateway?.let { append(" · gateway $it") }
+                        if (model.lan.widePrefix) append("\nThe prefix is wider than /24, so only the local /24 is walked.")
+                    },
+                    modifier = Modifier.padding(16.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (model.lan.scanning) LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
+            items(model.lan.devices, key = { it.ipAddress }) { device ->
+                ClickRow(
+                    title = device.displayName,
+                    subtitle = buildString {
+                        append(device.ipAddress)
+                        device.macAddress?.let { append(" · ${it.text}") }
+                        device.notable?.let { append(" · ${it.title}") }
+                        if (device.isGateway) append(" · gateway")
+                        if (device.isLocalDevice) append(" · this phone")
+                    },
+                    trailing = device.openPorts.size.takeIf { device.portsScanned }?.let { "$it ports" } ?: "",
+                    onClick = { onOpen(device.ipAddress) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun LanDetail(model: SpectraModel, ip: String) {
+    model.generation
+    val device = model.lan.devices.firstOrNull { it.ipAddress == ip }
+    ScreenColumn(device?.displayName ?: ip) {
+        if (device == null) {
+            EmptyText("Not in this scan", "Run the LAN scan again.")
+            return@ScreenColumn
+        }
+        SimpleList {
+            item { InfoLine("Address", device.ipAddress) }
+            device.macAddress?.let { mac ->
+                item { InfoLine("Hardware", mac.text) }
+                item { InfoLine("Address type", if (mac.isLocallyAdministered) "Locally administered" else "Universal") }
+                device.manufacturer?.let { item { InfoLine("Maker", it) } }
+            }
+            device.notable?.let { item { InfoLine("Notable", it.title) } }
+            device.profile.upnp?.let { upnp ->
+                upnp.friendlyName?.let { item { InfoLine("UPnP name", it) } }
+                upnp.manufacturer?.let { item { InfoLine("Manufacturer", it) } }
+                upnp.model?.let { item { InfoLine("Model", it) } }
+                upnp.deviceType?.let { item { InfoLine("Device type", it) } }
+            }
+            device.profile.windows?.let { windows ->
+                windows.computerName?.let { item { InfoLine("Computer", it) } }
+                windows.domain?.let { item { InfoLine("Domain", it) } }
+                if (windows.shares.isNotEmpty()) item { InfoLine("Guest shares", windows.shares.joinToString()) }
+            }
+            if (device.openPorts.isNotEmpty()) item { SectionTitle("Open ports") }
+            items(device.openPorts, key = { it.number }) { port ->
+                val banner = device.profile.banners.firstOrNull { it.port == port.number }
+                val rtsp = device.profile.rtsp.firstOrNull { it.port == port.number }
+                ListItem(
+                    headlineContent = { Text("${port.number} ${port.service}") },
+                    supportingContent = { Text(banner?.summary ?: rtsp?.summary ?: "") },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun BluetoothScreen(model: SpectraModel, onOpen: (String) -> Unit) {
+    model.generation
+    var query by rememberSaveable { mutableStateOf("") }
+    val rows = model.ble.devices.values.filter { device ->
+        query.isBlank() || device.displayName.contains(query, true) || device.address.contains(query, true) ||
+            device.companyName?.contains(query, true) == true
+    }.sortedWith(compareByDescending<cattivole.spectra.core.BleDevice> { it.isNearby(model.ble.now) }.thenByDescending { it.orderRssi })
+    ScreenColumn(
+        "Bluetooth",
+        actions = {
+            TextButton(onClick = { if (model.ble.state is DeviceBleScanner.State.Scanning) model.ble.stop() else model.ble.start() }) {
+                Text(if (model.ble.state is DeviceBleScanner.State.Scanning) "Stop" else "Scan")
+            }
+        },
+    ) {
+        SimpleList {
+            item {
+                val status = when (val state = model.ble.state) {
+                    is DeviceBleScanner.State.Scanning -> "${rows.count { it.isNearby(model.ble.now) }} nearby"
+                    is DeviceBleScanner.State.Unavailable -> when (state.why) {
+                        DeviceBleScanner.Availability.POWERED_OFF -> "Bluetooth is off"
+                        DeviceBleScanner.Availability.UNAUTHORIZED -> "Bluetooth permission is off"
+                        DeviceBleScanner.Availability.UNSUPPORTED -> "This phone has no Bluetooth radio"
+                        DeviceBleScanner.Availability.STARTING -> "Starting"
+                    }
+                    DeviceBleScanner.State.Idle -> "Scan is stopped"
+                }
+                Text(status, modifier = Modifier.padding(16.dp))
+                Text(
+                    "Android reports the hardware address. iOS does not. A resolvable private address still changes, so the same device can reappear under a new one.",
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Classic inquiry", modifier = Modifier.weight(1f))
+                    Switch(model.ble.classicInquiry, { model.ble.setClassic(it) })
+                }
+                model.ble.classicNote?.let {
+                    Text(it, modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall)
+                }
+                OutlinedTextField(
+                    query,
+                    { query = it },
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    label = { Text("Name, company or address") },
+                    singleLine = true,
+                )
+            }
+            items(rows, key = { it.address }) { device ->
+                ClickRow(
+                    title = device.displayName,
+                    subtitle = device.subtitle + " · " + device.address,
+                    trailing = if (device.isNearby(model.ble.now)) "${device.rssi}" else "gone",
+                    onClick = { onOpen(device.address) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun BleDetail(model: SpectraModel, address: String) {
+    model.generation
+    val device = model.ble.devices[address]
+    ScreenColumn(device?.displayName ?: address) {
+        if (device == null) {
+            EmptyText("Not heard", "It has not advertised since this list was cleared.")
+            return@ScreenColumn
+        }
+        SimpleList {
+            item { InfoLine("Address", device.address) }
+            item { InfoLine("Kind", device.addressKind) }
+            item { InfoLine("Transport", if (device.transport == cattivole.spectra.core.BleDevice.Transport.CLASSIC) "Classic" else "Low energy") }
+            item { InfoLine("Signal", "${device.rssi} dBm") }
+            device.companyName?.let { item { InfoLine("Company", it) } }
+            device.txPower?.let { item { InfoLine("TX power", "$it dBm") } }
+            device.isConnectable?.let { item { InfoLine("Connectable", if (it) "Yes" else "No") } }
+            if (device.apple.isNotEmpty()) item { SectionTitle("Apple") }
+            items(device.apple) { message ->
+                ListItem(
+                    headlineContent = { Text(message.label) },
+                    supportingContent = { Text(message.detail ?: "") },
+                )
+            }
+            if (device.services.isNotEmpty()) item { SectionTitle("Services") }
+            items(device.services, key = { it.uuid }) { service ->
+                ListItem(
+                    headlineContent = { Text(service.name ?: service.uuid) },
+                    supportingContent = { Text(service.uuid, fontFamily = FontFamily.Monospace) },
+                )
+            }
+            if (device.manufacturerPayload.isNotEmpty()) {
+                item { InfoLine("Manufacturer data", cattivole.spectra.core.hex(device.manufacturerPayload)) }
+            }
+        }
+    }
+}
+
+@Composable
+fun SensorScreen(model: SpectraModel) {
+    model.generation
+    val context = LocalContext.current
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        if (bytes == null) {
+            model.link.dismissFirmwareUpdate()
+        } else {
+            model.link.installFirmware(bytes)
+        }
+    }
+    val link = model.link
+    ScreenColumn("Sensor") {
+        SimpleList {
+            item {
+                val headline = when (val state = link.state) {
+                    is SensorLink.State.Connected -> "Connected to ${state.name}"
+                    SensorLink.State.Demo -> "Demo sensor"
+                    is SensorLink.State.Connecting -> "Connecting to ${state.name}"
+                    SensorLink.State.Searching -> "Searching"
+                    SensorLink.State.PoweredOff -> "Bluetooth is off"
+                    SensorLink.State.Unauthorized -> "Bluetooth permission is off"
+                    SensorLink.State.Unsupported -> "No Bluetooth radio"
+                    SensorLink.State.Idle, SensorLink.State.Starting -> "Not connected"
+                }
+                ListItem(headlineContent = { Text(headline) })
+                Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    when (link.state) {
+                        is SensorLink.State.Connected, SensorLink.State.Demo -> {
+                            Button(onClick = { link.scanNow() }) { Text("Scan now") }
+                            TextButton(onClick = { link.disconnect() }) { Text("Disconnect") }
+                        }
+                        SensorLink.State.Searching -> TextButton(onClick = { link.stopSearching() }) { Text("Stop") }
+                        else -> Button(onClick = { link.startSearching() }) { Text("Find sensor") }
+                    }
+                }
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Demo sensor", modifier = Modifier.weight(1f))
+                    Switch(link.state is SensorLink.State.Demo, { link.setDemo(it) })
+                }
+            }
+            link.firmwareUpdate?.let { update ->
+                item {
+                    val text = when (val stage = update.stage) {
+                        is cattivole.spectra.core.FirmwareUpdateProgress.Stage.Uploading ->
+                            "Sending ${stage.sent} / ${stage.total}"
+                        cattivole.spectra.core.FirmwareUpdateProgress.Stage.Preparing -> "Preparing"
+                        cattivole.spectra.core.FirmwareUpdateProgress.Stage.Finishing -> "Checking the image"
+                        cattivole.spectra.core.FirmwareUpdateProgress.Stage.Rebooting -> "The sensor is rebooting into the new image"
+                        is cattivole.spectra.core.FirmwareUpdateProgress.Stage.Succeeded -> stage.version
+                        is cattivole.spectra.core.FirmwareUpdateProgress.Stage.Failed -> stage.message
+                    }
+                    ListItem(headlineContent = { Text(text) })
+                    if (!update.isRunning) TextButton(onClick = { link.dismissFirmwareUpdate() }) { Text("Dismiss") }
+                    else TextButton(onClick = { link.cancelFirmwareUpdate() }) { Text("Cancel") }
+                }
+            }
+            if (link.state is SensorLink.State.Searching) {
+                item { SectionTitle("Nearby sensors") }
+                items(link.discovered, key = { it.address }) { sensor ->
+                    ClickRow(sensor.name, sensor.address, "${sensor.rssi}", onClick = { link.connect(sensor.address, sensor.name) })
+                }
+            }
+            if (link.isConnected) {
+                item { SectionTitle("Automatic scan") }
+                items(SensorLink.liveIntervals) { seconds ->
+                    ClickRow(
+                        title = if (seconds == 0) "Only when asked" else "Every $seconds s",
+                        subtitle = if (link.liveInterval == seconds) "Current" else "Tap to use",
+                        trailing = if (link.liveInterval == seconds) "On" else "",
+                        onClick = { link.setLiveInterval(seconds) },
+                    )
+                }
+                link.info?.let { info ->
+                    item { HorizontalDivider() }
+                    item { InfoLine("Firmware", info.fw) }
+                    link.batteryLevel?.let { level ->
+                        item { InfoLine("Battery", if (link.isCharging == true) "$level% charging" else "$level%") }
+                    }
+                    item { InfoLine("Chip", info.chip) }
+                    item { InfoLine("Protocol", info.proto.toString()) }
+                    item { InfoLine("Bands", info.bands.joinToString()) }
+                    item { InfoLine("Scans this session", model.store.scanCount.toString()) }
+                    if (info.ota && link.state is SensorLink.State.Connected) {
+                        item {
+                            Text(
+                                "Choose firmware.bin from pio run, the same app image Launcher installs. A merged image with a bootloader is rejected.",
+                                modifier = Modifier.padding(16.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Button(
+                                onClick = { picker.launch(arrayOf("application/octet-stream", "*/*")) },
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            ) { Text("Update firmware") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

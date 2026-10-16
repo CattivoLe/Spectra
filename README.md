@@ -51,6 +51,36 @@ lists nearby Bluetooth Low Energy devices — name, signal, company, services
 and the Apple messages they broadcast (AirPods, Find My, HomeKit). iOS does
 not reveal the hardware address, and it does not hear classic Bluetooth.
 
+## Android app
+
+```sh
+cd android
+./gradlew :app:assembleDebug
+```
+
+Open `android/` in Android Studio. Requires Android 8 or newer. The package
+id is `cattivole.spectra`.
+
+The phone radio is a second source of networks, which iOS does not allow.
+It hears 5 GHz and 6 GHz (the Cardputer is 2.4 GHz only) and it is throttled
+by the system to a few scans per two minutes. A BSSID the sensor still sees
+keeps the sensor's record: clients, ciphers, the 40 MHz side, probes and
+deauth frames are not in a phone scan. On Android 13 and newer the app asks
+for nearby Wi-Fi and Bluetooth without turning those scans into location;
+older releases still need fine location, and location services have to be on
+or the scan comes back empty.
+
+The Bluetooth tab shows the hardware address and whether it is public or
+random. Classic inquiry is a separate switch: on many controllers it pauses
+low-energy scanning until it finishes. The GATT link asks for a larger ATT
+MTU itself (iOS does that automatically) and reconnects to the last sensor
+by its address.
+
+The LAN tab reads `/proc/net/arp`, so neighbour hardware addresses are
+usually visible, and it walks the joined Wi-Fi or Ethernet subnet. A prefix
+wider than /24 is limited to the local /24. There is no raw ICMP, so a host
+counts as present when a short TCP connect succeeds or ARP already has it.
+
 ## Protocol
 
 See [docs/protocol.md](docs/protocol.md). The app's `SensorProtocol` and the
