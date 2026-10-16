@@ -14,6 +14,7 @@ final class DemoSensor {
     private var scanID: UInt16 = 0
     private var networks = DemoSensor.makeNetworks()
     private let demoClients = DemoSensor.makeClients()
+    private let demoProbes = DemoSensor.makeProbes()
 
     init(emit: @escaping (Data) -> Void) {
         self.emit = emit
@@ -29,7 +30,6 @@ final class DemoSensor {
             emit(SensorProtocol.encode(.accessPoint(scanID: scanID, reading: reading)))
             apSent += 1
         }
-        // Emit clients: each one has a chance of being seen this scan.
         var staSent = 0
         for client in demoClients {
             guard Double.random(in: 0...1) > 0.15 else { continue }
@@ -38,10 +38,19 @@ final class DemoSensor {
             emit(SensorProtocol.encode(.station(scanID: scanID, client: drifted)))
             staSent += 1
         }
+        var probeSent = 0
+        for probe in demoProbes {
+            guard Double.random(in: 0...1) > 0.3 else { continue }
+            var drifted = probe
+            drifted.rssi += Int.random(in: -4...4)
+            emit(SensorProtocol.encode(.probeReq(scanID: scanID, probe: drifted)))
+            probeSent += 1
+        }
         emit(SensorProtocol.encode(.scanFinished(
             scanID: scanID, count: apSent,
             duration: .milliseconds(4800),
-            stationCount: staSent
+            stationCount: staSent,
+            probeCount: probeSent
         )))
     }
 
@@ -113,6 +122,28 @@ final class DemoSensor {
             let flakiness = rssi < -80 ? 0.35 : rssi < -70 ? 0.1 : 0
             return DemoNetwork(base: base, centre: rssi, current: Double(rssi), flakiness: flakiness)
         }
+    }
+
+    private static func makeProbes() -> [ProbeRequest] {
+        let mac1 = BSSID(bytes: [0x7A, 0x55, 0x66, 0x1F, 0x20, 0x21])
+        let mac2 = BSSID(bytes: [0x7E, 0x77, 0x88, 0x22, 0x23, 0x24])
+        let mac3 = BSSID(bytes: [0xF0, 0x18, 0x98, 0x01, 0x02, 0x03])
+        let mac4 = BSSID(bytes: [0x08, 0x08, 0xC2, 0x0A, 0x0B, 0x0C])
+        let mac5 = BSSID(bytes: [0x7A, 0xAA, 0xBB, 0x30, 0x31, 0x32])
+        return [
+            ProbeRequest(mac: mac1, rssi: -72, ssid: "Sheraton_WiFi", channel: 1),
+            ProbeRequest(mac: mac1, rssi: -72, ssid: "Home-5G", channel: 6),
+            ProbeRequest(mac: mac1, rssi: -74, ssid: nil, channel: 11),
+            ProbeRequest(mac: mac2, rssi: -80, ssid: "FreeWiFi_Airport", channel: 1),
+            ProbeRequest(mac: mac2, rssi: -80, ssid: "AndroidAP", channel: 6),
+            ProbeRequest(mac: mac3, rssi: -36, ssid: "Home", channel: 6),
+            ProbeRequest(mac: mac4, rssi: -53, ssid: "Home", channel: 6),
+            ProbeRequest(mac: mac4, rssi: -54, ssid: "Office_Corp", channel: 1),
+            ProbeRequest(mac: mac4, rssi: -55, ssid: "Starbucks", channel: 11),
+            ProbeRequest(mac: mac5, rssi: -68, ssid: "Airbnb_Guest", channel: 1),
+            ProbeRequest(mac: mac5, rssi: -69, ssid: "Holiday_Inn", channel: 6),
+            ProbeRequest(mac: mac5, rssi: -70, ssid: "eduroam", channel: 11),
+        ]
     }
 
     /// Made-up client devices associated with the demo APs, plus a few probing ones.

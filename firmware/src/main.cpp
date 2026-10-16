@@ -13,8 +13,8 @@
 #include <cstring>
 #include <vector>
 
-static constexpr char kFirmwareVersion[] = "0.2.0";
-static constexpr uint8_t kProtocolVersion = 2;
+static constexpr char kFirmwareVersion[] = "0.3.0";
+static constexpr uint8_t kProtocolVersion = 3;
 
 static constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
 static constexpr char kInfoUuid[] = "53500002-8F2D-4B6A-9C1E-737065637472";
@@ -28,6 +28,7 @@ static constexpr uint8_t kMsgScanStarted = 0x10;
 static constexpr uint8_t kMsgAccessPoint = 0x11;
 static constexpr uint8_t kMsgScanFinished = 0x12;
 static constexpr uint8_t kMsgStation = 0x13;
+static constexpr uint8_t kMsgProbeReq = 0x14;
 
 // Time spent on each channel during an active scan. 13 channels at 120 ms
 // keeps a full sweep under two seconds.
@@ -52,6 +53,15 @@ struct StationEntry {
   bool associated;   // true if seen in a data/association frame
 };
 
+// A probe request: a device looking for a specific SSID.
+struct ProbeEntry {
+  uint8_t mac[6];
+  int8_t rssi;
+  uint8_t channel;
+  uint8_t ssidLen;
+  char ssid[33];
+};
+
 static NimBLEServer *server = nullptr;
 static NimBLECharacteristic *infoChar = nullptr;
 static NimBLECharacteristic *resultsChar = nullptr;
@@ -68,10 +78,12 @@ static uint32_t lastScanMs = 0;
 static uint32_t lastScanDurationMs = 0;
 static std::vector<ApSummary> lastResults;
 static uint16_t lastStationCount = 0;
+static uint16_t lastProbeCount = 0;
 static bool uiDirty = true;
 
 // Collected during promiscuous-mode capture; accessed only from loop().
 static std::vector<StationEntry> capturedStations;
+static std::vector<ProbeEntry> capturedProbes;
 static uint8_t ownMac[6];
 
 static bool isConnected() { return server != nullptr && server->getConnectedCount() > 0; }
@@ -113,6 +125,29 @@ static void recordStation(const uint8_t *mac, const uint8_t *bssid, int8_t rssi,
   capturedStations.push_back(entry);
 }
 
+/// Record a probe request, deduplicating by MAC+SSID.
+static void recordProbe(const uint8_t *mac, int8_t rssi, uint8_t channel,
+                        const char *ssid, uint8_t ssidLen) {
+  if (isBroadcast(mac) || isMulticast(mac) || macEqual(mac, ownMac)) return;
+  if (ssidLen > 32) ssidLen = 32;
+  for (auto &p : capturedProbes) {
+    if (macEqual(p.mac, mac) && p.ssidLen == ssidLen &&
+        memcmp(p.ssid, ssid, ssidLen) == 0) {
+      if (rssi > p.rssi) p.rssi = rssi;
+      return;
+    }
+  }
+  if (capturedProbes.size() >= 256) return;
+  ProbeEntry entry;
+  memcpy(entry.mac, mac, 6);
+  entry.rssi = rssi;
+  entry.channel = channel;
+  entry.ssidLen = ssidLen;
+  memcpy(entry.ssid, ssid, ssidLen);
+  entry.ssid[ssidLen] = '\0';
+  capturedProbes.push_back(entry);
+}
+
 // ---------------------------------------------------------------------------
 // Promiscuous-mode callback
 // ---------------------------------------------------------------------------
@@ -148,6 +183,26 @@ static void IRAM_ATTR promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t
     if (subtype == 4) {
       // Probe request: addr2 is the client, no associated AP.
       recordStation(addr2, zeroBssid, rssi, false);
+      // Extract SSID from the tagged parameters (starts at byte 24).
+      const uint16_t frameLen = pkt->rx_ctrl.sig_len;
+      if (frameLen > 24 + 2) {
+        const uint8_t *body = frame + 24;
+        const uint16_t bodyLen = frameLen - 24;
+        uint16_t pos = 0;
+        while (pos + 2 <= bodyLen) {
+          uint8_t tag = body[pos];
+          uint8_t tlen = body[pos + 1];
+          if (pos + 2 + tlen > bodyLen) break;
+          if (tag == 0) {
+            uint8_t ch = 0;
+            esp_wifi_get_channel(&ch, nullptr);
+            recordProbe(addr2, rssi, ch,
+                        reinterpret_cast<const char *>(body + pos + 2), tlen);
+            break;
+          }
+          pos += 2 + tlen;
+        }
+      }
     } else if (subtype == 0 || subtype == 2) {
       // Association / reassociation request: addr2 is the client, addr1 is the AP.
       recordStation(addr2, addr1, rssi, true);
@@ -281,12 +336,26 @@ static void sendStation(const StationEntry &sta) {
   sendMessage(msg, sizeof(msg));
 }
 
-static void sendScanFinished(uint16_t apCount, uint16_t staCount, uint16_t durationMs) {
-  uint8_t msg[9] = {kMsgScanFinished};
+static void sendProbeReq(const ProbeEntry &probe) {
+  uint8_t msg[12 + 32];
+  msg[0] = kMsgProbeReq;
+  putU16(msg + 1, scanId);
+  memcpy(msg + 3, probe.mac, 6);
+  msg[9] = static_cast<uint8_t>(probe.rssi);
+  msg[10] = probe.channel;
+  msg[11] = probe.ssidLen;
+  memcpy(msg + 12, probe.ssid, probe.ssidLen);
+  sendMessage(msg, 12 + probe.ssidLen);
+}
+
+static void sendScanFinished(uint16_t apCount, uint16_t staCount,
+                             uint16_t probeCount, uint16_t durationMs) {
+  uint8_t msg[11] = {kMsgScanFinished};
   putU16(msg + 1, scanId);
   putU16(msg + 3, apCount);
   putU16(msg + 5, durationMs);
   putU16(msg + 7, staCount);
+  putU16(msg + 9, probeCount);
   sendMessage(msg, sizeof(msg));
 }
 
@@ -319,8 +388,9 @@ static void drawUi() {
   if (lastScanMs == 0) {
     d.print("S or Enter: scan");
   } else {
-    d.printf("%u AP  %u STA  %lu ms", static_cast<unsigned>(lastResults.size()),
+    d.printf("%u AP %u STA %u PRB %lums", static_cast<unsigned>(lastResults.size()),
              static_cast<unsigned>(lastStationCount),
+             static_cast<unsigned>(lastProbeCount),
              static_cast<unsigned long>(lastScanDurationMs));
   }
 
@@ -354,6 +424,7 @@ static void drawUi() {
 /// Sniff Wi-Fi frames in promiscuous mode to discover client stations.
 static void sniffStations() {
   capturedStations.clear();
+  capturedProbes.clear();
 
   // Remember our own STA MAC so we filter it out.
   esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
@@ -410,10 +481,17 @@ static void runScan() {
   }
   lastStationCount = staSent;
 
+  uint16_t probeSent = 0;
+  for (const auto &probe : capturedProbes) {
+    sendProbeReq(probe);
+    ++probeSent;
+  }
+  lastProbeCount = probeSent;
+
   lastScanDurationMs = millis() - started;
   lastScanMs = millis();
 
-  sendScanFinished(apSent, staSent,
+  sendScanFinished(apSent, staSent, probeSent,
                    static_cast<uint16_t>(std::min<uint32_t>(lastScanDurationMs, 0xFFFF)));
   uiDirty = true;
 }

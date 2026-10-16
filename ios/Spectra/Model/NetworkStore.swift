@@ -47,10 +47,14 @@ final class NetworkStore {
     /// Clients that were only probing (not associated) in the latest scan.
     var probingClients: [WiFiClient] { clients.filter { !$0.isAssociated } }
 
+    /// Probe requests from the latest scan, grouped by device.
+    private(set) var probingDevices: [ProbingDevice] = []
+
     private var currentScanID: UInt16?
     private var seenInCurrentScan: Set<BSSID> = []
     /// Clients collected during the current scan, before they are assigned to APs.
     private var pendingClients: [WiFiClient] = []
+    private var pendingProbes: [ProbeRequest] = []
 
     func handle(_ message: SensorProtocol.Message, at date: Date = .now) {
         switch message {
@@ -58,6 +62,7 @@ final class NetworkStore {
             currentScanID = scanID
             seenInCurrentScan = []
             pendingClients = []
+            pendingProbes = []
             isScanning = true
 
         case .accessPoint(_, let reading):
@@ -66,15 +71,18 @@ final class NetworkStore {
         case .station(_, let client):
             recordClient(client)
 
-        case .scanFinished(let scanID, _, let duration, _):
+        case .probeReq(_, let probe):
+            recordProbe(probe)
+
+        case .scanFinished(let scanID, _, let duration, _, _):
             // A finish without its start (the app connected mid-scan) still
             // delivered readings, but cannot say who was missed.
             if scanID == currentScanID {
                 for id in networks.keys where !seenInCurrentScan.contains(id) {
                     networks[id]?.missedScans += 1
                 }
-                // Assign collected clients to their APs.
                 assignClients()
+                aggregateProbes()
             }
             currentScanID = nil
             isScanning = false
@@ -87,6 +95,7 @@ final class NetworkStore {
     func clear() {
         networks = [:]
         clients = []
+        probingDevices = []
         lastScanFinished = nil
         lastScanDuration = nil
         scanCount = 0
@@ -120,6 +129,36 @@ final class NetworkStore {
                 latest: reading, firstSeen: date, lastSeen: date, samples: [sample]
             )
         }
+    }
+
+    private func recordProbe(_ probe: ProbeRequest) {
+        if let index = pendingProbes.firstIndex(where: { $0.mac == probe.mac && $0.ssid == probe.ssid }) {
+            if probe.rssi > pendingProbes[index].rssi {
+                pendingProbes[index].rssi = probe.rssi
+            }
+        } else {
+            pendingProbes.append(probe)
+        }
+    }
+
+    private func aggregateProbes() {
+        var byMAC: [BSSID: ProbingDevice] = [:]
+        for probe in pendingProbes {
+            if var device = byMAC[probe.mac] {
+                if probe.rssi > device.rssi { device.rssi = probe.rssi }
+                if let ssid = probe.ssid, !ssid.isEmpty, !device.ssids.contains(ssid) {
+                    device.ssids.append(ssid)
+                }
+                byMAC[probe.mac] = device
+            } else {
+                let ssids = probe.ssid.map { $0.isEmpty ? [] : [$0] } ?? []
+                byMAC[probe.mac] = ProbingDevice(
+                    mac: probe.mac, rssi: probe.rssi, ssids: ssids, channel: probe.channel
+                )
+            }
+        }
+        probingDevices = byMAC.values.sorted { $0.rssi > $1.rssi }
+        pendingProbes = []
     }
 
     private func recordClient(_ client: WiFiClient) {

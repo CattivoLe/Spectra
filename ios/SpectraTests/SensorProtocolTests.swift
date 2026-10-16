@@ -52,18 +52,19 @@ struct SensorProtocolTests {
     }
 
     @Test func scanFinishedRoundTrips() {
-        let message = SensorProtocol.Message.scanFinished(scanID: 65535, count: 23, duration: .milliseconds(1640), stationCount: 7)
+        let message = SensorProtocol.Message.scanFinished(scanID: 65535, count: 23, duration: .milliseconds(1640), stationCount: 7, probeCount: 12)
         #expect(SensorProtocol.decode(SensorProtocol.encode(message)) == message)
     }
 
     @Test func scanFinishedV1HasZeroStations() throws {
         // v1 messages are only 7 bytes, no station count.
         let bytes: [UInt8] = [0x12, 0xFF, 0xFF, 0x05, 0x00, 0x68, 0x06]
-        guard case .scanFinished(_, _, _, let staCount) = SensorProtocol.decode(Data(bytes)) else {
+        guard case .scanFinished(_, _, _, let staCount, let probeCount) = SensorProtocol.decode(Data(bytes)) else {
             Issue.record("not decoded as scanFinished")
             return
         }
         #expect(staCount == 0)
+        #expect(probeCount == 0)
     }
 
     @Test func stationRoundTrips() throws {
@@ -96,6 +97,39 @@ struct SensorProtocolTests {
         #expect(!decoded.isAssociated)
     }
 
+    @Test func probeReqRoundTrips() throws {
+        let probe = ProbeRequest(
+            mac: BSSID(bytes: [0x7A, 0x12, 0x34, 0x56, 0x78, 0x9A]),
+            rssi: -68,
+            ssid: "Sheraton_WiFi",
+            channel: 6
+        )
+        let data = SensorProtocol.encode(.probeReq(scanID: 42, probe: probe))
+        #expect(data.count == 12 + 13)
+        let decoded = try #require(SensorProtocol.decode(data))
+        #expect(decoded == .probeReq(scanID: 42, probe: probe))
+    }
+
+    @Test func broadcastProbeHasNilSSID() throws {
+        let probe = ProbeRequest(mac: BSSID(bytes: [0x7A, 0xAA, 0xBB, 0x01, 0x02, 0x03]), rssi: -74, ssid: nil, channel: 11)
+        let data = SensorProtocol.encode(.probeReq(scanID: 1, probe: probe))
+        guard case .probeReq(_, let decoded) = SensorProtocol.decode(data) else {
+            Issue.record("not decoded as probeReq")
+            return
+        }
+        #expect(decoded.ssid == nil)
+    }
+
+    @Test func scanFinishedV2HasZeroProbes() throws {
+        // v2 messages are 9 bytes (no probe count).
+        let bytes: [UInt8] = [0x12, 0x01, 0x00, 0x03, 0x00, 0xE8, 0x03, 0x02, 0x00]
+        guard case .scanFinished(_, _, _, _, let probeCount) = SensorProtocol.decode(Data(bytes)) else {
+            Issue.record("not decoded as scanFinished")
+            return
+        }
+        #expect(probeCount == 0)
+    }
+
     @Test(arguments: [
         Data(),
         Data([0x11, 0x01]),
@@ -125,7 +159,7 @@ struct NetworkStoreTests {
     private func scan(_ store: NetworkStore, id: UInt16, _ readings: [AccessPointReading]) {
         store.handle(.scanStarted(scanID: id))
         for r in readings { store.handle(.accessPoint(scanID: id, reading: r)) }
-        store.handle(.scanFinished(scanID: id, count: readings.count, duration: .seconds(1), stationCount: 0))
+        store.handle(.scanFinished(scanID: id, count: readings.count, duration: .seconds(1), stationCount: 0, probeCount: 0))
     }
 
     @Test func networkGoesOutOfRangeAfterMissedScans() {
@@ -197,9 +231,9 @@ struct LastScanTests {
         )
         store.handle(.scanStarted(scanID: 1))
         store.handle(.accessPoint(scanID: 1, reading: weak))
-        store.handle(.scanFinished(scanID: 1, count: 1, duration: .seconds(1), stationCount: 0))
+        store.handle(.scanFinished(scanID: 1, count: 1, duration: .seconds(1), stationCount: 0, probeCount: 0))
         store.handle(.scanStarted(scanID: 2))
-        store.handle(.scanFinished(scanID: 2, count: 0, duration: .seconds(1), stationCount: 0))
+        store.handle(.scanFinished(scanID: 2, count: 0, duration: .seconds(1), stationCount: 0, probeCount: 0))
 
         let network = store.networks[weak.bssid]
         #expect(network?.wasInLastScan == false)

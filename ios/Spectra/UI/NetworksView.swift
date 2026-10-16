@@ -57,8 +57,18 @@ struct NetworksView: View {
                             }
                         }
                     } header: {
-                        // Matches the count on the Cardputer's screen.
                         Text("\(store.networks.values.filter(\.wasInLastScan).count) in last scan")
+                    }
+                }
+                if !store.probingDevices.isEmpty {
+                    Section {
+                        ForEach(store.probingDevices) { device in
+                            ProbeDeviceRow(device: device)
+                        }
+                    } header: {
+                        Text("\(store.probingDevices.count) probing")
+                    } footer: {
+                        Text("Devices sending probe requests nearby, revealing networks they have connected to before.")
                     }
                 }
             }

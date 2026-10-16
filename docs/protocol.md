@@ -1,7 +1,7 @@
 # Spectra BLE protocol
 
 The Cardputer runs a GATT server; the iPhone is the central. Everything is
-little-endian. Version 2.
+little-endian. Version 3.
 
 ## Service
 
@@ -76,7 +76,8 @@ must negotiate an ATT MTU of at least 64 (iOS always does).
 | 1 | 2 | scan id |
 | 3 | 2 | number of access points sent |
 | 5 | 2 | scan duration, ms |
-| 7 | 2 | number of stations sent (v2; absent in v1) |
+| 7 | 2 | number of stations sent (v2+; absent in v1) |
+| 9 | 2 | number of probe requests sent (v3; absent in v1–v2) |
 
 ### `0x13` Station (v2)
 
@@ -90,6 +91,21 @@ A client device (station) seen through promiscuous-mode frame capture.
 | 9 | 6 | AP BSSID (all zeros when the client is only probing, not associated) |
 | 15 | 1 | RSSI, dBm (`i8`) |
 | 16 | 1 | flags: bit0 = associated (client is connected to the AP in BSSID) |
+
+### `0x14` Probe request (v3)
+
+A probe request frame captured in promiscuous mode. One entry per unique
+MAC + SSID pair; broadcast probes have `ssid_len` = 0.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x14` |
+| 1 | 2 | scan id |
+| 3 | 6 | client MAC address |
+| 9 | 1 | RSSI, dBm (`i8`) |
+| 10 | 1 | channel the probe was seen on |
+| 11 | 1 | SSID length *n* (0 for broadcast probe) |
+| 12 | *n* | SSID bytes (UTF-8) |
 
 ### Auth modes
 

@@ -4,7 +4,7 @@ import Foundation
 /// The BLE contract with the Cardputer firmware. docs/protocol.md is the
 /// source of truth; keep the two in step.
 nonisolated enum SensorProtocol {
-    static let version = 2
+    static let version = 3
 
     static let service = CBUUID(string: "53500001-8F2D-4B6A-9C1E-737065637472")
     static let info = CBUUID(string: "53500002-8F2D-4B6A-9C1E-737065637472")
@@ -28,8 +28,9 @@ nonisolated enum SensorProtocol {
     enum Message: Equatable {
         case scanStarted(scanID: UInt16)
         case accessPoint(scanID: UInt16, reading: AccessPointReading)
-        case scanFinished(scanID: UInt16, count: Int, duration: Duration, stationCount: Int)
+        case scanFinished(scanID: UInt16, count: Int, duration: Duration, stationCount: Int, probeCount: Int)
         case station(scanID: UInt16, client: WiFiClient)
+        case probeReq(scanID: UInt16, probe: ProbeRequest)
     }
 
     enum MessageType: UInt8 {
@@ -37,6 +38,7 @@ nonisolated enum SensorProtocol {
         case accessPoint = 0x11
         case scanFinished = 0x12
         case station = 0x13
+        case probeReq = 0x14
     }
 
     /// Decodes one Results notification, or returns nil for anything malformed
@@ -54,13 +56,15 @@ nonisolated enum SensorProtocol {
 
         case .scanFinished:
             guard bytes.count >= 7 else { return nil }
-            // v2 adds station count at offset 7; v1 messages are only 7 bytes.
+            // v2 adds station count at offset 7; v3 adds probe count at offset 9.
             let staCount = bytes.count >= 9 ? Int(u16(bytes, 7)) : 0
+            let probeCount = bytes.count >= 11 ? Int(u16(bytes, 9)) : 0
             return .scanFinished(
                 scanID: scanID,
                 count: Int(u16(bytes, 3)),
                 duration: .milliseconds(Int(u16(bytes, 5))),
-                stationCount: staCount
+                stationCount: staCount,
+                probeCount: probeCount
             )
 
         case .accessPoint:
@@ -101,6 +105,19 @@ nonisolated enum SensorProtocol {
                 isAssociated: associated
             )
             return .station(scanID: scanID, client: client)
+
+        case .probeReq:
+            guard bytes.count >= 12 else { return nil }
+            let mac = BSSID(bytes: Array(bytes[3..<9]))
+            let rssi = Int(Int8(bitPattern: bytes[9]))
+            let channel = Int(bytes[10])
+            let ssidLen = Int(bytes[11])
+            guard ssidLen <= 32, bytes.count >= 12 + ssidLen else { return nil }
+            let ssid: String? = ssidLen > 0
+                ? String(bytes: bytes[12..<(12 + ssidLen)], encoding: .utf8)
+                : nil
+            let probe = ProbeRequest(mac: mac, rssi: rssi, ssid: ssid, channel: channel)
+            return .probeReq(scanID: scanID, probe: probe)
         }
     }
 
@@ -117,12 +134,13 @@ nonisolated enum SensorProtocol {
             bytes.append(MessageType.scanStarted.rawValue)
             put16(scanID)
 
-        case .scanFinished(let scanID, let count, let duration, let stationCount):
+        case .scanFinished(let scanID, let count, let duration, let stationCount, let probeCount):
             bytes.append(MessageType.scanFinished.rawValue)
             put16(scanID)
             put16(UInt16(clamping: count))
             put16(UInt16(clamping: Int(duration / .milliseconds(1))))
             put16(UInt16(clamping: stationCount))
+            put16(UInt16(clamping: probeCount))
 
         case .accessPoint(let scanID, let reading):
             bytes.append(MessageType.accessPoint.rawValue)
@@ -148,6 +166,16 @@ nonisolated enum SensorProtocol {
             bytes.append(contentsOf: (client.apBSSID ?? BSSID(bytes: [0, 0, 0, 0, 0, 0])).bytes)
             bytes.append(UInt8(bitPattern: Int8(clamping: client.rssi)))
             bytes.append(client.isAssociated ? 0x01 : 0x00)
+
+        case .probeReq(let scanID, let probe):
+            bytes.append(MessageType.probeReq.rawValue)
+            put16(scanID)
+            bytes.append(contentsOf: probe.mac.bytes)
+            bytes.append(UInt8(bitPattern: Int8(clamping: probe.rssi)))
+            bytes.append(UInt8(clamping: probe.channel))
+            let ssidBytes = Array((probe.ssid ?? "").utf8.prefix(32))
+            bytes.append(UInt8(ssidBytes.count))
+            bytes.append(contentsOf: ssidBytes)
         }
         return Data(bytes)
     }
