@@ -49,6 +49,19 @@ struct NetworksView: View {
                 Section {
                     SensorStatusCard(openSensor: openSensor)
                 }
+                if !store.deauthEvents.isEmpty {
+                    Section {
+                        ForEach(store.deauthEvents) { event in
+                            DeauthRow(event: event)
+                        }
+                    } header: {
+                        Label("Deauth detected", systemImage: "exclamationmark.shield.fill")
+                            .foregroundStyle(.red)
+                            .font(.subheadline.weight(.semibold))
+                    } footer: {
+                        Text("Deauthentication frames force devices off the network. A burst or broadcast targets suggest an active attack.")
+                    }
+                }
                 if !visible.isEmpty {
                     Section {
                         ForEach(visible) { network in

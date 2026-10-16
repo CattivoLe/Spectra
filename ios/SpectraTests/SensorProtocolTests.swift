@@ -130,6 +130,33 @@ struct SensorProtocolTests {
         #expect(probeCount == 0)
     }
 
+    @Test func deauthRoundTrips() throws {
+        let event = DeauthEvent(
+            source: BSSID(bytes: [0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]),
+            target: BSSID(bytes: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
+            bssid: BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x22, 0xA1]),
+            reason: 7,
+            rssi: -45,
+            channel: 6,
+            count: 24
+        )
+        let data = SensorProtocol.encode(.deauth(scanID: 99, event: event))
+        #expect(data.count == 27)
+        let decoded = try #require(SensorProtocol.decode(data))
+        #expect(decoded == .deauth(scanID: 99, event: event))
+    }
+
+    @Test func deauthBroadcastSeverity() {
+        let event = DeauthEvent(
+            source: BSSID(bytes: [0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]),
+            target: BSSID(bytes: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
+            bssid: BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x22, 0xA1]),
+            reason: 7, rssi: -45, channel: 6, count: 5
+        )
+        #expect(event.isBroadcast)
+        #expect(event.severity == .critical)
+    }
+
     @Test(arguments: [
         Data(),
         Data([0x11, 0x01]),

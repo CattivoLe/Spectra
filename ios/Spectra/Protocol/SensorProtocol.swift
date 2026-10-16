@@ -31,6 +31,7 @@ nonisolated enum SensorProtocol {
         case scanFinished(scanID: UInt16, count: Int, duration: Duration, stationCount: Int, probeCount: Int)
         case station(scanID: UInt16, client: WiFiClient)
         case probeReq(scanID: UInt16, probe: ProbeRequest)
+        case deauth(scanID: UInt16, event: DeauthEvent)
     }
 
     enum MessageType: UInt8 {
@@ -39,6 +40,7 @@ nonisolated enum SensorProtocol {
         case scanFinished = 0x12
         case station = 0x13
         case probeReq = 0x14
+        case deauth = 0x15
     }
 
     /// Decodes one Results notification, or returns nil for anything malformed
@@ -118,6 +120,19 @@ nonisolated enum SensorProtocol {
                 : nil
             let probe = ProbeRequest(mac: mac, rssi: rssi, ssid: ssid, channel: channel)
             return .probeReq(scanID: scanID, probe: probe)
+
+        case .deauth:
+            guard bytes.count >= 27 else { return nil }
+            let event = DeauthEvent(
+                source: BSSID(bytes: Array(bytes[3..<9])),
+                target: BSSID(bytes: Array(bytes[9..<15])),
+                bssid: BSSID(bytes: Array(bytes[15..<21])),
+                reason: u16(bytes, 21),
+                rssi: Int(Int8(bitPattern: bytes[23])),
+                channel: Int(bytes[24]),
+                count: Int(u16(bytes, 25))
+            )
+            return .deauth(scanID: scanID, event: event)
         }
     }
 
@@ -176,6 +191,17 @@ nonisolated enum SensorProtocol {
             let ssidBytes = Array((probe.ssid ?? "").utf8.prefix(32))
             bytes.append(UInt8(ssidBytes.count))
             bytes.append(contentsOf: ssidBytes)
+
+        case .deauth(let scanID, let event):
+            bytes.append(MessageType.deauth.rawValue)
+            put16(scanID)
+            bytes.append(contentsOf: event.source.bytes)
+            bytes.append(contentsOf: event.target.bytes)
+            bytes.append(contentsOf: event.bssid.bytes)
+            put16(event.reason)
+            bytes.append(UInt8(bitPattern: Int8(clamping: event.rssi)))
+            bytes.append(UInt8(clamping: event.channel))
+            put16(UInt16(clamping: event.count))
         }
         return Data(bytes)
     }

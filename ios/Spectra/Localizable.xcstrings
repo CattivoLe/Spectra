@@ -180,6 +180,26 @@
         }
       }
     },
+    "all devices": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "все устройства"
+          }
+        }
+      }
+    },
+    "ATTACK": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "АТАКА"
+          }
+        }
+      }
+    },
     "Authentication": {
       "localizations": {
         "ru": {
@@ -242,6 +262,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bluetooth выключен. Включите его в Пункте управления."
+          }
+        }
+      }
+    },
+    "Broadcast deauth": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Широковещательный deauth"
           }
         }
       }
@@ -448,12 +478,32 @@
         }
       }
     },
+    "Copy source MAC": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировать MAC источника"
+          }
+        }
+      }
+    },
     "Copy SSIDs": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Скопировать SSID"
+          }
+        }
+      }
+    },
+    "Copy target MAC": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировать MAC цели"
           }
         }
       }
@@ -474,6 +524,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "дБм"
+          }
+        }
+      }
+    },
+    "Deauth detected": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обнаружен deauth"
+          }
+        }
+      }
+    },
+    "Deauthentication frames force devices off the network. A burst or broadcast targets suggest an active attack.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deauth-фреймы сбрасывают устройства с сети. Массовая рассылка или большое количество — признак атаки."
           }
         }
       }
@@ -744,6 +814,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Идентификация"
+          }
+        }
+      }
+    },
+    "INFO": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ИНФО"
           }
         }
       }
@@ -1549,6 +1629,16 @@
         }
       }
     },
+    "SUSPICIOUS": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ПОДОЗРИТЕЛЬНО"
+          }
+        }
+      }
+    },
     "Tap Scan to find devices": {
       "extractionState": "manual",
       "localizations": {
@@ -1556,6 +1646,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Нажмите «Сканировать», чтобы найти устройства"
+          }
+        }
+      }
+    },
+    "Targeted deauth": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Направленный deauth"
           }
         }
       }

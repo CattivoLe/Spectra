@@ -15,6 +15,7 @@ final class DemoSensor {
     private var networks = DemoSensor.makeNetworks()
     private let demoClients = DemoSensor.makeClients()
     private let demoProbes = DemoSensor.makeProbes()
+    private let demoDeauths = DemoSensor.makeDeauths()
 
     init(emit: @escaping (Data) -> Void) {
         self.emit = emit
@@ -45,6 +46,11 @@ final class DemoSensor {
             drifted.rssi += Int.random(in: -4...4)
             emit(SensorProtocol.encode(.probeReq(scanID: scanID, probe: drifted)))
             probeSent += 1
+        }
+        for event in demoDeauths {
+            // Deauths don't appear every scan — ~30% chance.
+            guard Double.random(in: 0...1) > 0.7 else { continue }
+            emit(SensorProtocol.encode(.deauth(scanID: scanID, event: event)))
         }
         emit(SensorProtocol.encode(.scanFinished(
             scanID: scanID, count: apSent,
@@ -122,6 +128,19 @@ final class DemoSensor {
             let flakiness = rssi < -80 ? 0.35 : rssi < -70 ? 0.1 : 0
             return DemoNetwork(base: base, centre: rssi, current: Double(rssi), flakiness: flakiness)
         }
+    }
+
+    private static func makeDeauths() -> [DeauthEvent] {
+        let apBSSID = BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x00, 0xA0])
+        let broadcast = BSSID(bytes: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+        let attacker = BSSID(bytes: [0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01])
+        let victim = BSSID(bytes: [0xF0, 0x18, 0x98, 0x01, 0x02, 0x03])
+        return [
+            DeauthEvent(source: attacker, target: broadcast, bssid: apBSSID,
+                        reason: 7, rssi: -45, channel: 6, count: 24),
+            DeauthEvent(source: attacker, target: victim, bssid: apBSSID,
+                        reason: 1, rssi: -47, channel: 6, count: 8),
+        ]
     }
 
     private static func makeProbes() -> [ProbeRequest] {

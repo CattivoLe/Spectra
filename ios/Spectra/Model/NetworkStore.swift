@@ -49,12 +49,16 @@ final class NetworkStore {
 
     /// Probe requests from the latest scan, grouped by device.
     private(set) var probingDevices: [ProbingDevice] = []
+    /// Deauth/disassoc events from the latest scan.
+    private(set) var deauthEvents: [DeauthEvent] = []
+    /// True when any critical-severity deauth was seen in the latest scan.
+    var deauthAlert: Bool { deauthEvents.contains { $0.severity >= .warning } }
 
     private var currentScanID: UInt16?
     private var seenInCurrentScan: Set<BSSID> = []
-    /// Clients collected during the current scan, before they are assigned to APs.
     private var pendingClients: [WiFiClient] = []
     private var pendingProbes: [ProbeRequest] = []
+    private var pendingDeauths: [DeauthEvent] = []
 
     func handle(_ message: SensorProtocol.Message, at date: Date = .now) {
         switch message {
@@ -63,6 +67,7 @@ final class NetworkStore {
             seenInCurrentScan = []
             pendingClients = []
             pendingProbes = []
+            pendingDeauths = []
             isScanning = true
 
         case .accessPoint(_, let reading):
@@ -74,6 +79,9 @@ final class NetworkStore {
         case .probeReq(_, let probe):
             recordProbe(probe)
 
+        case .deauth(_, let event):
+            pendingDeauths.append(event)
+
         case .scanFinished(let scanID, _, let duration, _, _):
             // A finish without its start (the app connected mid-scan) still
             // delivered readings, but cannot say who was missed.
@@ -83,6 +91,8 @@ final class NetworkStore {
                 }
                 assignClients()
                 aggregateProbes()
+                deauthEvents = pendingDeauths.sorted { $0.count > $1.count }
+                pendingDeauths = []
             }
             currentScanID = nil
             isScanning = false
@@ -96,6 +106,7 @@ final class NetworkStore {
         networks = [:]
         clients = []
         probingDevices = []
+        deauthEvents = []
         lastScanFinished = nil
         lastScanDuration = nil
         scanCount = 0

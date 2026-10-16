@@ -29,6 +29,7 @@ static constexpr uint8_t kMsgAccessPoint = 0x11;
 static constexpr uint8_t kMsgScanFinished = 0x12;
 static constexpr uint8_t kMsgStation = 0x13;
 static constexpr uint8_t kMsgProbeReq = 0x14;
+static constexpr uint8_t kMsgDeauth = 0x15;
 
 // Time spent on each channel during an active scan. 13 channels at 120 ms
 // keeps a full sweep under two seconds.
@@ -62,6 +63,17 @@ struct ProbeEntry {
   char ssid[33];
 };
 
+// A deauthentication or disassociation frame — potential attack indicator.
+struct DeauthEntry {
+  uint8_t src[6];     // addr2: who sent it
+  uint8_t dst[6];     // addr1: target (FF:FF:FF:FF:FF:FF = broadcast)
+  uint8_t bssid[6];   // addr3: network
+  uint16_t reason;    // 802.11 reason code
+  int8_t rssi;
+  uint8_t channel;
+  uint16_t count;     // frames seen with this signature
+};
+
 static NimBLEServer *server = nullptr;
 static NimBLECharacteristic *infoChar = nullptr;
 static NimBLECharacteristic *resultsChar = nullptr;
@@ -84,6 +96,7 @@ static bool uiDirty = true;
 // Collected during promiscuous-mode capture; accessed only from loop().
 static std::vector<StationEntry> capturedStations;
 static std::vector<ProbeEntry> capturedProbes;
+static std::vector<DeauthEntry> capturedDeauths;
 static uint8_t ownMac[6];
 
 static bool isConnected() { return server != nullptr && server->getConnectedCount() > 0; }
@@ -148,6 +161,29 @@ static void recordProbe(const uint8_t *mac, int8_t rssi, uint8_t channel,
   capturedProbes.push_back(entry);
 }
 
+static void recordDeauth(const uint8_t *src, const uint8_t *dst,
+                         const uint8_t *bssid, uint16_t reason,
+                         int8_t rssi, uint8_t channel) {
+  for (auto &d : capturedDeauths) {
+    if (macEqual(d.src, src) && macEqual(d.dst, dst) &&
+        macEqual(d.bssid, bssid) && d.reason == reason) {
+      d.count++;
+      if (rssi > d.rssi) d.rssi = rssi;
+      return;
+    }
+  }
+  if (capturedDeauths.size() >= 64) return;
+  DeauthEntry entry;
+  memcpy(entry.src, src, 6);
+  memcpy(entry.dst, dst, 6);
+  memcpy(entry.bssid, bssid, 6);
+  entry.reason = reason;
+  entry.rssi = rssi;
+  entry.channel = channel;
+  entry.count = 1;
+  capturedDeauths.push_back(entry);
+}
+
 // ---------------------------------------------------------------------------
 // Promiscuous-mode callback
 // ---------------------------------------------------------------------------
@@ -203,6 +239,16 @@ static void IRAM_ATTR promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t
           pos += 2 + tlen;
         }
       }
+    } else if (subtype == 10 || subtype == 12) {
+      // Disassociation (10) or deauthentication (12).
+      // Reason code is the first 2 bytes of the frame body.
+      uint16_t reason = 0;
+      if (pkt->rx_ctrl.sig_len >= 26) {
+        reason = frame[24] | (static_cast<uint16_t>(frame[25]) << 8);
+      }
+      uint8_t ch = 0;
+      esp_wifi_get_channel(&ch, nullptr);
+      recordDeauth(addr2, addr1, addr3, reason, rssi, ch);
     } else if (subtype == 0 || subtype == 2) {
       // Association / reassociation request: addr2 is the client, addr1 is the AP.
       recordStation(addr2, addr1, rssi, true);
@@ -348,6 +394,21 @@ static void sendProbeReq(const ProbeEntry &probe) {
   sendMessage(msg, 12 + probe.ssidLen);
 }
 
+static void sendDeauth(const DeauthEntry &d) {
+  // 27 bytes: type(1) + scanId(2) + src(6) + dst(6) + bssid(6) + reason(2) + rssi(1) + channel(1) + count(2).
+  uint8_t msg[27];
+  msg[0] = kMsgDeauth;
+  putU16(msg + 1, scanId);
+  memcpy(msg + 3, d.src, 6);
+  memcpy(msg + 9, d.dst, 6);
+  memcpy(msg + 15, d.bssid, 6);
+  putU16(msg + 21, d.reason);
+  msg[23] = static_cast<uint8_t>(d.rssi);
+  msg[24] = d.channel;
+  putU16(msg + 25, d.count);
+  sendMessage(msg, sizeof(msg));
+}
+
 static void sendScanFinished(uint16_t apCount, uint16_t staCount,
                              uint16_t probeCount, uint16_t durationMs) {
   uint8_t msg[11] = {kMsgScanFinished};
@@ -425,6 +486,7 @@ static void drawUi() {
 static void sniffStations() {
   capturedStations.clear();
   capturedProbes.clear();
+  capturedDeauths.clear();
 
   // Remember our own STA MAC so we filter it out.
   esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
@@ -487,6 +549,10 @@ static void runScan() {
     ++probeSent;
   }
   lastProbeCount = probeSent;
+
+  for (const auto &d : capturedDeauths) {
+    sendDeauth(d);
+  }
 
   lastScanDurationMs = millis() - started;
   lastScanMs = millis();

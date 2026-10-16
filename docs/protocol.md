@@ -107,6 +107,25 @@ MAC + SSID pair; broadcast probes have `ssid_len` = 0.
 | 11 | 1 | SSID length *n* (0 for broadcast probe) |
 | 12 | *n* | SSID bytes (UTF-8) |
 
+### `0x15` Deauth event (v3)
+
+A deauthentication or disassociation frame captured in promiscuous mode.
+Entries are deduplicated by (source, target, BSSID, reason); `count` says
+how many frames matched. A high count or a broadcast target is a strong
+indicator of a deauth attack.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x15` |
+| 1 | 2 | scan id |
+| 3 | 6 | source MAC (who sent the frame) |
+| 9 | 6 | target MAC (`FF:FF:FF:FF:FF:FF` = broadcast, everyone) |
+| 15 | 6 | BSSID (which network) |
+| 21 | 2 | reason code (`u16`, 802.11 Table 9-49) |
+| 23 | 1 | RSSI, dBm (`i8`) |
+| 24 | 1 | channel |
+| 25 | 2 | count of frames seen with this signature |
+
 ### Auth modes
 
 Values follow ESP-IDF `wifi_auth_mode_t`:
