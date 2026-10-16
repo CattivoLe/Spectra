@@ -6,6 +6,7 @@
 
 #include <M5Cardputer.h>
 #include <NimBLEDevice.h>
+#include <Update.h>
 #include <WiFi.h>
 #include <esp_mac.h>
 #include <esp_wifi.h>
@@ -13,13 +14,14 @@
 #include <cstring>
 #include <vector>
 
-static constexpr char kFirmwareVersion[] = "0.5.0";
+static constexpr char kFirmwareVersion[] = "0.6.0";
 static constexpr uint8_t kProtocolVersion = 5;
 
 static constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
 static constexpr char kInfoUuid[] = "53500002-8F2D-4B6A-9C1E-737065637472";
 static constexpr char kControlUuid[] = "53500003-8F2D-4B6A-9C1E-737065637472";
 static constexpr char kResultsUuid[] = "53500004-8F2D-4B6A-9C1E-737065637472";
+static constexpr char kFirmwareUuid[] = "53500005-8F2D-4B6A-9C1E-737065637472";
 
 static constexpr uint8_t kCmdScanOnce = 0x01;
 static constexpr uint8_t kCmdSetInterval = 0x02;
@@ -32,6 +34,28 @@ static constexpr uint8_t kMsgProbeReq = 0x14;
 static constexpr uint8_t kMsgDeauth = 0x15;
 static constexpr uint8_t kMsgSSIDReveal = 0x16;
 static constexpr uint8_t kMsgTraffic = 0x17;
+static constexpr uint8_t kMsgUpdate = 0x30;
+
+static constexpr uint8_t kOtaBegin = 0x01;
+static constexpr uint8_t kOtaData = 0x02;
+static constexpr uint8_t kOtaFinish = 0x03;
+static constexpr uint8_t kOtaAbort = 0x04;
+
+static constexpr uint8_t kOtaReady = 1;
+static constexpr uint8_t kOtaProgress = 2;
+static constexpr uint8_t kOtaDone = 3;
+static constexpr uint8_t kOtaFailed = 4;
+
+static constexpr uint8_t kOtaErrNone = 0;
+static constexpr uint8_t kOtaErrBusy = 1;
+static constexpr uint8_t kOtaErrTooLarge = 2;
+static constexpr uint8_t kOtaErrBegin = 3;
+static constexpr uint8_t kOtaErrOffset = 4;
+static constexpr uint8_t kOtaErrWrite = 5;
+static constexpr uint8_t kOtaErrCrc = 6;
+static constexpr uint8_t kOtaErrFinish = 7;
+static constexpr uint8_t kOtaErrAbort = 8;
+static constexpr uint8_t kOtaErrImage = 9;
 
 // Time spent on each channel during an active scan. 13 channels at 120 ms
 // keeps a full sweep under two seconds.
@@ -109,6 +133,23 @@ static std::vector<ApSummary> lastResults;
 static uint16_t lastStationCount = 0;
 static uint16_t lastProbeCount = 0;
 static bool uiDirty = true;
+
+// Scan and OTA both want the radio and the flash. The mux only covers the
+// flag hand-off; the scan itself runs outside it.
+static portMUX_TYPE radioMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool scanInProgress = false;
+static volatile bool otaActive = false;
+static volatile bool otaRebootPending = false;
+static volatile int otaPercent = -1;
+static bool otaCrcOk = false;
+static uint32_t otaExpected = 0;
+static uint32_t otaReceived = 0;
+static uint32_t otaCrcExpected = 0;
+static uint32_t otaCrc = 0;
+static uint32_t otaProgressMark = 0;
+static uint32_t otaRebootAt = 0;
+static uint32_t crc32Table[256];
+static bool crc32Ready = false;
 
 // Collected during promiscuous-mode capture; accessed only from loop().
 static std::vector<StationEntry> capturedStations;
@@ -375,10 +416,10 @@ static void IRAM_ATTR promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t
 // ---------------------------------------------------------------------------
 
 static void updateInfo() {
-  char json[96];
+  char json[160];
   snprintf(json, sizeof(json),
-           "{\"proto\":%u,\"fw\":\"%s\",\"chip\":\"ESP32-S3\",\"bands\":[\"2.4\"],\"interval\":%u}",
-           kProtocolVersion, kFirmwareVersion, scanIntervalSec);
+           "{\"proto\":%u,\"fw\":\"%s\",\"chip\":\"ESP32-S3\",\"bands\":[\"2.4\"],\"interval\":%u%s}",
+           kProtocolVersion, kFirmwareVersion, scanIntervalSec, otaCrcOk ? ",\"ota\":true" : "");
   infoChar->setValue(json);
 }
 
@@ -390,13 +431,23 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     scanIntervalSec = 0;
     intervalChanged = true;
     linkChanged = true;
+    if (otaActive) {
+      if (Update.isRunning()) {
+        Update.abort();
+      }
+      otaActive = false;
+      otaPercent = -1;
+      otaRebootPending = false;
+      WiFi.mode(WIFI_STA);
+      WiFi.disconnect();
+    }
   }
 };
 
 class ControlCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
     const NimBLEAttValue value = c->getValue();
-    if (value.size() < 1) {
+    if (value.size() < 1 || otaActive) {
       return;
     }
     switch (value[0]) {
@@ -541,6 +592,228 @@ static void sendScanFinished(uint16_t apCount, uint16_t staCount,
 }
 
 // ---------------------------------------------------------------------------
+// Firmware update
+// ---------------------------------------------------------------------------
+
+static void crc32Ensure() {
+  if (crc32Ready) {
+    return;
+  }
+  for (uint32_t i = 0; i < 256; ++i) {
+    uint32_t crc = i;
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = (crc & 1) ? (0xEDB88320u ^ (crc >> 1)) : (crc >> 1);
+    }
+    crc32Table[i] = crc;
+  }
+  crc32Ready = true;
+}
+
+static uint32_t crc32Update(uint32_t crc, const uint8_t *data, size_t length) {
+  crc32Ensure();
+  crc = ~crc;
+  for (size_t i = 0; i < length; ++i) {
+    crc = crc32Table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+  }
+  return ~crc;
+}
+
+static bool otaCrcSelfCheck() {
+  const uint8_t sample[] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+  return crc32Update(0, sample, sizeof(sample)) == 0xCBF43926u;
+}
+
+static void putU32(uint8_t *p, uint32_t value) {
+  p[0] = value & 0xFF;
+  p[1] = (value >> 8) & 0xFF;
+  p[2] = (value >> 16) & 0xFF;
+  p[3] = (value >> 24) & 0xFF;
+}
+
+static uint32_t getU32(const uint8_t *p) {
+  return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+         (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+}
+
+static void notifyOta(uint8_t phase, uint8_t error) {
+  uint8_t msg[7];
+  msg[0] = kMsgUpdate;
+  msg[1] = phase;
+  putU32(msg + 2, otaReceived);
+  msg[6] = error;
+  if (isConnected()) {
+    resultsChar->notify(msg, sizeof(msg));
+  }
+}
+
+static void otaCleanup(bool restoreWifi) {
+  if (Update.isRunning()) {
+    Update.abort();
+  }
+  otaActive = false;
+  otaPercent = -1;
+  otaRebootPending = false;
+  if (restoreWifi) {
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+  }
+  uiDirty = true;
+}
+
+static void otaFail(uint8_t error) {
+  notifyOta(kOtaFailed, error);
+  otaCleanup(true);
+}
+
+static void otaNoteProgress() {
+  const int percent =
+      otaExpected == 0 ? 0 : static_cast<int>((static_cast<uint64_t>(otaReceived) * 100) / otaExpected);
+  if (percent != otaPercent) {
+    otaPercent = percent;
+    uiDirty = true;
+  }
+  const uint32_t mark = otaReceived / 16384;
+  if (mark != otaProgressMark || otaReceived == otaExpected) {
+    otaProgressMark = mark;
+    notifyOta(kOtaProgress, kOtaErrNone);
+  }
+}
+
+static bool otaTryClaim() {
+  bool claimed = false;
+  taskENTER_CRITICAL(&radioMux);
+  if (!scanInProgress && !otaActive) {
+    otaActive = true;
+    claimed = true;
+  }
+  taskEXIT_CRITICAL(&radioMux);
+  return claimed;
+}
+
+static void otaBegin(uint32_t size, uint32_t crc) {
+  if (!otaCrcOk) {
+    notifyOta(kOtaFailed, kOtaErrBegin);
+    return;
+  }
+  if (!otaTryClaim()) {
+    notifyOta(kOtaFailed, kOtaErrBusy);
+    return;
+  }
+  const size_t slot = ESP.getFreeSketchSpace();
+  if (size < 32 || slot == 0 || size > slot) {
+    otaActive = false;
+    notifyOta(kOtaFailed, slot != 0 && size > slot ? kOtaErrTooLarge : kOtaErrBegin);
+    return;
+  }
+  WiFi.mode(WIFI_OFF);
+  if (!Update.begin(size)) {
+    otaCleanup(true);
+    notifyOta(kOtaFailed, kOtaErrBegin);
+    return;
+  }
+  otaExpected = size;
+  otaCrcExpected = crc;
+  otaCrc = 0;
+  otaReceived = 0;
+  otaProgressMark = 0;
+  otaPercent = 0;
+  uiDirty = true;
+  notifyOta(kOtaReady, kOtaErrNone);
+}
+
+static void otaData(const uint8_t *data, size_t length, uint32_t offset) {
+  if (!otaActive || !Update.isRunning()) {
+    notifyOta(kOtaFailed, kOtaErrOffset);
+    return;
+  }
+  if (length == 0 || offset != otaReceived || offset + length > otaExpected) {
+    otaFail(kOtaErrOffset);
+    return;
+  }
+  if (offset == 0 && data[0] != 0xE9) {
+    otaFail(kOtaErrImage);
+    return;
+  }
+  uint8_t buffer[512];
+  if (length > sizeof(buffer)) {
+    otaFail(kOtaErrWrite);
+    return;
+  }
+  memcpy(buffer, data, length);
+  if (Update.write(buffer, length) != length) {
+    otaFail(kOtaErrWrite);
+    return;
+  }
+  otaCrc = crc32Update(otaCrc, buffer, length);
+  otaReceived += static_cast<uint32_t>(length);
+  otaNoteProgress();
+}
+
+static void otaFinish() {
+  if (!otaActive || !Update.isRunning()) {
+    notifyOta(kOtaFailed, kOtaErrFinish);
+    return;
+  }
+  if (otaReceived != otaExpected || otaCrc != otaCrcExpected) {
+    otaFail(otaReceived != otaExpected ? kOtaErrOffset : kOtaErrCrc);
+    return;
+  }
+  if (!Update.end(true)) {
+    otaCleanup(true);
+    notifyOta(kOtaFailed, kOtaErrFinish);
+    return;
+  }
+  notifyOta(kOtaDone, kOtaErrNone);
+  otaPercent = 100;
+  uiDirty = true;
+  otaRebootAt = millis() + 600;
+  otaRebootPending = true;
+}
+
+static void otaAbortCommand() {
+  if (!otaActive && !Update.isRunning()) {
+    notifyOta(kOtaFailed, kOtaErrAbort);
+    return;
+  }
+  otaFail(kOtaErrAbort);
+}
+
+class FirmwareCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
+    const NimBLEAttValue value = c->getValue();
+    if (value.size() < 1 || value.data() == nullptr) {
+      return;
+    }
+    const uint8_t *bytes = value.data();
+    const size_t length = value.size();
+    switch (bytes[0]) {
+      case kOtaBegin:
+        if (length >= 9) {
+          otaBegin(getU32(bytes + 1), getU32(bytes + 5));
+        } else {
+          notifyOta(kOtaFailed, kOtaErrBegin);
+        }
+        break;
+      case kOtaData:
+        if (length >= 5) {
+          otaData(bytes + 5, length - 5, getU32(bytes + 1));
+        } else {
+          otaFail(kOtaErrOffset);
+        }
+        break;
+      case kOtaFinish:
+        otaFinish();
+        break;
+      case kOtaAbort:
+        otaAbortCommand();
+        break;
+      default:
+        break;
+    }
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Display
 // ---------------------------------------------------------------------------
 
@@ -552,8 +825,28 @@ static void drawStatus(const char *line) {
   d.print(line);
 }
 
-static void drawUi() {
+static void drawUpdating() {
   auto &d = M5Cardputer.Display;
+  d.setTextSize(1);
+  d.fillScreen(TFT_BLACK);
+  drawStatus(otaRebootPending ? "Rebooting" : "Updating firmware");
+  d.setTextColor(TFT_WHITE, TFT_BLACK);
+  d.setTextSize(3);
+  d.setCursor(8, 48);
+  d.printf("%3d%%", otaPercent < 0 ? 0 : otaPercent);
+  d.setTextSize(1);
+  d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  d.setCursor(8, 108);
+  d.print("Keep powered, stay close");
+}
+
+static void drawUi() {
+  if (otaPercent >= 0) {
+    drawUpdating();
+    return;
+  }
+  auto &d = M5Cardputer.Display;
+  d.setTextSize(1);
   d.fillScreen(TFT_BLACK);
 
   char header[48];
@@ -627,6 +920,9 @@ static void sniffStations() {
 }
 
 static void runScan() {
+  if (otaActive) {
+    return;
+  }
   ++scanId;
   drawStatus("Scanning APs...");
   sendScanStarted();
@@ -713,7 +1009,7 @@ static void setupBle() {
   snprintf(deviceName, sizeof(deviceName), "Spectra-%02X%02X", mac[4], mac[5]);
 
   NimBLEDevice::init(deviceName);
-  NimBLEDevice::setMTU(185);
+  NimBLEDevice::setMTU(517);
 
   server = NimBLEDevice::createServer();
   server->setCallbacks(new ServerCallbacks());
@@ -725,6 +1021,9 @@ static void setupBle() {
       kControlUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   control->setCallbacks(new ControlCallbacks());
   resultsChar = service->createCharacteristic(kResultsUuid, NIMBLE_PROPERTY::NOTIFY);
+  NimBLECharacteristic *firmware = service->createCharacteristic(
+      kFirmwareUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+  firmware->setCallbacks(new FirmwareCallbacks());
   updateInfo();
 
   NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
@@ -758,13 +1057,19 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
 
+  otaCrcOk = otaCrcSelfCheck();
   setupBle();
   uiDirty = true;
 }
 
 void loop() {
   M5Cardputer.update();
-  handleKeyboard();
+  if (otaRebootPending && static_cast<int32_t>(millis() - otaRebootAt) >= 0) {
+    ESP.restart();
+  }
+  if (!otaActive) {
+    handleKeyboard();
+  }
 
   if (intervalChanged) {
     intervalChanged = false;
@@ -776,11 +1081,21 @@ void loop() {
     uiDirty = true;
   }
 
-  const bool due = scanIntervalSec > 0 && isConnected() &&
+  const bool due = scanIntervalSec > 0 && isConnected() && !otaActive &&
                    millis() - lastScanMs >= static_cast<uint32_t>(scanIntervalSec) * 1000;
-  if (scanRequested || due) {
+  bool startScan = false;
+  taskENTER_CRITICAL(&radioMux);
+  if ((scanRequested || due) && !otaActive) {
     scanRequested = false;
+    scanInProgress = true;
+    startScan = true;
+  } else if (otaActive) {
+    scanRequested = false;
+  }
+  taskEXIT_CRITICAL(&radioMux);
+  if (startScan) {
     runScan();
+    scanInProgress = false;
   }
 
   if (uiDirty) {

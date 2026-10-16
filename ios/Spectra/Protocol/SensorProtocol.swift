@@ -10,6 +10,7 @@ nonisolated enum SensorProtocol {
     static let info = CBUUID(string: "53500002-8F2D-4B6A-9C1E-737065637472")
     static let control = CBUUID(string: "53500003-8F2D-4B6A-9C1E-737065637472")
     static let results = CBUUID(string: "53500004-8F2D-4B6A-9C1E-737065637472")
+    static let firmware = CBUUID(string: "53500005-8F2D-4B6A-9C1E-737065637472")
 
     enum Command {
         case scanOnce
@@ -254,10 +255,37 @@ nonisolated enum SensorProtocol {
 }
 
 /// What the firmware reports in the Info characteristic.
-nonisolated struct SensorInfo: Decodable, Equatable {
+/// `ota` is absent on firmware that cannot take an update from the app.
+nonisolated struct SensorInfo: Equatable {
     var proto: Int
     var fw: String
     var chip: String
     var bands: [String]
     var interval: Int
+    var ota: Bool
+
+    init(proto: Int, fw: String, chip: String, bands: [String], interval: Int, ota: Bool = false) {
+        self.proto = proto
+        self.fw = fw
+        self.chip = chip
+        self.bands = bands
+        self.interval = interval
+        self.ota = ota
+    }
+}
+
+extension SensorInfo: Decodable {
+    private enum CodingKeys: String, CodingKey {
+        case proto, fw, chip, bands, interval, ota
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        proto = try container.decode(Int.self, forKey: .proto)
+        fw = try container.decode(String.self, forKey: .fw)
+        chip = try container.decode(String.self, forKey: .chip)
+        bands = try container.decode([String].self, forKey: .bands)
+        interval = try container.decode(Int.self, forKey: .interval)
+        ota = try container.decodeIfPresent(Bool.self, forKey: .ota) ?? false
+    }
 }

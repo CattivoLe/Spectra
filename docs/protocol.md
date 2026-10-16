@@ -13,6 +13,7 @@ All UUIDs share one base; only the first group differs.
 | Info | `53500002-8F2D-4B6A-9C1E-737065637472` | read |
 | Control | `53500003-8F2D-4B6A-9C1E-737065637472` | write |
 | Results | `53500004-8F2D-4B6A-9C1E-737065637472` | notify |
+| Firmware | `53500005-8F2D-4B6A-9C1E-737065637472` | write |
 
 The device advertises the service UUID and the name `Spectra-XXXX`, where
 `XXXX` are the last two bytes of its Bluetooth address in hex.
@@ -22,10 +23,12 @@ The device advertises the service UUID and the name `Spectra-XXXX`, where
 UTF-8 JSON, for example:
 
 ```json
-{"proto":2,"fw":"0.2.0","chip":"ESP32-S3","bands":["2.4"],"interval":5}
+{"proto":5,"fw":"0.6.0","chip":"ESP32-S3","bands":["2.4"],"interval":5,"ota":true}
 ```
 
 `interval` is the current automatic scan interval in seconds, 0 when off.
+`ota` is true when the Firmware characteristic is present. Firmware that
+predates updates omits the field; treat that as false.
 
 ## Control (write)
 
@@ -37,6 +40,32 @@ First byte is the command.
 | `0x02` | Set interval | `u8` seconds between scans, 0 stops |
 
 A scan that is already running is not restarted; the request is ignored.
+Both commands are ignored while a firmware update is in progress.
+
+## Firmware (write)
+
+One command per write, with response. The payload is an application image
+(`firmware.bin` from `pio run`), not a merged flash image. The central should
+set the scan interval to 0 before starting and leave the sensor alone until
+it reboots.
+
+The image CRC-32 is the ISO-HDLC value used by zlib (polynomial
+`0xEDB88320`, initial value 0). The CRC-32 of the ASCII bytes `123456789`
+is `0xCBF43926`.
+
+| Byte | Command | Payload |
+|---|---|---|
+| `0x01` | Begin | `u32` image size, `u32` CRC-32 |
+| `0x02` | Data | `u32` offset from the start of the image, then the bytes at that offset |
+| `0x03` | Finish | — |
+| `0x04` | Abort | — |
+
+Begin is rejected while a scan is running. Data is accepted only when
+`offset` is the number of bytes already stored; any other offset aborts the
+update. A single data write is at most 500 image bytes, and the whole write
+(5 byte header plus those bytes) must fit in one ATT payload. Finish checks
+the CRC and the ESP image, selects the inactive OTA slot, and the device
+reboots into it.
 
 ## Results (notify)
 
@@ -154,6 +183,33 @@ devices (cameras, microphones) that generate continuous traffic.
 | 3 | 6 | BSSID |
 | 9 | 4 | total bytes (`u32`, all data frames to/from this AP) |
 | 13 | 2 | total packets (`u16`) |
+
+### `0x30` Update status
+
+Sent when an update is accepted, fails, or finishes, and about every 16 KiB
+while data is arriving.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x30` |
+| 1 | 1 | phase: 1 ready, 2 progress, 3 done, 4 failed |
+| 2 | 4 | bytes accepted (`u32`) |
+| 6 | 1 | error (see table) |
+
+| Error | Meaning |
+|---|---|
+| 0 | none |
+| 1 | busy (a scan is still running) |
+| 2 | image does not fit the update slot |
+| 3 | the update could not start |
+| 4 | offset was not the next byte |
+| 5 | flash write failed |
+| 6 | CRC-32 did not match |
+| 7 | the image could not be activated |
+| 8 | aborted |
+| 9 | image header was not an ESP32 application |
+
+`done` means the new image is the boot slot. The device reboots shortly after.
 
 ### Auth modes
 
