@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcuserdatad/
+
+# Signing
+ios/Config/Signing.local.xcconfig
+
+# PlatformIO
+firmware/.pio/
+firmware/.vscode/

@@ -1,0 +1,138 @@
+import CoreBluetooth
+import Foundation
+
+/// The BLE contract with the Cardputer firmware. docs/protocol.md is the
+/// source of truth; keep the two in step.
+nonisolated enum SensorProtocol {
+    static let version = 1
+
+    static let service = CBUUID(string: "53500001-8F2D-4B6A-9C1E-737065637472")
+    static let info = CBUUID(string: "53500002-8F2D-4B6A-9C1E-737065637472")
+    static let control = CBUUID(string: "53500003-8F2D-4B6A-9C1E-737065637472")
+    static let results = CBUUID(string: "53500004-8F2D-4B6A-9C1E-737065637472")
+
+    enum Command {
+        case scanOnce
+        case setInterval(seconds: Int)
+
+        var data: Data {
+            switch self {
+            case .scanOnce:
+                Data([0x01])
+            case .setInterval(let seconds):
+                Data([0x02, UInt8(clamping: seconds)])
+            }
+        }
+    }
+
+    enum Message: Equatable {
+        case scanStarted(scanID: UInt16)
+        case accessPoint(scanID: UInt16, reading: AccessPointReading)
+        case scanFinished(scanID: UInt16, count: Int, duration: Duration)
+    }
+
+    enum MessageType: UInt8 {
+        case scanStarted = 0x10
+        case accessPoint = 0x11
+        case scanFinished = 0x12
+    }
+
+    /// Decodes one Results notification, or returns nil for anything malformed
+    /// or from a newer protocol the app does not know.
+    static func decode(_ data: Data) -> Message? {
+        let bytes = [UInt8](data)
+        guard let first = bytes.first, let type = MessageType(rawValue: first), bytes.count >= 3 else {
+            return nil
+        }
+        let scanID = u16(bytes, 1)
+
+        switch type {
+        case .scanStarted:
+            return .scanStarted(scanID: scanID)
+
+        case .scanFinished:
+            guard bytes.count >= 7 else { return nil }
+            return .scanFinished(
+                scanID: scanID,
+                count: Int(u16(bytes, 3)),
+                duration: .milliseconds(Int(u16(bytes, 5)))
+            )
+
+        case .accessPoint:
+            guard bytes.count >= 19 else { return nil }
+            let ssidLength = Int(bytes[18])
+            guard ssidLength <= 32, bytes.count >= 19 + ssidLength else { return nil }
+
+            let country: String? = if bytes[16] != 0, bytes[17] != 0 {
+                String(bytes: bytes[16...17], encoding: .ascii)
+            } else {
+                nil
+            }
+            let reading = AccessPointReading(
+                bssid: BSSID(bytes: Array(bytes[3..<9])),
+                rssi: Int(Int8(bitPattern: bytes[9])),
+                channel: Int(bytes[10]),
+                secondaryChannel: SecondaryChannel(rawValue: bytes[11]) ?? .none,
+                auth: AuthMode(rawValue: bytes[12]),
+                pairwiseCipher: Cipher(rawValue: bytes[13]),
+                groupCipher: Cipher(rawValue: bytes[14]),
+                capabilities: Capabilities(rawValue: bytes[15]),
+                countryCode: country,
+                ssidBytes: Data(bytes[19..<(19 + ssidLength)])
+            )
+            return .accessPoint(scanID: scanID, reading: reading)
+        }
+    }
+
+    /// The firmware's encoding, used by the demo sensor and the tests.
+    static func encode(_ message: Message) -> Data {
+        var bytes: [UInt8] = []
+        func put16(_ value: UInt16) {
+            bytes.append(UInt8(value & 0xFF))
+            bytes.append(UInt8(value >> 8))
+        }
+
+        switch message {
+        case .scanStarted(let scanID):
+            bytes.append(MessageType.scanStarted.rawValue)
+            put16(scanID)
+
+        case .scanFinished(let scanID, let count, let duration):
+            bytes.append(MessageType.scanFinished.rawValue)
+            put16(scanID)
+            put16(UInt16(clamping: count))
+            put16(UInt16(clamping: Int(duration / .milliseconds(1))))
+
+        case .accessPoint(let scanID, let reading):
+            bytes.append(MessageType.accessPoint.rawValue)
+            put16(scanID)
+            bytes.append(contentsOf: reading.bssid.bytes)
+            bytes.append(UInt8(bitPattern: Int8(clamping: reading.rssi)))
+            bytes.append(UInt8(clamping: reading.channel))
+            bytes.append(reading.secondaryChannel.rawValue)
+            bytes.append(reading.auth.rawValue)
+            bytes.append(reading.pairwiseCipher.rawValue)
+            bytes.append(reading.groupCipher.rawValue)
+            bytes.append(reading.capabilities.rawValue)
+            let country = Array((reading.countryCode ?? "").utf8.prefix(2))
+            bytes.append(contentsOf: country.count == 2 ? country : [0, 0])
+            let ssid = reading.ssidBytes.prefix(32)
+            bytes.append(UInt8(ssid.count))
+            bytes.append(contentsOf: ssid)
+        }
+        return Data(bytes)
+    }
+
+    private static func u16(_ bytes: [UInt8], _ offset: Int) -> UInt16 {
+        UInt16(bytes[offset]) | UInt16(bytes[offset + 1]) << 8
+    }
+}
+
+/// What the firmware reports in the Info characteristic.
+nonisolated struct SensorInfo: Decodable, Equatable {
+    var proto: Int
+    var fw: String
+    var chip: String
+    var bands: [String]
+    var interval: Int
+}

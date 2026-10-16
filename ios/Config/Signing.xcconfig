@@ -1,0 +1,11 @@
+// Signing and identity settings, kept out of the project file so the project
+// builds for anyone. Copy Signing.local.xcconfig.example to
+// Signing.local.xcconfig (git-ignored) and fill in your own values.
+
+DEVELOPMENT_TEAM =
+
+// The app's identifier; the test bundle is this plus ".Tests".
+SPECTRA_BUNDLE_ID = cattivole.Spectra
+PRODUCT_BUNDLE_IDENTIFIER = $(SPECTRA_BUNDLE_ID)
+
+#include? "Signing.local.xcconfig"

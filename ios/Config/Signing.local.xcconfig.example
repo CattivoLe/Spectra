@@ -1,0 +1,4 @@
+// Copy to Signing.local.xcconfig and edit. That file is git-ignored.
+
+DEVELOPMENT_TEAM = ABCDE12345
+SPECTRA_BUNDLE_ID = com.example.Spectra
