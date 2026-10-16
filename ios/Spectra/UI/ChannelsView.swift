@@ -147,6 +147,26 @@ struct ChannelSpectrumChart: View {
         return placed
     }
 
+    /// Top of the signal axis: just above the loudest network, leaving room
+    /// for its label, so quiet airwaves don't sit at the bottom of an empty chart.
+    private var ceiling: Double {
+        let loudest = Double(readings.map(\.rssi).max() ?? -70)
+        let top = ((loudest + 10) / 10).rounded(.up) * 10
+        return min(-20, max(Self.floor + 30, top))
+    }
+
+    private var signalMarks: [Double] {
+        let step = ceiling - Self.floor > 50 ? 20.0 : 10.0
+        return Array(stride(from: -90, through: ceiling, by: step))
+    }
+
+    private var channelDomain: ClosedRange<Double> {
+        let spans = readings.map(\.occupiedChannels)
+        let low = min(1, spans.map(\.lowerBound).min() ?? 1)
+        let high = max(13, spans.map(\.upperBound).max() ?? 13)
+        return (low - 0.5) ... (high + 0.5)
+    }
+
     var body: some View {
         Chart {
             ForEach(points) { point in
@@ -181,8 +201,8 @@ struct ChannelSpectrumChart: View {
             }
         }
         .chartLegend(.hidden)
-        .chartXScale(domain: -1.5 ... 15.5)
-        .chartYScale(domain: Self.floor ... -20)
+        .chartXScale(domain: channelDomain)
+        .chartYScale(domain: Self.floor ... ceiling)
         .chartXAxis {
             AxisMarks(values: Array(1...13)) { _ in
                 AxisGridLine()
@@ -190,7 +210,7 @@ struct ChannelSpectrumChart: View {
             }
         }
         .chartYAxis {
-            AxisMarks(position: .leading, values: [-90, -70, -50, -30])
+            AxisMarks(position: .leading, values: signalMarks)
         }
     }
 }

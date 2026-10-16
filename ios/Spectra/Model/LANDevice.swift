@@ -1,0 +1,113 @@
+import Foundation
+
+struct MACAddress: Hashable, Sendable, CustomStringConvertible {
+    var bytes: [UInt8]
+
+    var description: String {
+        bytes.map { String(format: "%02X", $0) }.joined(separator: ":")
+    }
+
+    var oui: String {
+        bytes.prefix(3).map { String(format: "%02X", $0) }.joined(separator: ":")
+    }
+
+    var isRandomized: Bool { (bytes.first ?? 0) & 0x02 != 0 }
+
+    var manufacturer: String? { OUIDatabase.lookup(oui) }
+}
+
+struct DiscoveredPort: Identifiable, Equatable, Sendable {
+    var number: Int
+    var service: String
+    var id: Int { number }
+
+    nonisolated(unsafe) static let commonPorts: [(port: Int, name: String)] = [
+        (21, "FTP"), (22, "SSH"), (23, "Telnet"), (25, "SMTP"), (53, "DNS"),
+        (80, "HTTP"), (81, "HTTP"), (110, "POP3"), (111, "RPC"), (135, "MS RPC"),
+        (139, "NetBIOS"), (143, "IMAP"), (443, "HTTPS"), (445, "SMB"), (515, "LPD"),
+        (548, "AFP"), (554, "RTSP"), (631, "IPP"), (993, "IMAPS"), (1400, "Sonos"),
+        (1883, "MQTT"), (2049, "NFS"), (3000, "Dev"), (3283, "Apple Remote"),
+        (3306, "MySQL"), (3389, "RDP"), (3689, "DAAP"), (5000, "UPnP"), (5001, "HTTPS"),
+        (5357, "WSD"), (5432, "PostgreSQL"), (5555, "ADB"), (5900, "VNC"),
+        (6379, "Redis"), (6466, "Android TV"), (6668, "Tuya"), (7000, "AirPlay"),
+        (7547, "TR-069"), (8000, "HTTP"), (8001, "HTTP"), (8008, "Chromecast"),
+        (8009, "Chromecast"), (8080, "HTTP"), (8081, "HTTP"), (8123, "Home Assistant"),
+        (8443, "HTTPS"), (8888, "HTTP"), (9000, "Web"), (9090, "Web"), (9100, "Printer"),
+        (10000, "Webmin"), (32400, "Plex"), (49152, "UPnP"), (62078, "iPhone Sync"),
+    ]
+}
+
+@Observable
+final class LANDevice: Identifiable {
+    var ipAddress: String
+    var macAddress: MACAddress?
+    var hostnames: [String]
+    var openPorts: [DiscoveredPort]
+    var portsScanned: Bool
+    var isGateway: Bool
+    var isLocalDevice: Bool
+    var firstSeen: Date
+    var lastSeen: Date
+
+    var id: String { ipAddress }
+
+    var displayName: String {
+        if let first = hostnames.first {
+            return first.hasSuffix(".local") ? String(first.dropLast(6)) : first
+        }
+        if let mfr = macAddress?.manufacturer { return mfr }
+        return ipAddress
+    }
+
+    var manufacturer: String? { macAddress?.manufacturer }
+
+    var deviceIcon: String {
+        if isGateway { return "wifi.router" }
+        if isLocalDevice { return "iphone" }
+        let name = displayName.lowercased()
+        if name.contains("mac") || name.contains("imac") || name.contains("book") { return "laptopcomputer" }
+        if name.contains("iphone") { return "iphone" }
+        if name.contains("ipad") { return "ipad" }
+        if name.contains("apple") || name.contains("homepod") { return "homepod" }
+        if name.contains("tv") || name.contains("roku") || name.contains("chromecast") { return "tv" }
+        if name.contains("echo") || name.contains("alexa") || name.contains("sonos") { return "hifispeaker" }
+        if name.contains("print") || name.contains("canon") || name.contains("epson") || name.contains("brother") { return "printer" }
+        if name.contains("pi") || name.contains("esp") { return "cpu" }
+        if name.contains("xbox") || name.contains("playstation") || name.contains("ps5") || name.contains("nintendo") { return "gamecontroller" }
+        if let mfr = manufacturer?.lowercased() {
+            if mfr == "apple" { return "apple.logo" }
+            if mfr.contains("samsung") || mfr.contains("google") || mfr.contains("xiaomi") || mfr.contains("huawei") || mfr.contains("oneplus") { return "smartphone" }
+            if mfr.contains("tp-link") || mfr.contains("netgear") || mfr.contains("asus") || mfr.contains("d-link") || mfr.contains("ubiquiti") || mfr.contains("mikrotik") { return "wifi.router" }
+            if mfr.contains("intel") || mfr.contains("dell") || mfr.contains("lenovo") || mfr.contains("hp") { return "desktopcomputer" }
+            if mfr.contains("espressif") { return "cpu" }
+            if mfr.contains("sonos") || mfr.contains("bose") { return "hifispeaker" }
+            if mfr.contains("canon") || mfr.contains("epson") || mfr.contains("brother") || mfr.contains("hp") { return "printer" }
+            if mfr.contains("sony") || mfr.contains("lg") { return "tv" }
+            if mfr.contains("raspberry") { return "cpu" }
+            if mfr.contains("synology") || mfr.contains("qnap") { return "externaldrive" }
+        }
+        return "desktopcomputer"
+    }
+
+    init(
+        ipAddress: String,
+        macAddress: MACAddress? = nil,
+        hostnames: [String] = [],
+        openPorts: [DiscoveredPort] = [],
+        portsScanned: Bool = false,
+        isGateway: Bool = false,
+        isLocalDevice: Bool = false,
+        firstSeen: Date = .now,
+        lastSeen: Date = .now
+    ) {
+        self.ipAddress = ipAddress
+        self.macAddress = macAddress
+        self.hostnames = hostnames
+        self.openPorts = openPorts
+        self.portsScanned = portsScanned
+        self.isGateway = isGateway
+        self.isLocalDevice = isLocalDevice
+        self.firstSeen = firstSeen
+        self.lastSeen = lastSeen
+    }
+}

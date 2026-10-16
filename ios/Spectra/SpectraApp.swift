@@ -4,6 +4,7 @@ import SwiftUI
 struct SpectraApp: App {
     @State private var store: NetworkStore
     @State private var link: SensorLink
+    @State private var lanScanner = LANScanner()
 
     init() {
         let store = NetworkStore()
@@ -16,12 +17,13 @@ struct SpectraApp: App {
             RootView()
                 .environment(store)
                 .environment(link)
+                .environment(lanScanner)
         }
     }
 }
 
 struct RootView: View {
-    enum Tab: Hashable { case networks, channels, sensor }
+    enum Tab: Hashable { case networks, channels, lan, sensor }
 
     @State private var tab: Tab = .networks
 
@@ -33,6 +35,9 @@ struct RootView: View {
             ChannelsView()
                 .tabItem { Label("Channels", systemImage: "waveform.path") }
                 .tag(Tab.channels)
+            LANView()
+                .tabItem { Label("LAN", systemImage: "network") }
+                .tag(Tab.lan)
             SensorView()
                 .tabItem { Label("Sensor", systemImage: "antenna.radiowaves.left.and.right") }
                 .tag(Tab.sensor)
