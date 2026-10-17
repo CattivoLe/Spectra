@@ -20,7 +20,7 @@
 
 // The phone app finds this tag in a firmware.bin to show which version it
 // carries. The version below points into it, so the linker keeps the tag.
-static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.8.4";
+static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.8.5";
 static constexpr const char* kFirmwareVersion = kFirmwareTag + 11;
 static constexpr uint8_t kProtocolVersion = 6;
 
@@ -1415,8 +1415,9 @@ static void runBluetoothScan() {
   scan->setWindow(90);
   scan->setMaxResults(50);
   scan->clearResults();
-  scan->start(6, false);
-  const NimBLEScanResults results = scan->getResults();
+  // NimBLE 2.x counts the scan duration in milliseconds, so start(6) scanned
+  // for 6 ms and found nothing. getResults blocks for the full window.
+  const NimBLEScanResults results = scan->getResults(6000, false);
   for (int i = 0; i < results.getCount() && keptBle.size() < 50; ++i) {
     const NimBLEAdvertisedDevice *dev = results.getDevice(static_cast<uint32_t>(i));
     if (dev == nullptr) {
