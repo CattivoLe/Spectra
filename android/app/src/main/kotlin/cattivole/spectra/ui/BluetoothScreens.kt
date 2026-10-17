@@ -45,6 +45,7 @@ import cattivole.spectra.platform.BleGattClient
 import cattivole.spectra.core.BleAdvertisement
 import cattivole.spectra.core.BleDevice
 import cattivole.spectra.core.BleServiceRef
+import cattivole.spectra.core.GattValue
 import cattivole.spectra.core.SignalQuality
 import cattivole.spectra.core.hex
 import cattivole.spectra.platform.DeviceBleScanner
@@ -404,23 +405,41 @@ private fun GattServiceRow(service: BleGattClient.Service) {
             Text(service.uuid, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         service.characteristics.forEach { ch ->
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.Top) {
-                Text(ch.uuid, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
+                Text(
+                    ch.name ?: ch.uuid,
+                    style = if (ch.name != null) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall,
+                    fontFamily = if (ch.name != null) null else FontFamily.Monospace,
+                    fontWeight = if (ch.name != null) FontWeight.Medium else null,
+                    modifier = Modifier.weight(1f),
+                )
                 if (ch.properties.isNotEmpty()) {
                     Text(ch.properties, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp))
                 }
             }
+            if (ch.name != null) {
+                Text(ch.uuid, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             val value = ch.value
             if (value != null && value.isNotEmpty()) {
-                Text(gattValue(value), style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val decoded = GattValue.decode(ch.uuid, value)?.let { tr(it) }
+                if (decoded != null) {
+                    Text(decoded, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 2.dp))
+                }
+                Text(
+                    rawGatt(value),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
 }
 
-/** Hex, plus an ASCII rendering when the bytes look like text. */
-private fun gattValue(bytes: ByteArray): String {
+/** Hex, and the letters when every byte is plain text. */
+private fun rawGatt(bytes: ByteArray): String {
     val hex = hex(bytes)
     val printable = bytes.all { it.toInt() in 32..126 }
     return if (printable) "$hex  “${String(bytes, Charsets.US_ASCII)}”" else hex

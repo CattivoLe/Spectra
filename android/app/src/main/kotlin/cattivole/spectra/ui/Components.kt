@@ -94,6 +94,9 @@ import cattivole.spectra.core.SignalQuality
 /** Shows a short message at the bottom of the window. */
 val LocalNotify = staticCompositionLocalOf<(String) -> Unit> { {} }
 
+/** Asks for the runtime permissions the radios need, or opens the app's settings page. */
+val LocalRequestPermissions = staticCompositionLocalOf<() -> Unit> { {} }
+
 /** True while the tab bar is on screen; a screen without it pads for the gesture area itself. */
 val LocalBottomBarShown = staticCompositionLocalOf { true }
 
@@ -800,6 +803,16 @@ fun SpectrumBar(modifier: Modifier = Modifier) {
 
 /** Wraps the app in the things screens reach for: notifications and the tab bar flag. */
 @Composable
-fun ProvideScreenServices(notify: (String) -> Unit, bottomBar: Boolean, content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalNotify provides notify, LocalBottomBarShown provides bottomBar, content = content)
+fun ProvideScreenServices(
+    notify: (String) -> Unit,
+    bottomBar: Boolean,
+    requestPermissions: () -> Unit = {},
+    content: @Composable () -> Unit,
+) {
+    CompositionLocalProvider(
+        LocalNotify provides notify,
+        LocalBottomBarShown provides bottomBar,
+        LocalRequestPermissions provides requestPermissions,
+        content = content,
+    )
 }

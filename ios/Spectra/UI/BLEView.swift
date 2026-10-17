@@ -2,7 +2,6 @@ import SwiftUI
 
 struct BLEView: View {
     @Environment(BLEScanner.self) private var scanner
-    @Environment(HistoryStore.self) private var history
     @Environment(\.scenePhase) private var scenePhase
     @State private var search = ""
     @AppStorage("bleSort") private var sort: Sort = .signal
@@ -23,23 +22,71 @@ struct BLEView: View {
     }
 
     enum Scope: String, CaseIterable, Identifiable {
-        case all, named
+        case all, named, connectable
         var id: Self { self }
 
         var label: LocalizedStringKey {
             switch self {
             case .all: "All devices"
             case .named: "With a name"
+            case .connectable: "Connectable"
             }
         }
     }
+
+    var body: some View {
+        NavigationStack {
+            BLEDeviceList(search: $search, sort: sort, scope: scope, showOutOfRange: showOutOfRange)
+            .navigationTitle("Bluetooth")
+            .navigationDestination(for: UUID.self) { id in
+                BLEDeviceDetailView(id: id)
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    BLEStatusBar()
+                }
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    BLESaveButton()
+                }
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    BLEOptionsMenu(sort: $sort, scope: $scope, showOutOfRange: $showOutOfRange)
+                }
+            }
+        }
+        .onAppear { scanner.resumeUnlessPaused() }
+        .onDisappear { scanner.leave() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                scanner.suspend()
+            } else if phase == .active {
+                scanner.resumeIfWanted()
+            }
+        }
+    }
+
+}
+
+/// The device list. It is its own view so advertisement updates do not
+/// rebuild the options menu, which was dismissing taps while a scan ran.
+private struct BLEDeviceList: View {
+    @Environment(BLEScanner.self) private var scanner
+    @Binding var search: String
+    var sort: BLEView.Sort
+    var scope: BLEView.Scope
+    var showOutOfRange: Bool
 
     private var visible: [BLEDevice] {
         let now = scanner.now
         let query = search.trimmingCharacters(in: .whitespaces)
         return scanner.devices.values.filter { device in
             (showOutOfRange || device.isNearby(at: now))
-                && matches(device, scope: scope)
+                && matches(device)
                 && (query.isEmpty
                     || device.displayName.localizedStandardContains(query)
                     || device.subtitle.localizedStandardContains(query)
@@ -65,125 +112,46 @@ struct BLEView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                if !visible.isEmpty {
-                    Section {
-                        ForEach(visible) { device in
-                            NavigationLink(value: device.id) {
-                                BLEDeviceRow(device: device, now: scanner.now)
-                            }
+        List {
+            if !visible.isEmpty {
+                Section {
+                    ForEach(visible) { device in
+                        NavigationLink(value: device.id) {
+                            BLEDeviceRow(device: device, now: scanner.now)
                         }
-                    } header: {
-                        Text("\(scanner.nearbyCount) nearby")
-                    } footer: {
-                        Text("iOS hears Bluetooth Low Energy advertisements only, and it hides the hardware address.")
                     }
-                }
-            }
-            .overlay {
-                if scanner.devices.isEmpty {
-                    emptyState
-                } else if visible.isEmpty, !search.isEmpty {
-                    ContentUnavailableView.search(text: search)
-                } else if visible.isEmpty {
-                    ContentUnavailableView(
-                        "No devices",
-                        systemImage: "wave.3.right",
-                        description: Text("Nothing in this filter is nearby.")
-                    )
-                }
-            }
-            .searchable(text: $search, prompt: Text("Name, company or service"))
-            .refreshable {
-                scanner.start()
-                try? await Task.sleep(for: .seconds(1))
-            }
-            .navigationTitle("Bluetooth")
-            .navigationDestination(for: UUID.self) { id in
-                BLEDeviceDetailView(id: id)
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    BLEStatusBar()
-                }
-                if #available(iOS 26, *) {
-                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save", systemImage: "square.and.arrow.down") {
-                        history.saveBluetooth(Array(scanner.devices.values), source: "This iPhone")
-                    }
-                    .disabled(scanner.devices.isEmpty)
-                }
-                if #available(iOS 26, *) {
-                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Section("Sort by") {
-                            ForEach(Sort.allCases) { option in
-                                Button {
-                                    sort = option
-                                } label: {
-                                    if sort == option {
-                                        Label(option.label, systemImage: "checkmark")
-                                    } else {
-                                        Text(option.label)
-                                    }
-                                }
-                            }
-                        }
-                        Section("Show") {
-                            ForEach(Scope.allCases) { option in
-                                Button {
-                                    scope = option
-                                } label: {
-                                    if scope == option {
-                                        Label(option.label, systemImage: "checkmark")
-                                    } else {
-                                        Text(option.label)
-                                    }
-                                }
-                            }
-                            Toggle("Show out of range", isOn: $showOutOfRange)
-                        }
-                        Divider()
-                        Button(scanner.isScanning ? "Stop" : "Scan now", systemImage: scanner.isScanning ? "stop" : "arrow.clockwise") {
-                            if scanner.isScanning { scanner.stop() } else { scanner.start() }
-                        }
-                        .disabled(scannerUnavailable)
-                        if !scanner.devices.isEmpty {
-                            Button("Clear list", systemImage: "trash", role: .destructive) {
-                                scanner.clear()
-                            }
-                        }
-                    } label: {
-                        Label("Options", systemImage: "line.3.horizontal.decrease")
-                    }
+                } header: {
+                    Text("\(scanner.nearbyCount) nearby")
+                } footer: {
+                    Text("iOS hears Bluetooth Low Energy advertisements only, and it hides the hardware address.")
                 }
             }
         }
-        .onAppear { scanner.resumeUnlessPaused() }
-        .onDisappear { scanner.leave() }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .background {
-                scanner.suspend()
-            } else if phase == .active {
-                scanner.resumeIfWanted()
+        .overlay {
+            if scanner.devices.isEmpty {
+                emptyState
+            } else if visible.isEmpty, !search.isEmpty {
+                ContentUnavailableView.search(text: search)
+            } else if visible.isEmpty {
+                ContentUnavailableView(
+                    "No devices",
+                    systemImage: "wave.3.right",
+                    description: Text("Nothing in this filter is nearby.")
+                )
             }
+        }
+        .searchable(text: $search, prompt: Text("Name, company or service"))
+        .refreshable {
+            scanner.start()
+            try? await Task.sleep(for: .seconds(1))
         }
     }
 
-    private var scannerUnavailable: Bool {
-        if case .unavailable = scanner.state { return true }
-        return false
-    }
-
-    private func matches(_ device: BLEDevice, scope: Scope) -> Bool {
+    private func matches(_ device: BLEDevice) -> Bool {
         switch scope {
         case .all: true
         case .named: device.hasOwnName
+        case .connectable: device.isConnectable == true
         }
     }
 
@@ -236,6 +204,60 @@ struct BLEView: View {
         case .unauthorized: String(localized: "Spectra is not allowed to use Bluetooth.")
         case .unsupported: String(localized: "This device has no Bluetooth Low Energy.")
         }
+    }
+}
+
+/// Sort, filters and scan controls. Reads only values that stay still during
+/// a scan, so an open menu is not rebuilt on every advertisement.
+private struct BLEOptionsMenu: View {
+    @Environment(BLEScanner.self) private var scanner
+    @Binding var sort: BLEView.Sort
+    @Binding var scope: BLEView.Scope
+    @Binding var showOutOfRange: Bool
+
+    var body: some View {
+        Menu {
+            // Inline pickers keep a check column, so selecting a row does
+            // not push its title sideways.
+            Picker("Sort by", selection: $sort) {
+                ForEach(BLEView.Sort.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.inline)
+            Picker("Show", selection: $scope) {
+                ForEach(BLEView.Scope.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.inline)
+            Toggle("Show out of range", isOn: $showOutOfRange)
+            Divider()
+            Button(scanner.isScanning ? "Stop" : "Scan now", systemImage: scanner.isScanning ? "stop" : "arrow.clockwise") {
+                if scanner.isScanning { scanner.stop() } else { scanner.start() }
+            }
+            .disabled(scannerUnavailable)
+            if scanner.hasDevices {
+                Button("Clear list", systemImage: "trash", role: .destructive) {
+                    scanner.clear()
+                }
+            }
+        } label: {
+            Label("Options", systemImage: "line.3.horizontal.decrease")
+        }
+    }
+
+    private var scannerUnavailable: Bool {
+        if case .unavailable = scanner.state { return true }
+        return false
+    }
+}
+
+private struct BLESaveButton: View {
+    @Environment(BLEScanner.self) private var scanner
+    @Environment(HistoryStore.self) private var history
+
+    var body: some View {
+        Button("Save", systemImage: "square.and.arrow.down") {
+            history.saveBluetooth(Array(scanner.devices.values), source: "This iPhone")
+        }
+        .disabled(!scanner.hasDevices)
     }
 }
 
@@ -331,6 +353,13 @@ struct BLEDeviceRow: View {
                         .font(.body.weight(.medium))
                         .lineLimit(1)
                         .layoutPriority(1)
+                    if device.isConnectable == true {
+                        Image(systemName: "link")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Connectable")
+                            .fixedSize()
+                    }
                     if device.isSpectraSensor {
                         badge("Sensor", color: .blue)
                     }

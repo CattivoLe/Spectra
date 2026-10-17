@@ -14,6 +14,7 @@ import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.os.Build
 import cattivole.spectra.core.HistoryStore
+import cattivole.spectra.core.LoraDevice
 import cattivole.spectra.core.DemoSensor
 import cattivole.spectra.core.FirmwareUpdate
 import cattivole.spectra.core.FirmwareUpdateProgress
@@ -65,6 +66,17 @@ class SensorLink(
     var batteryLevel: Int? = null
         private set
     var isCharging: Boolean? = null
+        private set
+    var loraDevices: List<LoraDevice> = emptyList()
+        private set
+    var loraScanning: Boolean = false
+        private set
+    var loraProgress: SensorProtocol.Message.LoraProgress? = null
+        private set
+    private var loraWatch: Job? = null
+    data class CapFix(val latitude: Double, val longitude: Double, val satellites: Int)
+
+    var capFix: CapFix? = null
         private set
     var firmwareUpdate: FirmwareUpdateProgress? = null
         private set
@@ -194,12 +206,42 @@ class SensorLink(
         info = null
         batteryLevel = null
         isCharging = null
+        loraDevices = emptyList()
+        endLoraScan()
+        capFix = null
         store.abandonScan()
         if (upload != null) failUpdate(FirmwareUpdate.TransferError.LINK_LOST.message)
     }
 
     fun scanNow() {
         if (demo != null) demo?.scan() else enqueue(control, SensorProtocol.Command.ScanOnce.data)
+    }
+
+    fun scanLora() {
+        if (demo != null || loraScanning) return
+        loraDevices = emptyList()
+        loraProgress = null
+        loraScanning = true
+        armLoraWatch()
+        enqueue(control, SensorProtocol.Command.ScanLora.data)
+        publish()
+    }
+
+    /** A quiet pass is about forty seconds. Stop if the end notice never arrives. */
+    private fun armLoraWatch() {
+        loraWatch?.cancel()
+        loraWatch = scope.launch {
+            delay(120_000)
+            if (loraScanning) endLoraScan()
+            publish()
+        }
+    }
+
+    private fun endLoraScan() {
+        loraWatch?.cancel()
+        loraWatch = null
+        loraScanning = false
+        loraProgress = null
     }
 
     /** The firmware file could not be read. */
@@ -379,6 +421,49 @@ class SensorLink(
             return
         }
         val message = SensorProtocol.decode(data) ?: return
+        if (message is SensorProtocol.Message.SavedPosition) {
+            history.notePosition(message.captureId, sensorName(), message.latitude, message.longitude)
+            publish()
+            return
+        }
+        if (message is SensorProtocol.Message.Gps) {
+            capFix = if (message.valid) CapFix(message.latitude, message.longitude, message.satellites) else null
+            publish()
+            return
+        }
+        if (message is SensorProtocol.Message.LoraScan) {
+            if (message.started) {
+                loraDevices = emptyList()
+                loraProgress = null
+                loraScanning = true
+                armLoraWatch()
+            } else {
+                endLoraScan()
+            }
+            publish()
+            return
+        }
+        if (message is SensorProtocol.Message.LoraProgress) {
+            loraProgress = message
+            loraScanning = true
+            armLoraWatch()
+            publish()
+            return
+        }
+        if (message is SensorProtocol.Message.Lora) {
+            val next = loraDevices.toMutableList()
+            val index = next.indexOfFirst {
+                it.freqKhz == message.device.freqKhz && it.spreadingFactor == message.device.spreadingFactor && it.id == message.device.id
+            }
+            if (index >= 0) {
+                if (message.device.rssi > next[index].rssi) next[index] = message.device
+            } else {
+                next.add(message.device)
+            }
+            loraDevices = next.sortedByDescending { it.rssi }
+            publish()
+            return
+        }
         if (message is SensorProtocol.Message.Saved) {
             if (history.ingest(message, sensorName())) {
                 enqueue(control, SensorProtocol.Command.AckSaved(message.captureId).data)
@@ -607,6 +692,9 @@ class SensorLink(
             info = parsed
             if (parsed?.batteryLevel != null) batteryLevel = parsed.batteryLevel
             if (parsed?.isCharging != null) isCharging = parsed.isCharging
+            if (parsed?.latitude != null && parsed.longitude != null) {
+                capFix = CapFix(parsed.latitude, parsed.longitude, parsed.satellites ?: 0)
+            }
         }
         subscribe(gatt)
     }

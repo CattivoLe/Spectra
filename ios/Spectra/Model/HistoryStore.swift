@@ -10,13 +10,14 @@ struct HistoryLine: Identifiable, Codable, Equatable {
 
 struct HistoryEntry: Identifiable, Codable, Equatable {
     enum Kind: String, Codable, CaseIterable {
-        case networks, lan, bluetooth
+        case networks, lan, bluetooth, lora
 
         var title: String {
             switch self {
             case .networks: "Wi‑Fi"
             case .lan: "LAN"
             case .bluetooth: "Bluetooth"
+            case .lora: "LoRa"
             }
         }
 
@@ -25,6 +26,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
             case .networks: "wifi"
             case .lan: "network"
             case .bluetooth: "wave.3.right"
+            case .lora: "antenna.radiowaves.left.and.right"
             }
         }
     }
@@ -42,8 +44,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
     var deauths: [DeauthEvent] = []
     var lan: [SavedLAN] = []
     var bluetooth: [SavedBLE] = []
-    /// Where the phone was when it saved. Absent for sensor captures and for
-    /// saves made without location access.
+    /// Where this scan was saved. The phone's own fix, or the cap's fix on a sensor capture.
     var latitude: Double?
     var longitude: Double?
 
@@ -56,6 +57,8 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
             return lan.isEmpty ? lines.count : lan.count
         case .bluetooth:
             return bluetooth.isEmpty ? lines.count : bluetooth.count
+        case .lora:
+            return lines.count
         }
     }
 
@@ -262,7 +265,11 @@ final class HistoryStore {
         var unix: UInt32
         var total: Int
         var lines: [Int: HistoryLine] = [:]
+        var latitude: Double?
+        var longitude: Double?
     }
+
+    private var pendingFix: [UInt32: (latitude: Double, longitude: Double)] = [:]
 
     private var partials: [UInt32: Partial] = [:]
     private let file: URL
@@ -307,6 +314,23 @@ final class HistoryStore {
                latitude: here?.latitude, longitude: here?.longitude)
     }
 
+    /// The cap's fix for a capture. It can arrive before the rows, and again
+    /// on a later connection after the capture is already stored.
+    func notePosition(captureID: UInt32, source: String, latitude: Double, longitude: Double) {
+        pendingFix[captureID] = (latitude, longitude)
+        if var partial = partials[captureID] {
+            partial.latitude = latitude
+            partial.longitude = longitude
+            partials[captureID] = partial
+        }
+        guard let index = entries.firstIndex(where: { $0.captureID == captureID && $0.source == source }) else {
+            return
+        }
+        entries[index].latitude = latitude
+        entries[index].longitude = longitude
+        persist()
+    }
+
     /// Folds one record from the sensor. Returns true once the capture is stored
     /// (or was already stored) and the sensor may delete it.
     func ingest(_ record: SensorProtocol.SavedRecord, source: String) -> Bool {
@@ -318,6 +342,10 @@ final class HistoryStore {
             return false
         }
         var partial = partials[record.captureID] ?? Partial(kind: kind, unix: record.unix, total: record.total)
+        if partial.latitude == nil, let fix = pendingFix[record.captureID] {
+            partial.latitude = fix.latitude
+            partial.longitude = fix.longitude
+        }
         partial.total = record.total
         partial.lines[record.index] = HistoryLine(
             title: record.title, detail: record.detail, trailing: record.trailing
@@ -327,9 +355,13 @@ final class HistoryStore {
             return false
         }
         partials[record.captureID] = nil
+        pendingFix[record.captureID] = nil
         let ordered = (0..<partial.total).compactMap { partial.lines[$0] }
         let when = partial.unix == 0 ? Date() : Date(timeIntervalSince1970: TimeInterval(partial.unix))
-        append(kind: partial.kind, savedAt: when, source: source, captureID: record.captureID, lines: ordered)
+        append(
+            kind: partial.kind, savedAt: when, source: source, captureID: record.captureID, lines: ordered,
+            latitude: partial.latitude, longitude: partial.longitude
+        )
         return true
     }
 
@@ -341,6 +373,7 @@ final class HistoryStore {
     func clear() {
         entries = []
         partials = [:]
+        pendingFix = [:]
         persist()
     }
 
@@ -393,6 +426,7 @@ private extension HistoryEntry.Kind {
         case .networks: self = .networks
         case .lan: self = .lan
         case .bluetooth: self = .bluetooth
+        case .lora: self = .lora
         }
     }
 }

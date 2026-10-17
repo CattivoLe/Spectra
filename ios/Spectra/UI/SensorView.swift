@@ -127,18 +127,62 @@ struct SensorView: View {
                         }
                     }
 
+                    if link.info?.lora == true || link.capFix != nil {
+                        Section {
+                            InfoRow("Module", value: "Cap LoRa-1262")
+                            InfoRow("GPS", value: gpsLine)
+                            if case .connected = link.state {
+                                if link.loraScanning {
+                                    HStack(spacing: 10) {
+                                        ProgressView()
+                                        Text(link.loraStatus)
+                                            .foregroundStyle(.secondary)
+                                            .monospacedDigit()
+                                    }
+                                } else {
+                                    Button("Scan LoRa", systemImage: "antenna.radiowaves.left.and.right") {
+                                        link.scanLoRa()
+                                    }
+                                }
+                            }
+                            if link.loraDevices.isEmpty && !link.loraScanning {
+                                Text("No LoRa devices yet. LoRa transmitters speak in short bursts, so a quiet pass is common indoors.")
+                                    .foregroundStyle(.secondary)
+                            }
+                            ForEach(Array(link.loraDevices.enumerated()), id: \.offset) { _, device in
+                                HStack(alignment: .firstTextBaseline) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(loraTitle(device))
+                                        Text(device.detail)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 8)
+                                    Text("\(device.rssi)")
+                                        .font(.body.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        } header: {
+                            Text("LoRa")
+                        } footer: {
+                            Text("The Cardputer's Cap LoRa-1262 listens on EU868 and RU864 channels. A side-button save keeps the list and the GPS fix for when the phone reconnects.")
+                        }
+                    }
+
                 default:
                     EmptyView()
                 }
 
-                Section {
-                    Toggle("Demo sensor", isOn: Binding(
-                        get: { link.state == .demo },
-                        set: { link.setDemo($0) }
-                    ))
-                } footer: {
-                    Text("Made-up networks with drifting signal, for trying the app without a Cardputer.")
-                }
+// Пока не нужен
+//                Section {
+//                    Toggle("Demo sensor", isOn: Binding(
+//                        get: { link.state == .demo },
+//                        set: { link.setDemo($0) }
+//                    ))
+//                } footer: {
+//                    Text("Made-up networks with drifting signal, for trying the app without a Cardputer.")
+//                }
 
                 Section("About the sensor") {
                     Text("iPhone apps cannot list nearby Wi-Fi networks, so Spectra uses a Cardputer as its radio. Its ESP32-S3 hears the 2.4 GHz band only; 5 GHz networks do not appear.")
@@ -262,6 +306,19 @@ struct SensorView: View {
                 link.dismissFirmwareUpdate()
             }
         }
+    }
+
+    private var gpsLine: String {
+        guard let fix = link.capFix else { return String(localized: "Searching for satellites") }
+        let coords = String(format: "%.5f, %.5f", fix.latitude, fix.longitude)
+        return String(format: String(localized: "%@ · %lld satellites"), coords, Int64(fix.satellites))
+    }
+
+    private func loraTitle(_ device: SensorProtocol.LoRaDevice) -> String {
+        let hex = String(format: "%08X", device.id)
+        if device.join { return String(format: String(localized: "Join %@"), hex) }
+        if device.lorawan { return String(format: String(localized: "DevAddr %@"), hex) }
+        return String(format: String(localized: "Packet %@"), hex)
     }
 
     private func batteryText(_ level: Int, charging: Bool) -> String {

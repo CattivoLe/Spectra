@@ -24,7 +24,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Memory
-import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.SettingsInputAntenna
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.AlertDialog
@@ -205,6 +205,80 @@ fun SensorScreen(model: SpectraModel) {
                         }
                     },
                 )
+                if (info.lora || link.capFix != null) {
+                    val fix = link.capFix
+                    card(
+                        header = tr("LoRa"),
+                        key = "lora",
+                        footer = tr("The Cardputer's Cap LoRa-1262 listens on EU868 and RU864 channels. A side-button save keeps the list and the GPS fix for when the phone reconnects."),
+                        rows = buildList {
+                            add { InfoRow(tr("Module"), tr("Cap LoRa-1262")) }
+                            add {
+                                InfoRow(
+                                    tr("GPS"),
+                                    if (fix == null) {
+                                        tr("Searching for satellites")
+                                    } else {
+                                        tr(
+                                            "%s · %d satellites",
+                                            String.format(java.util.Locale.US, "%.5f, %.5f", fix.latitude, fix.longitude),
+                                            fix.satellites,
+                                        )
+                                    },
+                                )
+                            }
+                            if (link.state is SensorLink.State.Connected) {
+                                if (link.loraScanning) {
+                                    val tune = link.loraProgress
+                                    add {
+                                        Row(
+                                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                strokeWidth = 2.dp,
+                                            )
+                                            Text(
+                                                tune?.line() ?: tr("Scanning the 864–870 MHz band…"),
+                                                style = MaterialTheme.typography.bodyMedium.merge(Tabular),
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    add {
+                                        ActionRow(tr("Scan LoRa"), Icons.Rounded.CellTower, onClick = link::scanLora)
+                                    }
+                                }
+                            }
+                            if (link.loraDevices.isEmpty() && !link.loraScanning) {
+                                add { NoteRow(tr("No LoRa devices yet. LoRa transmitters speak in short bursts, so a quiet pass is common indoors."), warning = false) }
+                            }
+                            link.loraDevices.forEach { device ->
+                                val hex = "%08X".format(device.id and 0xFFFF_FFFFL)
+                                val title = when {
+                                    device.join -> tr("Join %s", hex)
+                                    device.lorawan -> tr("DevAddr %s", hex)
+                                    else -> tr("Packet %s", hex)
+                                }
+                                add {
+                                    ListRow(
+                                        title = title,
+                                        subtitle = device.detail(),
+                                        trailing = {
+                                            Text(
+                                                device.rssi.toString(),
+                                                style = MaterialTheme.typography.titleMedium.merge(Tabular),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        },
+                                    )
+                                }
+                            }
+                        },
+                    )
+                }
             }
         }
         card(
@@ -272,14 +346,7 @@ private fun SensorStatus(model: SpectraModel) {
     Spacer(Modifier.height(16.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         when (link.state) {
-            is SensorLink.State.Connected, SensorLink.State.Demo -> {
-                Button(onClick = link::scanNow) {
-                    Icon(Icons.Rounded.Refresh, null, Modifier.size(18.dp))
-                    Spacer(Modifier.size(8.dp))
-                    Text(tr("Scan now"))
-                }
-                if (link.state is SensorLink.State.Connected) OutlinedButton(onClick = link::disconnect) { Text(tr("Disconnect")) }
-            }
+            is SensorLink.State.Connected -> OutlinedButton(onClick = link::disconnect) { Text(tr("Disconnect")) }
             SensorLink.State.Searching -> OutlinedButton(onClick = link::stopSearching) { Text(tr("Stop")) }
             is SensorLink.State.Connecting -> OutlinedButton(onClick = link::disconnect) { Text(tr("Cancel")) }
             SensorLink.State.Unauthorized -> Button(onClick = {
@@ -291,7 +358,7 @@ private fun SensorStatus(model: SpectraModel) {
             SensorLink.State.PoweredOff -> Button(onClick = {
                 context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }) { Text(tr("Bluetooth settings")) }
-            SensorLink.State.Unsupported -> Unit
+            SensorLink.State.Demo, SensorLink.State.Unsupported -> Unit
             SensorLink.State.Idle, SensorLink.State.Starting -> Button(onClick = link::startSearching) { Text(tr("Find sensor")) }
         }
     }

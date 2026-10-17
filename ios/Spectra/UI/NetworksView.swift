@@ -301,9 +301,13 @@ struct NetworkRow: View {
                 }
                 Group {
                     if network.wasInLastScan {
-                        let clientSuffix = network.clients.isEmpty ? "" : " · 👤 \(network.clients.count)"
-                        let trafficSuffix = network.traffic.map { " · ↕ \($0.formattedBytes)" } ?? ""
-                        Text("Ch \(reading.channel) · \(reading.auth.name) · \(reading.capabilities.generation)\(clientSuffix)\(trafficSuffix)")
+                        Text("Ch \(reading.channel) · \(reading.auth.name) · \(reading.capabilities.generation)")
+                        if !network.clients.isEmpty {
+                            HStack(spacing: 4) {
+                                Text("👤 \(network.clients.count)")
+                                Text("\(network.traffic.map { "↕ \($0.formattedBytes)" } ?? "")")
+                            }
+                        }
                     } else if network.isInRange {
                         Text("Missed \(network.missedScans) \(network.missedScans == 1 ? "scan" : "scans")")
                     } else {

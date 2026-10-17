@@ -1,0 +1,57 @@
+2A00	Device Name
+2A01	Appearance
+2A02	Peripheral Privacy Flag
+2A03	Reconnection Address
+2A04	Peripheral Preferred Connection Parameters
+2A05	Service Changed
+2A06	Alert Level
+2A07	Tx Power Level
+2A08	Date Time
+2A0F	Local Time Information
+2A19	Battery Level
+2A1A	Battery Power State
+2A1C	Temperature Measurement
+2A1D	Temperature Type
+2A1E	Intermediate Temperature
+2A23	System ID
+2A24	Model Number String
+2A25	Serial Number String
+2A26	Firmware Revision String
+2A27	Hardware Revision String
+2A28	Software Revision String
+2A29	Manufacturer Name String
+2A2A	IEEE 11073-20601 Regulatory Certification Data List
+2A2B	Current Time
+2A2C	Magnetic Declination
+2A37	Heart Rate Measurement
+2A38	Body Sensor Location
+2A39	Heart Rate Control Point
+2A3F	Alert Status
+2A46	New Alert
+2A4A	HID Information
+2A4B	Report Map
+2A4C	HID Control Point
+2A4D	Report
+2A4E	Protocol Mode
+2A4F	Scan Interval Window
+2A50	PnP ID
+2A5B	CSC Measurement
+2A5C	CSC Feature
+2A63	Cycling Power Measurement
+2A65	Cycling Power Feature
+2A6D	Pressure
+2A6E	Temperature
+2A6F	Humidity
+2A76	UV Index
+2A77	Irradiance
+2A7E	Aerobic Heart Rate Lower Limit
+2A8A	First Name
+2A90	Last Name
+2A99	Database Change Increment
+2A9A	User Index
+2AA6	Central Address Resolution
+2AB3	Altitude
+2B29	Client Supported Features
+2B2A	Database Hash
+2B3A	Server Supported Features
+2BF2	Electric Current

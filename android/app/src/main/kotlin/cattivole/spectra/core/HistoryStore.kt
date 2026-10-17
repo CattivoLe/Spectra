@@ -38,14 +38,15 @@ class HistoryEntry(
     val deauths: List<DeauthEvent> = emptyList(),
     val lan: List<LanDevice> = emptyList(),
     val bluetooth: List<BleDevice> = emptyList(),
-    /** Where the phone was when it saved. Null for sensor captures and saves without location. */
-    val latitude: Double? = null,
-    val longitude: Double? = null,
+    /** Where this scan was saved. The phone's own fix, or the cap's fix on a sensor capture. */
+    var latitude: Double? = null,
+    var longitude: Double? = null,
 ) {
     val kindTitle: String
         get() = when (kind) {
             "lan" -> "LAN"
             "bluetooth" -> "Bluetooth"
+            "lora" -> "LoRa"
             else -> "Wi‑Fi"
         }
 
@@ -56,6 +57,7 @@ class HistoryEntry(
         get() = when (kind) {
             "networks" -> (networks.size + probes.size + deauths.size).takeIf { it > 0 } ?: lines.size
             "lan" -> lan.size.takeIf { it > 0 } ?: lines.size
+            "lora" -> lines.size
             else -> bluetooth.size.takeIf { it > 0 } ?: lines.size
         }
 
@@ -87,7 +89,11 @@ class HistoryStore(context: Context) {
         val unix: Long,
         var total: Int,
         val lines: MutableMap<Int, HistoryLine> = mutableMapOf(),
+        var latitude: Double? = null,
+        var longitude: Double? = null,
     )
+
+    private val pendingFix = mutableMapOf<Long, Pair<Double, Double>>()
 
     @Volatile private var loadedFromDisk: List<Pair<HistoryEntry, JSONObject>>? = null
     private val loading = CountDownLatch(1)
@@ -187,6 +193,28 @@ class HistoryStore(context: Context) {
      * Folds one record from the sensor. True once the capture is stored, or was
      * stored already, and the sensor may delete it.
      */
+    /**
+     * The cap's fix for a capture, which may arrive before its rows. Applied
+     * to a capture that is already stored when the sensor sends it again.
+     */
+    fun notePosition(captureId: Long, source: String, latitude: Double, longitude: Double) {
+        ensureLoaded()
+        pendingFix[captureId] = latitude to longitude
+        partials[captureId]?.let {
+            it.latitude = latitude
+            it.longitude = longitude
+        }
+        val index = entries.indexOfFirst { it.captureId == captureId && it.source == source }
+        if (index < 0) return
+        val entry = entries[index]
+        if (entry.latitude == latitude && entry.longitude == longitude) return
+        entry.latitude = latitude
+        entry.longitude = longitude
+        encoded[entry.id]?.put("latitude", latitude)?.put("longitude", longitude)
+        persist()
+        publish()
+    }
+
     fun ingest(record: SensorProtocol.Message.Saved, source: String): Boolean {
         ensureLoaded()
         if (entries.any { it.captureId == record.captureId && it.source == source }) return true
@@ -194,19 +222,27 @@ class HistoryStore(context: Context) {
             1 -> "networks"
             2 -> "lan"
             3 -> "bluetooth"
+            4 -> "lora"
             else -> return false
         }
         if (record.total <= 0 || record.index !in 0 until record.total) return false
         val partial = partials.getOrPut(record.captureId) {
-            Partial(kind, record.unix, record.total)
+            val created = Partial(kind, record.unix, record.total)
+            pendingFix[record.captureId]?.let {
+                created.latitude = it.first
+                created.longitude = it.second
+            }
+            created
         }
         partial.total = record.total
         partial.lines[record.index] = HistoryLine(record.title, record.detail, record.trailing)
         if (partial.lines.size < partial.total) return false
         partials.remove(record.captureId)
+        pendingFix.remove(record.captureId)
         val ordered = (0 until partial.total).mapNotNull { partial.lines[it] }
         val whenMs = if (partial.unix == 0L) System.currentTimeMillis() else partial.unix * 1000
-        append(partial.kind, whenMs, source, record.captureId, lines = ordered)
+        append(partial.kind, whenMs, source, record.captureId, lines = ordered,
+            latitude = partial.latitude, longitude = partial.longitude)
         return true
     }
 
@@ -223,6 +259,7 @@ class HistoryStore(context: Context) {
         entries = emptyList()
         encoded.clear()
         partials.clear()
+        pendingFix.clear()
         persist()
         publish()
     }

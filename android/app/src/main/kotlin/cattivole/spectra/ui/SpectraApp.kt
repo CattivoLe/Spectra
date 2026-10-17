@@ -1,6 +1,8 @@
 package cattivole.spectra.ui
 
+import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContentTransitionScope
@@ -34,14 +36,22 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -91,12 +101,38 @@ class Navigator(private val nav: NavHostController) {
 @Composable
 fun SpectraApp(model: SpectraModel) {
     val context = LocalContext.current
+    var prompted by remember { mutableStateOf(false) }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         model.permissionsChanged()
     }
-    LaunchedEffect(Unit) {
+    val requestPermissions = {
         val missing = Permissions.missing(context)
-        if (missing.isNotEmpty()) permissions.launch(missing.toTypedArray())
+        val activity = Permissions.activity(context)
+        val showDialog = activity != null && missing.any {
+            ActivityCompat.shouldShowRequestPermissionRationale(activity, it)
+        }
+        when {
+            missing.isEmpty() -> model.permissionsChanged()
+            prompted && !showDialog -> context.startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", context.packageName, null)
+                },
+            )
+            else -> {
+                prompted = true
+                permissions.launch(missing.toTypedArray())
+            }
+        }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && !prompted && Permissions.missing(context).isNotEmpty()) {
+                requestPermissions()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     val nav = rememberNavController()
     val navigator = remember(nav) { Navigator(nav) }
@@ -120,7 +156,7 @@ fun SpectraApp(model: SpectraModel) {
         }
     }
 
-    ProvideScreenServices(notify = notify, bottomBar = true) {
+    ProvideScreenServices(notify = notify, bottomBar = true, requestPermissions = requestPermissions) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             contentWindowInsets = WindowInsets(0),

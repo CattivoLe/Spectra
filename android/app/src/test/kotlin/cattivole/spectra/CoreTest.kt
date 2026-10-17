@@ -8,9 +8,11 @@ import cattivole.spectra.core.ChannelAdvisor
 import cattivole.spectra.core.Cipher
 import cattivole.spectra.core.DeauthEvent
 import cattivole.spectra.core.FirmwareUpdate
+import cattivole.spectra.core.GattValue
 import cattivole.spectra.core.LanDevice
 import cattivole.spectra.core.LanIdentity
 import cattivole.spectra.core.LanProfile
+import cattivole.spectra.core.LoraDevice
 import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.NetworkStore
 import cattivole.spectra.core.NotableDevice
@@ -123,6 +125,34 @@ class CoreTest {
         assertNull(SensorProtocol.decode(byteArrayOf(0x18, 0x01, 0x00, 0x50, 0xC7.toByte(), 0xBF.toByte(), 0x1E, 0x00, 0xA0.toByte(), 0x00, 0x00)))
         assertArrayEquals(byteArrayOf(0x01), SensorProtocol.Command.ScanOnce.data)
         assertArrayEquals(byteArrayOf(0x02, 0xFF.toByte()), SensorProtocol.Command.SetInterval(900).data)
+    }
+
+    @Test
+    fun loraRoundTripAndCapFix() {
+        val device = LoraDevice(868_100, 7, -118, 4, 0x01, 0xA1B2C3D4)
+        val message = SensorProtocol.Message.Lora(3, device)
+        assertEquals(message, SensorProtocol.decode(SensorProtocol.encode(message)))
+        val position = SensorProtocol.Message.SavedPosition(9, 55.75124, 37.61842)
+        val decoded = SensorProtocol.decode(SensorProtocol.encode(position)) as SensorProtocol.Message.SavedPosition
+        assertEquals(9, decoded.captureId)
+        assertEquals(55.75124, decoded.latitude, 0.00001)
+        assertEquals(37.61842, decoded.longitude, 0.00001)
+        val info = SensorInfo.decode("""{"proto":7,"fw":"0.9.0","chip":"ESP32-S3","bands":["2.4"],"interval":0,"lora":true,"lat":557512400,"lon":376184200,"sats":8}""")
+        assertEquals(true, info?.lora)
+        assertEquals(55.75124, info?.latitude ?: 0.0, 0.00001)
+        assertEquals(8, info?.satellites)
+        assertArrayEquals(byteArrayOf(0x04), SensorProtocol.Command.ScanLora.data)
+        val progress = SensorProtocol.Message.LoraProgress(3, 868_100, 7, 12, 51)
+        assertEquals(progress, SensorProtocol.decode(SensorProtocol.encode(progress)))
+        assertEquals("868.100 MHz · SF7 · 12/51", progress.line())
+    }
+
+    @Test
+    fun gattValuesDecode() {
+        assertEquals("87%", GattValue.decode("00002a19-0000-1000-8000-00805f9b34fb", byteArrayOf(87)))
+        assertEquals("Headphones", GattValue.decode("2A00", "Headphones".encodeToByteArray()))
+        assertEquals("Phone", GattValue.decode("2A01", byteArrayOf(0x40, 0x00)))
+        assertEquals("36.50 °C", GattValue.decode("2A6E", byteArrayOf(0x42, 0x0E)))
     }
 
     @Test

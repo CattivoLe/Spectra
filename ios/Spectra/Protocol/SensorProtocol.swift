@@ -4,7 +4,7 @@ import Foundation
 /// The BLE contract with the Cardputer firmware. docs/protocol.md is the
 /// source of truth; keep the two in step.
 nonisolated enum SensorProtocol {
-    static let version = 6
+    static let version = 7
 
     static let service = CBUUID(string: "53500001-8F2D-4B6A-9C1E-737065637472")
     static let info = CBUUID(string: "53500002-8F2D-4B6A-9C1E-737065637472")
@@ -16,6 +16,7 @@ nonisolated enum SensorProtocol {
         case scanOnce
         case setInterval(seconds: Int)
         case ackSaved(captureID: UInt32)
+        case scanLoRa
 
         var data: Data {
             switch self {
@@ -23,6 +24,8 @@ nonisolated enum SensorProtocol {
                 Data([0x01])
             case .setInterval(let seconds):
                 Data([0x02, UInt8(clamping: seconds)])
+            case .scanLoRa:
+                Data([0x04])
             case .ackSaved(let captureID):
                 Data([
                     0x03,
@@ -41,6 +44,7 @@ nonisolated enum SensorProtocol {
             case networks = 1
             case lan = 2
             case bluetooth = 3
+            case lora = 4
         }
 
         var kind: Kind
@@ -64,7 +68,35 @@ nonisolated enum SensorProtocol {
         case traffic(scanID: UInt16, bssid: BSSID, bytes: UInt32, packets: Int)
         case vendorIE(scanID: UInt16, bssid: BSSID, deviceName: String, manufacturer: String)
         case battery(scanID: UInt16, level: Int, isCharging: Bool)
+        case lora(scanID: UInt16, device: LoRaDevice)
+        case loraScan(scanID: UInt16, started: Bool, count: Int, durationMs: Int)
+        case loraProgress(scanID: UInt16, freqKHz: UInt32, spreadingFactor: Int, step: Int, total: Int)
+        case savedPosition(captureID: UInt32, latitude: Double, longitude: Double)
+        case gps(valid: Bool, latitude: Double, longitude: Double, satellites: Int)
         case saved(SavedRecord)
+    }
+
+    struct LoRaDevice: Equatable {
+        var freqKHz: UInt32
+        var spreadingFactor: Int
+        var rssi: Int
+        var snr: Int
+        var flags: UInt8
+        var id: UInt32
+
+        var lorawan: Bool { flags & 0x01 != 0 }
+        var join: Bool { flags & 0x04 != 0 }
+
+        var title: String {
+            let hex = String(format: "%08X", id)
+            if join { return "Join \(hex)" }
+            if lorawan { return "DevAddr \(hex)" }
+            return "Packet \(hex)"
+        }
+
+        var detail: String {
+            String(format: "%.3f MHz · SF%d · SNR %d dB", Double(freqKHz) / 1000, spreadingFactor, snr)
+        }
     }
 
     enum MessageType: UInt8 {
@@ -81,6 +113,12 @@ nonisolated enum SensorProtocol {
         case savedWifi = 0x1A
         case savedBle = 0x1B
         case savedLan = 0x1C
+        case savedGps = 0x1D
+        case loraDevice = 0x1E
+        case loraScan = 0x1F
+        case savedLora = 0x20
+        case gps = 0x21
+        case loraProgress = 0x22
     }
 
     /// Decodes one Results notification, or returns nil for anything malformed
@@ -90,8 +128,15 @@ nonisolated enum SensorProtocol {
         guard let first = bytes.first else { return nil }
         if first == MessageType.savedWifi.rawValue
             || first == MessageType.savedBle.rawValue
-            || first == MessageType.savedLan.rawValue {
+            || first == MessageType.savedLan.rawValue
+            || first == MessageType.savedLora.rawValue {
             return decodeSaved(bytes)
+        }
+        if first == MessageType.savedGps.rawValue {
+            return decodeSavedGps(bytes)
+        }
+        if first == MessageType.gps.rawValue {
+            return decodeGps(bytes)
         }
         guard let type = MessageType(rawValue: first), bytes.count >= 3 else {
             return nil
@@ -222,9 +267,62 @@ nonisolated enum SensorProtocol {
             let charging = (bytes[4] & 0x01) != 0
             return .battery(scanID: scanID, level: min(level, 100), isCharging: charging)
 
-        case .savedWifi, .savedBle, .savedLan:
+        case .loraDevice:
+            guard bytes.count >= 16 else { return nil }
+            return .lora(scanID: scanID, device: LoRaDevice(
+                freqKHz: u32(bytes, 3),
+                spreadingFactor: Int(bytes[7]),
+                rssi: i16(bytes, 8),
+                snr: Int(Int8(bitPattern: bytes[10])),
+                flags: bytes[11],
+                id: u32(bytes, 12)
+            ))
+
+        case .loraScan:
+            guard bytes.count >= 8 else { return nil }
+            return .loraScan(
+                scanID: scanID,
+                started: bytes[3] == 1,
+                count: Int(u16(bytes, 4)),
+                durationMs: Int(u16(bytes, 6))
+            )
+
+        case .loraProgress:
+            guard bytes.count >= 12 else { return nil }
+            return .loraProgress(
+                scanID: scanID,
+                freqKHz: u32(bytes, 3),
+                spreadingFactor: Int(bytes[7]),
+                step: Int(u16(bytes, 8)),
+                total: Int(u16(bytes, 10))
+            )
+
+        case .savedWifi, .savedBle, .savedLan, .savedLora:
             return decodeSaved(bytes)
+
+        case .savedGps, .gps:
+            return nil
         }
+    }
+
+    private static func decodeSavedGps(_ bytes: [UInt8]) -> Message? {
+        guard bytes.count >= 18 else { return nil }
+        return .savedPosition(
+            captureID: u32(bytes, 1),
+            latitude: e7(bytes, 9),
+            longitude: e7(bytes, 13)
+        )
+    }
+
+    private static func decodeGps(_ bytes: [UInt8]) -> Message? {
+        guard bytes.count >= 11 else { return nil }
+        let valid = bytes[10] & 0x01 != 0
+        return .gps(
+            valid: valid,
+            latitude: valid ? e7(bytes, 1) : 0,
+            longitude: valid ? e7(bytes, 5) : 0,
+            satellites: Int(bytes[9])
+        )
     }
 
     /// The firmware's encoding, used by the demo sensor and the tests.
@@ -233,6 +331,12 @@ nonisolated enum SensorProtocol {
         func put16(_ value: UInt16) {
             bytes.append(UInt8(value & 0xFF))
             bytes.append(UInt8(value >> 8))
+        }
+        func put32(_ value: UInt32) {
+            bytes.append(UInt8(value & 0xFF))
+            bytes.append(UInt8((value >> 8) & 0xFF))
+            bytes.append(UInt8((value >> 16) & 0xFF))
+            bytes.append(UInt8((value >> 24) & 0xFF))
         }
 
         switch message {
@@ -330,6 +434,46 @@ nonisolated enum SensorProtocol {
             bytes.append(UInt8(clamping: level))
             bytes.append(isCharging ? 0x01 : 0x00)
 
+        case .lora(let scanID, let device):
+            bytes.append(MessageType.loraDevice.rawValue)
+            put16(scanID)
+            put32(device.freqKHz)
+            bytes.append(UInt8(clamping: device.spreadingFactor))
+            put16(UInt16(bitPattern: Int16(clamping: device.rssi)))
+            bytes.append(UInt8(bitPattern: Int8(clamping: device.snr)))
+            bytes.append(device.flags)
+            put32(device.id)
+
+        case .loraScan(let scanID, let started, let count, let durationMs):
+            bytes.append(MessageType.loraScan.rawValue)
+            put16(scanID)
+            bytes.append(started ? 1 : 2)
+            put16(UInt16(clamping: count))
+            put16(UInt16(clamping: durationMs))
+
+        case .loraProgress(let scanID, let freqKHz, let spreadingFactor, let step, let total):
+            bytes.append(MessageType.loraProgress.rawValue)
+            put16(scanID)
+            put32(freqKHz)
+            bytes.append(UInt8(clamping: spreadingFactor))
+            put16(UInt16(clamping: step))
+            put16(UInt16(clamping: total))
+
+        case .savedPosition(let captureID, let latitude, let longitude):
+            bytes.append(MessageType.savedGps.rawValue)
+            put32(captureID)
+            put32(0)
+            put32(UInt32(bitPattern: Int32(clamping: Int(latitude * 1e7))))
+            put32(UInt32(bitPattern: Int32(clamping: Int(longitude * 1e7))))
+            bytes.append(0)
+
+        case .gps(let valid, let latitude, let longitude, let satellites):
+            bytes.append(MessageType.gps.rawValue)
+            put32(valid ? UInt32(bitPattern: Int32(clamping: Int(latitude * 1e7))) : 0)
+            put32(valid ? UInt32(bitPattern: Int32(clamping: Int(longitude * 1e7))) : 0)
+            bytes.append(UInt8(clamping: satellites))
+            bytes.append(valid ? 1 : 0)
+
         case .saved:
             // The phone never sends a stored capture. The arm exists so the
             // switch stays exhaustive.
@@ -375,6 +519,19 @@ nonisolated enum SensorProtocol {
             title = name.isEmpty ? ip : name
             detail = ip
             trailing = ""
+        case MessageType.savedLora.rawValue:
+            guard bytes.count >= 26 else { return nil }
+            let device = LoRaDevice(
+                freqKHz: u32(bytes, 13),
+                spreadingFactor: Int(bytes[17]),
+                rssi: i16(bytes, 18),
+                snr: Int(Int8(bitPattern: bytes[20])),
+                flags: bytes[21],
+                id: u32(bytes, 22)
+            )
+            title = device.title
+            detail = device.detail
+            trailing = "\(device.rssi)"
         default:
             return nil
         }
@@ -389,8 +546,18 @@ nonisolated enum SensorProtocol {
         case MessageType.savedWifi.rawValue: 1
         case MessageType.savedLan.rawValue: 2
         case MessageType.savedBle.rawValue: 3
+        case MessageType.savedLora.rawValue: 4
         default: 0
         }
+    }
+
+    private static func i16(_ bytes: [UInt8], _ offset: Int) -> Int {
+        let value = Int(u16(bytes, offset))
+        return value >= 0x8000 ? value - 0x10000 : value
+    }
+
+    private static func e7(_ bytes: [UInt8], _ offset: Int) -> Double {
+        Double(Int32(bitPattern: u32(bytes, offset))) / 1e7
     }
 
     private static func u16(_ bytes: [UInt8], _ offset: Int) -> UInt16 {
@@ -416,9 +583,14 @@ nonisolated struct SensorInfo: Equatable {
     var ota: Bool
     var batteryLevel: Int?
     var isCharging: Bool?
+    var lora: Bool
+    var latitude: Double?
+    var longitude: Double?
+    var satellites: Int?
 
     init(proto: Int, fw: String, chip: String, bands: [String], interval: Int, ota: Bool = false,
-         batteryLevel: Int? = nil, isCharging: Bool? = nil) {
+         batteryLevel: Int? = nil, isCharging: Bool? = nil, lora: Bool = false,
+         latitude: Double? = nil, longitude: Double? = nil, satellites: Int? = nil) {
         self.proto = proto
         self.fw = fw
         self.chip = chip
@@ -427,12 +599,16 @@ nonisolated struct SensorInfo: Equatable {
         self.ota = ota
         self.batteryLevel = batteryLevel
         self.isCharging = isCharging
+        self.lora = lora
+        self.latitude = latitude
+        self.longitude = longitude
+        self.satellites = satellites
     }
 }
 
 extension SensorInfo: Decodable {
     private enum CodingKeys: String, CodingKey {
-        case proto, fw, chip, bands, interval, ota, bat, chg
+        case proto, fw, chip, bands, interval, ota, bat, chg, lora, lat, lon, sats
     }
 
     init(from decoder: Decoder) throws {
@@ -445,5 +621,15 @@ extension SensorInfo: Decodable {
         ota = try container.decodeIfPresent(Bool.self, forKey: .ota) ?? false
         batteryLevel = try container.decodeIfPresent(Int.self, forKey: .bat)
         isCharging = try container.decodeIfPresent(Bool.self, forKey: .chg)
+        lora = try container.decodeIfPresent(Bool.self, forKey: .lora) ?? false
+        if let lat = try container.decodeIfPresent(Int.self, forKey: .lat),
+           let lon = try container.decodeIfPresent(Int.self, forKey: .lon) {
+            latitude = Double(lat) / 1e7
+            longitude = Double(lon) / 1e7
+        } else {
+            latitude = nil
+            longitude = nil
+        }
+        satellites = try container.decodeIfPresent(Int.self, forKey: .sats)
     }
 }

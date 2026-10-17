@@ -1,7 +1,7 @@
 # Spectra BLE protocol
 
 The Cardputer runs a GATT server; the iPhone is the central. Everything is
-little-endian. Version 6.
+little-endian. Version 7.
 
 ## Service
 
@@ -34,6 +34,11 @@ monitor. `chg` is true while the pack is charging. On the Cardputer the
 charger status pin is not connected to the ESP32, so `chg` is true when a USB
 host is attached. A power bank that only supplies 5 V does not announce itself.
 
+Version 7 adds the Cap LoRa-1262. `lora` is true when the SX1262 answered.
+`lat` and `lon` are degrees times 10⁷, present only while the cap's GNSS
+has a fix less than 30 seconds old. `sats` is the satellite count from the
+latest GGA sentence. All three are omitted when the cap is not fitted.
+
 ## Control (write)
 
 First byte is the command.
@@ -43,9 +48,13 @@ First byte is the command.
 | `0x01` | Scan once | — |
 | `0x02` | Set interval | `u8` seconds between scans, 0 stops |
 | `0x03` | Ack saved | `u32` capture id. The sensor deletes that stored capture |
+| `0x04` | Scan LoRa | — |
 
-A scan that is already running is not restarted; the request is ignored.
-Both commands are ignored while a firmware update is in progress.
+`0x04` listens across the EU868 and RU864 channels on a Cap LoRa-1262,
+at spreading factors 7, 9 and 12. It is ignored
+when the cap is not fitted. A scan that is already running is not restarted;
+the request is ignored. Every control command is ignored while a firmware
+update is in progress.
 
 ## Firmware (write)
 
@@ -246,6 +255,91 @@ LAN row: IPv4 (4 octets), name length, name (at most 24 bytes).
 On the Cardputer the LAN scan only sees hosts advertising mDNS, and only
 after the radio has joined that Wi-Fi. A power-on scan that has not joined
 stores nothing.
+
+### `0x1D` Saved position (v7)
+
+Sent once, ahead of the rows of a capture, when the cap had a GNSS fix at
+the moment the side button stored it. The phone keeps that coordinate with
+the capture. It is not a row and does not change `total`, so it is not
+answered with an ack by itself.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x1D` |
+| 1 | 4 | capture id (`u32`) |
+| 5 | 4 | unix time (`u32`) |
+| 9 | 4 | latitude, degrees × 10⁷ (`i32`) |
+| 13 | 4 | longitude, degrees × 10⁷ (`i32`) |
+| 17 | 1 | satellites |
+
+### `0x1E` LoRa device (v7)
+
+One transmitter heard while listening across the band. The same device may be sent
+again when a stronger copy arrives. `id` is a LoRaWAN DevAddr, the first
+four bytes of a join-request DevEUI, or a fingerprint of an unknown packet.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x1E` |
+| 1 | 2 | scan id |
+| 3 | 4 | frequency, kHz (`u32`) |
+| 7 | 1 | spreading factor, 7–12 |
+| 8 | 2 | RSSI, dBm (`i16`) |
+| 10 | 1 | SNR, dB (`i8`) |
+| 11 | 1 | flags: bit0 LoRaWAN, bit1 private sync word, bit2 join request |
+| 12 | 4 | id (`u32`) |
+
+### `0x1F` LoRa scan (v7)
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x1F` |
+| 1 | 2 | scan id |
+| 3 | 1 | phase: 1 started, 2 finished |
+| 4 | 2 | devices sent (`u16`, 0 when started) |
+| 6 | 2 | duration, ms (`u16`, 0 when started) |
+
+### `0x22` LoRa progress (v7)
+
+Sent at the start of each dwell, the same line the Cardputer draws in the
+status bar. Older apps ignore the type.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x22` |
+| 1 | 2 | scan id |
+| 3 | 4 | frequency, kHz (`u32`) |
+| 7 | 1 | spreading factor, 7–12 |
+| 8 | 2 | step, 1-based (`u16`) |
+| 10 | 2 | total steps (`u16`) |
+
+### `0x20` Saved LoRa device (v7)
+
+A row from a LoRa capture the side button stored. Same framing as
+`0x1A`–`0x1C`, then the device:
+
+| Offset | Size | Field |
+|---|---|---|
+| 13 | 4 | frequency, kHz (`u32`) |
+| 17 | 1 | spreading factor |
+| 18 | 2 | RSSI, dBm (`i16`) |
+| 20 | 1 | SNR, dB (`i8`) |
+| 21 | 1 | flags, as in `0x1E` |
+| 22 | 4 | id (`u32`) |
+
+### `0x21` GNSS fix (v7)
+
+The cap's current fix, sent when a phone connects and about every five
+seconds while the fix changes. `flags` bit 0 is clear when there is no fix;
+the coordinate fields are then zero.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x21` |
+| 1 | 4 | latitude, degrees × 10⁷ (`i32`) |
+| 5 | 4 | longitude, degrees × 10⁷ (`i32`) |
+| 9 | 1 | satellites |
+| 10 | 1 | flags: bit 0 = valid fix |
 
 ### `0x30` Update status
 

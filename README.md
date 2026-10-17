@@ -23,11 +23,12 @@ choose **SD** → file → **Install**. Use the app image, not a merged one with
 bootloader and partitions, or it overwrites Launcher.
 
 The Cardputer advertises as `Spectra-XXXX`. Its screen shows the link state
-and the strongest networks; **S** or **Enter** scans from the keyboard. It
-works on its own: scans are saved to flash with the side button and uploaded
-the next time a phone connects. **Tab** opens Wi-Fi setup — pick a network and
-type the password — so the on-device LAN scan has a link to walk; the
-credentials are remembered and reconnect on their own.
+and the strongest networks. Fn and the horizontal arrows move between Wi-Fi,
+LAN, BLE, LoRa and Join; the vertical arrows scroll the list. **Enter** scans.
+It works on its own: scans are saved to flash with the side button and uploaded
+the next time a phone connects. **Join** picks a network and takes a password,
+so the on-device LAN scan has a link to walk; the credentials are remembered
+and reconnect on their own.
 
 Firmware 0.6.0 and newer can also be installed from the Sensor tab: **Update
 firmware**, then pick `firmware.bin` from `pio run` — the same app image
@@ -38,6 +39,15 @@ table (`default_8MB.csv`) has two app slots, which is what makes the swap
 possible.
 
 The ESP32-S3 hears 2.4 GHz only.
+
+A Cap LoRa-1262 on the Cardputer-Adv EXT header adds two more radios. Its
+GNSS fix is kept with any scan the side button stores, so a walk without
+the phone still has a position when the capture is uploaded. **LoRa** on
+the device, or **Scan LoRa** in the app, listens across the EU868 and RU864
+channels and lists the transmitters it hears. The cap is optional; without it the
+LoRa list says `No LoRa cap` and the app hides the section. A crosshair in the
+header means the cap's GNSS is present (green when it has a fix), and an
+antenna means the LoRa radio answered.
 
 ## iOS app
 

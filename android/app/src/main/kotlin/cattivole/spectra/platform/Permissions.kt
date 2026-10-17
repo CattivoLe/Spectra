@@ -1,7 +1,9 @@
 package cattivole.spectra.platform
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
@@ -15,9 +17,8 @@ object Permissions {
             }
             if (Build.VERSION.SDK_INT >= 33) {
                 add(Manifest.permission.NEARBY_WIFI_DEVICES)
-            } else {
-                add(Manifest.permission.ACCESS_FINE_LOCATION)
             }
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
         return wanted.filter {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
@@ -30,10 +31,19 @@ object Permissions {
             granted(context, Manifest.permission.BLUETOOTH_CONNECT)
     }
 
-    fun canScanWifi(context: Context): Boolean = if (Build.VERSION.SDK_INT >= 33) {
-        granted(context, Manifest.permission.NEARBY_WIFI_DEVICES)
-    } else {
-        granted(context, Manifest.permission.ACCESS_FINE_LOCATION)
+    /** Nearby Wi-Fi on API 33+, and location on every release. Either gap yields an empty scan. */
+    fun canScanWifi(context: Context): Boolean {
+        val nearby = Build.VERSION.SDK_INT < 33 || granted(context, Manifest.permission.NEARBY_WIFI_DEVICES)
+        return nearby && granted(context, Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+
+    fun activity(context: Context): Activity? {
+        var current = context
+        while (current is ContextWrapper) {
+            if (current is Activity) return current
+            current = current.baseContext
+        }
+        return null
     }
 
     private fun granted(context: Context, permission: String): Boolean =

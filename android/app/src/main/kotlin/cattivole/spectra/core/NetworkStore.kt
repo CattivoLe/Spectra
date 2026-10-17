@@ -44,6 +44,9 @@ class NetworkStore {
         return { listeners.remove(listener) }
     }
 
+    /** What the phone radio reported, including networks the sensor list shows instead. */
+    fun phoneSightings(): Collection<TrackedNetwork> = phone.values.toList()
+
     /** Sensor record when it is fresh, otherwise the phone's sighting. */
     fun networks(): Map<MacAddress, TrackedNetwork> {
         val merged = linkedMapOf<MacAddress, TrackedNetwork>()
@@ -85,7 +88,11 @@ class NetworkStore {
             is SensorProtocol.Message.Traffic -> {
                 pendingTraffic[message.bssid] = TrafficSnapshot(message.bytes, message.packets)
             }
-            is SensorProtocol.Message.Battery, is SensorProtocol.Message.Saved -> Unit
+            is SensorProtocol.Message.Battery, is SensorProtocol.Message.Saved,
+            is SensorProtocol.Message.Lora, is SensorProtocol.Message.LoraScan,
+            is SensorProtocol.Message.LoraProgress,
+            is SensorProtocol.Message.SavedPosition, is SensorProtocol.Message.Gps,
+            -> Unit
             is SensorProtocol.Message.ScanFinished -> finishSensorScan(message, at)
         }
         publish()

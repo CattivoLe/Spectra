@@ -9,6 +9,9 @@ import android.location.LocationManager
 import android.net.wifi.ScanResult
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import androidx.core.content.ContextCompat
 import cattivole.spectra.core.AccessPointReading
 import cattivole.spectra.core.NetworkStore
 import cattivole.spectra.core.PhoneWifi
@@ -35,9 +38,14 @@ class PhoneWifiScanner(
 
     private val app = context.applicationContext
     private val wifi = app.getSystemService(WifiManager::class.java)
+    private val main = Handler(Looper.getMainLooper())
     private var receiver: BroadcastReceiver? = null
+    private var callback: WifiManager.ScanResultsCallback? = null
     private var started = false
     private val listeners = mutableListOf<() -> Unit>()
+    private val settle = Runnable {
+        if (status == Status.SCANNING) publishResults(finished = true)
+    }
 
     fun observe(listener: () -> Unit): () -> Unit {
         listeners.add(listener)
@@ -50,22 +58,32 @@ class PhoneWifiScanner(
         val filter = IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
         val next = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                publishResults()
+                publishResults(finished = true)
             }
         }
         receiver = next
-        if (Build.VERSION.SDK_INT >= 33) {
-            app.registerReceiver(next, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            app.registerReceiver(next, filter)
+        // The scan-results broadcast comes from the system. NOT_EXPORTED drops
+        // it on several releases, so the list stayed empty with no sensor.
+        ContextCompat.registerReceiver(app, next, filter, ContextCompat.RECEIVER_EXPORTED)
+        if (Build.VERSION.SDK_INT >= 30 && wifi != null) {
+            val results = object : WifiManager.ScanResultsCallback() {
+                override fun onScanResultsAvailable() {
+                    publishResults(finished = true)
+                }
+            }
+            callback = results
+            try {
+                wifi.registerScanResultsCallback(ContextCompat.getMainExecutor(app), results)
+            } catch (_: SecurityException) {
+                callback = null
+            }
         }
-        publishResults()
         refresh()
     }
 
     fun stop() {
         started = false
+        main.removeCallbacks(settle)
         receiver?.let {
             try {
                 app.unregisterReceiver(it)
@@ -73,6 +91,15 @@ class PhoneWifiScanner(
             }
         }
         receiver = null
+        if (Build.VERSION.SDK_INT >= 30) {
+            callback?.let { registered ->
+                try {
+                    wifi?.unregisterScanResultsCallback(registered)
+                } catch (_: SecurityException) {
+                }
+            }
+        }
+        callback = null
     }
 
     @SuppressLint("MissingPermission")
@@ -87,9 +114,9 @@ class PhoneWifiScanner(
             publish()
             return
         }
-        if (Build.VERSION.SDK_INT < 33 && !locationEnabled()) {
+        if (!locationEnabled()) {
             status = Status.LOCATION_OFF
-            publishResults()
+            publish()
             return
         }
         val accepted = try {
@@ -98,11 +125,20 @@ class PhoneWifiScanner(
             false
         }
         status = if (accepted) Status.SCANNING else Status.THROTTLED
-        publishResults()
+        if (accepted) {
+            publish()
+            // The completion broadcast is the real result. Reading the cache
+            // here is the previous pass, often empty, and used to mark the
+            // scan finished before any network arrived.
+            main.removeCallbacks(settle)
+            main.postDelayed(settle, 8_000)
+        } else {
+            publishResults(finished = true)
+        }
     }
 
     @SuppressLint("MissingPermission")
-    private fun publishResults() {
+    private fun publishResults(finished: Boolean) {
         if (!Permissions.canScanWifi(app)) {
             status = Status.PERMISSION
             publish()
@@ -115,8 +151,15 @@ class PhoneWifiScanner(
         }
         val readings = results.mapNotNull { it.toReading() }
         lastResults = readings.size
-        store.applyPhoneSnapshot(readings)
-        if (status == Status.SCANNING) status = Status.IDLE
+        // An empty read while the radio is still sweeping must not age out
+        // networks the previous pass already found.
+        if (readings.isNotEmpty() || finished) store.applyPhoneSnapshot(readings)
+        if (finished) {
+            main.removeCallbacks(settle)
+            if (status == Status.SCANNING) {
+                status = if (readings.isEmpty() && !locationEnabled()) Status.LOCATION_OFF else Status.IDLE
+            }
+        }
         note = readings.groupBy { it.band }.entries
             .joinToString(" · ") { "${it.value.size} on ${it.key.label}" }
             .ifEmpty { null }
@@ -133,8 +176,7 @@ class PhoneWifiScanner(
     }
 
     private fun ScanResult.toReading(): AccessPointReading? {
-        @Suppress("DEPRECATION")
-        val ssid = SSID
+        val ssid = networkName()
         val width = when (channelWidth) {
             ScanResult.CHANNEL_WIDTH_40MHZ -> 40
             ScanResult.CHANNEL_WIDTH_80MHZ -> 80
@@ -151,5 +193,15 @@ class PhoneWifiScanner(
             widthMHz = width,
             centreFrequencyMHz = centerFreq0,
         )
+    }
+
+    private fun ScanResult.networkName(): String? {
+        if (Build.VERSION.SDK_INT >= 33) {
+            val text = wifiSsid?.toString().orEmpty()
+            if (text.isEmpty() || text == "<unknown ssid>") return null
+            return text.removeSurrounding("\"")
+        }
+        @Suppress("DEPRECATION")
+        return SSID
     }
 }

@@ -2,8 +2,8 @@ import CoreLocation
 import Observation
 
 /// Keeps a recent coarse fix while the app is in use, so a save made on the
-/// phone can be tagged with where it happened. The Cardputer's own GPS is a
-/// separate feature; this only uses the phone.
+/// phone can be tagged with where it happened. A Cap LoRa-1262 fix travels
+/// with the Cardputer's own saved scans and is not read from here.
 @Observable
 final class LocationService: NSObject, CLLocationManagerDelegate {
     struct Coordinate: Equatable {

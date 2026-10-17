@@ -6,8 +6,32 @@ import java.util.UUID
  * The BLE contract with the Cardputer firmware. docs/protocol.md is the
  * source of truth; the iOS app implements the same bytes.
  */
+data class LoraDevice(
+    val freqKhz: Long,
+    val spreadingFactor: Int,
+    val rssi: Int,
+    val snr: Int,
+    val flags: Int,
+    val id: Long,
+) {
+    val lorawan: Boolean get() = flags and 0x01 != 0
+    val join: Boolean get() = flags and 0x04 != 0
+
+    fun title(): String {
+        val hex = "%08X".format(id and 0xFFFF_FFFFL)
+        return when {
+            join -> "Join $hex"
+            lorawan -> "DevAddr $hex"
+            else -> "Packet $hex"
+        }
+    }
+
+    fun detail(): String =
+        String.format(java.util.Locale.US, "%.3f MHz · SF%d · SNR %d dB", freqKhz / 1000.0, spreadingFactor, snr)
+}
+
 object SensorProtocol {
-    const val VERSION = 6
+    const val VERSION = 7
 
     val SERVICE: UUID = UUID.fromString("53500001-8f2d-4b6a-9c1e-737065637472")
     val INFO: UUID = UUID.fromString("53500002-8f2d-4b6a-9c1e-737065637472")
@@ -19,11 +43,13 @@ object SensorProtocol {
         data object ScanOnce : Command()
         data class SetInterval(val seconds: Int) : Command()
         data class AckSaved(val captureId: Long) : Command()
+        data object ScanLora : Command()
 
         val data: ByteArray
             get() = when (this) {
                 ScanOnce -> byteArrayOf(0x01)
                 is SetInterval -> byteArrayOf(0x02, seconds.coerceIn(0, 255).toByte())
+                ScanLora -> byteArrayOf(0x04)
                 is AckSaved -> byteArrayOf(
                     0x03,
                     captureId.toByte(),
@@ -51,6 +77,27 @@ object SensorProtocol {
         data class Traffic(val scanId: Int, val bssid: MacAddress, val bytes: Long, val packets: Int) : Message()
         data class VendorIe(val scanId: Int, val bssid: MacAddress, val deviceName: String, val manufacturer: String) : Message()
         data class Battery(val scanId: Int, val level: Int, val isCharging: Boolean) : Message()
+        data class Lora(val scanId: Int, val device: LoraDevice) : Message()
+        data class LoraScan(val scanId: Int, val started: Boolean, val count: Int, val durationMs: Int) : Message()
+        data class LoraProgress(
+            val scanId: Int,
+            val freqKhz: Long,
+            val spreadingFactor: Int,
+            val step: Int,
+            val total: Int,
+        ) : Message() {
+            fun line(): String = String.format(
+                java.util.Locale.US,
+                "%d.%03d MHz · SF%d · %d/%d",
+                freqKhz / 1000,
+                freqKhz % 1000,
+                spreadingFactor,
+                step,
+                total,
+            )
+        }
+        data class SavedPosition(val captureId: Long, val latitude: Double, val longitude: Double) : Message()
+        data class Gps(val valid: Boolean, val latitude: Double, val longitude: Double, val satellites: Int) : Message()
         data class Saved(
             val kind: Int,
             val captureId: Long,
@@ -77,6 +124,12 @@ object SensorProtocol {
         SAVED_WIFI(0x1A),
         SAVED_BLE(0x1B),
         SAVED_LAN(0x1C),
+        SAVED_GPS(0x1D),
+        LORA_DEVICE(0x1E),
+        LORA_SCAN(0x1F),
+        SAVED_LORA(0x20),
+        GPS(0x21),
+        LORA_PROGRESS(0x22),
         ;
 
         companion object {
@@ -86,9 +139,15 @@ object SensorProtocol {
 
     fun decode(data: ByteArray): Message? {
         if (data.isEmpty()) return null
-        if (data.u8(0) == 0x1A || data.u8(0) == 0x1B || data.u8(0) == 0x1C) return decodeSaved(data)
-        if (data.size < 3) return null
         val type = MessageType.from(data.u8(0)) ?: return null
+        if (type == MessageType.SAVED_GPS) return decodeSavedGps(data)
+        if (type == MessageType.GPS) return decodeGps(data)
+        if (type == MessageType.SAVED_WIFI || type == MessageType.SAVED_BLE ||
+            type == MessageType.SAVED_LAN || type == MessageType.SAVED_LORA
+        ) {
+            return decodeSaved(data)
+        }
+        if (data.size < 3) return null
         val scanId = data.u16le(1)
         return when (type) {
             MessageType.SCAN_STARTED -> Message.ScanStarted(scanId)
@@ -109,8 +168,51 @@ object SensorProtocol {
                 if (data.size < 5) return null
                 Message.Battery(scanId, minOf(data.u8(3), 100), data.u8(4) and 0x01 != 0)
             }
-            MessageType.SAVED_WIFI, MessageType.SAVED_BLE, MessageType.SAVED_LAN -> decodeSaved(data)
+            MessageType.LORA_DEVICE -> decodeLora(data, scanId)
+            MessageType.LORA_SCAN -> {
+                if (data.size < 8) return null
+                Message.LoraScan(scanId, data.u8(3) == 1, data.u16le(4), data.u16le(6))
+            }
+            MessageType.LORA_PROGRESS -> {
+                if (data.size < 12) return null
+                Message.LoraProgress(scanId, data.u32le(3), data.u8(7), data.u16le(8), data.u16le(10))
+            }
+            MessageType.SAVED_WIFI, MessageType.SAVED_BLE, MessageType.SAVED_LAN, MessageType.SAVED_LORA -> decodeSaved(data)
+            MessageType.SAVED_GPS, MessageType.GPS -> null
         }
+    }
+
+    private fun e7(data: ByteArray, index: Int): Double = data.u32le(index).toInt() / 1e7
+
+    private fun i16(data: ByteArray, index: Int): Int {
+        val v = data.u16le(index)
+        return if (v >= 0x8000) v - 0x10000 else v
+    }
+
+    private fun decodeSavedGps(data: ByteArray): Message.SavedPosition? {
+        if (data.size < 18) return null
+        return Message.SavedPosition(data.u32le(1), e7(data, 9), e7(data, 13))
+    }
+
+    private fun decodeGps(data: ByteArray): Message.Gps? {
+        if (data.size < 11) return null
+        val valid = data.u8(10) and 0x01 != 0
+        return Message.Gps(valid, if (valid) e7(data, 1) else 0.0, if (valid) e7(data, 5) else 0.0, data.u8(9))
+    }
+
+    private fun decodeLora(data: ByteArray, scanId: Int): Message.Lora? {
+        if (data.size < 16) return null
+        return Message.Lora(
+            scanId,
+            LoraDevice(
+                freqKhz = data.u32le(3),
+                spreadingFactor = data.u8(7),
+                rssi = i16(data, 8),
+                snr = data.i8(10),
+                flags = data.u8(11),
+                id = data.u32le(12),
+            ),
+        )
     }
 
     private fun decodeSaved(data: ByteArray): Message.Saved? {
@@ -119,6 +221,7 @@ object SensorProtocol {
             0x1A -> 1
             0x1C -> 2
             0x1B -> 3
+            0x20 -> 4
             else -> return null
         }
         val captureId = data.u32le(1)
@@ -138,6 +241,20 @@ object SensorProtocol {
                 title = ssid.ifEmpty { "Hidden network" }
                 detail = "${MacAddress(data.copyOfRange(13, 19)).text} · ch ${data.u8(20)} · ${AuthMode(data.u8(21)).name}"
                 trailing = data.i8(19).toString()
+            }
+            0x20 -> {
+                if (data.size < 26) return null
+                val device = LoraDevice(
+                    freqKhz = data.u32le(13),
+                    spreadingFactor = data.u8(17),
+                    rssi = i16(data, 18),
+                    snr = data.i8(20),
+                    flags = data.u8(21),
+                    id = data.u32le(22),
+                )
+                title = device.title()
+                detail = device.detail()
+                trailing = device.rssi.toString()
             }
             0x1B -> {
                 if (data.size < 22) return null
@@ -239,6 +356,46 @@ object SensorProtocol {
                 out.u16(message.scanId)
                 out.u8(message.level)
                 out.u8(if (message.isCharging) 1 else 0)
+            }
+            is Message.Lora -> {
+                out.u8(MessageType.LORA_DEVICE.raw)
+                out.u16(message.scanId)
+                out.u32(message.device.freqKhz)
+                out.u8(message.device.spreadingFactor)
+                out.u16(message.device.rssi and 0xFFFF)
+                out.i8(message.device.snr)
+                out.u8(message.device.flags)
+                out.u32(message.device.id)
+            }
+            is Message.LoraScan -> {
+                out.u8(MessageType.LORA_SCAN.raw)
+                out.u16(message.scanId)
+                out.u8(if (message.started) 1 else 2)
+                out.u16(message.count)
+                out.u16(message.durationMs)
+            }
+            is Message.LoraProgress -> {
+                out.u8(MessageType.LORA_PROGRESS.raw)
+                out.u16(message.scanId)
+                out.u32(message.freqKhz)
+                out.u8(message.spreadingFactor)
+                out.u16(message.step)
+                out.u16(message.total)
+            }
+            is Message.SavedPosition -> {
+                out.u8(MessageType.SAVED_GPS.raw)
+                out.u32(message.captureId)
+                out.u32(0)
+                out.u32(Math.round(message.latitude * 1e7))
+                out.u32(Math.round(message.longitude * 1e7))
+                out.u8(0)
+            }
+            is Message.Gps -> {
+                out.u8(MessageType.GPS.raw)
+                out.u32(if (message.valid) Math.round(message.latitude * 1e7) else 0)
+                out.u32(if (message.valid) Math.round(message.longitude * 1e7) else 0)
+                out.u8(message.satellites)
+                out.u8(if (message.valid) 1 else 0)
             }
             is Message.Saved -> Unit
         }
@@ -376,6 +533,10 @@ data class SensorInfo(
     val ota: Boolean = false,
     val batteryLevel: Int? = null,
     val isCharging: Boolean? = null,
+    val lora: Boolean = false,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val satellites: Int? = null,
 ) {
     companion object {
         fun decode(json: String): SensorInfo? {
@@ -383,6 +544,8 @@ data class SensorInfo(
             val fw = jsonString(json, "fw") ?: return null
             val chip = jsonString(json, "chip") ?: return null
             val interval = jsonInt(json, "interval") ?: return null
+            val lat = jsonInt(json, "lat")
+            val lon = jsonInt(json, "lon")
             return SensorInfo(
                 proto = proto,
                 fw = fw,
@@ -392,6 +555,10 @@ data class SensorInfo(
                 ota = jsonBool(json, "ota") ?: false,
                 batteryLevel = jsonInt(json, "bat"),
                 isCharging = jsonBool(json, "chg"),
+                lora = jsonBool(json, "lora") ?: false,
+                latitude = if (lat != null && lon != null) lat / 1e7 else null,
+                longitude = if (lat != null && lon != null) lon / 1e7 else null,
+                satellites = jsonInt(json, "sats"),
             )
         }
 

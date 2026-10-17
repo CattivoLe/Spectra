@@ -87,7 +87,7 @@ Clear history	Очистить историю
 Cancel	Отмена
 History	История
 Nothing saved	Ничего не сохранено
-Save what Wi‑Fi, LAN or Bluetooth just found. The Cardputer's side button saves its own scan, and it arrives here when the phone connects.	Сохраните то, что нашли Wi‑Fi, LAN или Bluetooth. Боковая кнопка Cardputer сохраняет его собственное сканирование — оно появится здесь, когда телефон подключится.
+Save what Wi‑Fi, LAN, Bluetooth or LoRa just found. The Cardputer's side button saves its own scan, and it arrives here when the phone connects.	Сохраните то, что нашли Wi‑Fi, LAN, Bluetooth или LoRa. Боковая кнопка Cardputer сохраняет его собственное сканирование — оно появится здесь, когда телефон подключится.
 Swipe a saved scan to the left to delete it.	Смахните сохранённое сканирование влево, чтобы удалить его.
 Delete	Удалить
 Deauth detected	Обнаружен deauth
@@ -217,7 +217,7 @@ Nothing heard	Ничего не слышно
 Quietest: %d	Тише всего: %d
 Android is limiting Wi-Fi scans. Showing the last results the system kept.	Android ограничивает сканирование Wi-Fi. Показаны последние результаты, которые сохранила система.
 Wi-Fi is off, so the phone radio is quiet.	Wi-Fi выключен, радио телефона молчит.
-Nearby Wi-Fi permission is off, so network names stay hidden.	Нет разрешения «Устройства Wi-Fi поблизости», поэтому имена сетей скрыты.
+Location and nearby Wi-Fi must be allowed, or the phone radio stays quiet.	Нужны геолокация и устройства Wi‑Fi поблизости, иначе радио телефона молчит.
 Location services must be on or this Android version returns an empty scan.	На этой версии Android без включённой геолокации сканирование возвращается пустым.
 2.4 GHz	2,4 ГГц
 5 GHz	5 ГГц
@@ -423,3 +423,49 @@ Could not start the connection.	Не удалось начать подключ�
 The device refused the connection.	Устройство отклонило подключение.
 Could not read the services.	Не удалось прочитать сервисы.
 Connects to the device to list its services and read the values it exposes. Many devices allow only a brief connection.	Подключается к устройству, показывает его сервисы и читает значения, которые оно отдаёт. Многие устройства разрешают лишь кратковременное подключение.
+LoRa	LoRa
+Module	Модуль
+Cap LoRa-1262	Cap LoRa-1262
+GPS	GPS
+Searching for satellites	Ищу спутники
+%s · %d satellites	%s · спутников: %d
+Scan LoRa	Искать в LoRa
+Scanning the 864–870 MHz band…	Сканирую диапазон 864–870 МГц…
+No LoRa devices yet. LoRa transmitters speak in short bursts, so a quiet pass is common indoors.	Устройств LoRa пока нет. Они передают короткими вспышками, так что в помещении эфир часто молчит.
+The Cardputer's Cap LoRa-1262 listens on EU868 and RU864 channels. A side-button save keeps the list and the GPS fix for when the phone reconnects.	Cap LoRa-1262 на Cardputer слушает каналы EU868 и RU864. Боковая кнопка сохраняет список и координаты GPS — они приедут, когда телефон снова подключится.
+Join %s	Подключение %s
+DevAddr %s	DevAddr %s
+Packet %s	Пакет %s
+No alert	Нет тревоги
+Mild alert	Слабая тревога
+High alert	Сильная тревога
+Chest	Грудь
+Wrist	Запястье
+Finger	Палец
+Hand	Кисть
+Ear lobe	Мочка уха
+Foot	Стопа
+Armpit	Подмышка
+Body	Тело
+Ear	Ухо
+GI tract	ЖКТ
+Mouth	Рот
+Rectum	Прямая кишка
+Toe	Палец ноги
+Tympanum	Барабанная перепонка
+Watch	Часы
+Computer	Компьютер
+Clock	Часы
+Remote control	Пульт
+Eye-glasses	Очки
+Tag	Метка
+Keyring	Брелок
+Media player	Плеер
+Barcode scanner	Сканер штрихкодов
+Thermometer	Термометр
+Heart rate sensor	Датчик пульса
+Blood pressure	Давление
+Human interface device	Устройство ввода
+Glucose meter	Глюкометр
+Running sensor	Датчик бега
+Cycling	Велосипед

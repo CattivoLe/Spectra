@@ -5,13 +5,16 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Context
+import android.bluetooth.BluetoothStatusCodes
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import cattivole.spectra.core.Catalog
+import java.util.UUID
 
 /**
  * Connects to one LE device and reads the services and characteristics it
@@ -28,7 +31,7 @@ class BleGattClient(context: Context) {
         data class Failed(val message: String) : State()
     }
 
-    data class Characteristic(val uuid: String, val properties: String, val value: ByteArray?)
+    data class Characteristic(val uuid: String, val name: String?, val properties: String, val value: ByteArray?)
     data class Service(val uuid: String, val name: String?, val characteristics: List<Characteristic>)
 
     var state: State = State.Idle
@@ -43,7 +46,14 @@ class BleGattClient(context: Context) {
     private val main = Handler(Looper.getMainLooper())
     private val listeners = mutableListOf<() -> Unit>()
     private var gatt: BluetoothGatt? = null
-    private val readQueue = ArrayDeque<BluetoothGattCharacteristic>()
+    private val readQueue = ArrayDeque<Pending>()
+    /** Bytes from the read callback. On API 33 the characteristic's own value field stays empty. */
+    private val values = mutableMapOf<String, ByteArray>()
+
+    private sealed class Pending {
+        data class Read(val characteristic: BluetoothGattCharacteristic) : Pending()
+        data class Subscribe(val characteristic: BluetoothGattCharacteristic) : Pending()
+    }
 
     fun observe(listener: () -> Unit): () -> Unit {
         listeners.add(listener)
@@ -56,6 +66,7 @@ class BleGattClient(context: Context) {
         val device: BluetoothDevice? = runCatching { adapter?.getRemoteDevice(address) }.getOrNull()
         deviceAddress = address
         services = emptyList()
+        values.clear()
         readQueue.clear()
         if (device == null || !Permissions.canScanBluetooth(app)) {
             state = State.Failed("Bluetooth is unavailable.")
@@ -108,18 +119,48 @@ class BleGattClient(context: Context) {
                 Catalog.serviceName(svc.uuid.toString()),
                 svc.characteristics.map { ch ->
                     @Suppress("DEPRECATION")
-                    Characteristic(Catalog.displayUuid(ch.uuid.toString()), properties(ch), ch.value)
+                    val bytes = values[ch.uuid.toString()] ?: ch.value
+                    Characteristic(
+                        Catalog.displayUuid(ch.uuid.toString()),
+                        Catalog.characteristicName(ch.uuid.toString()),
+                        properties(ch),
+                        bytes,
+                    )
                 },
             )
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun readNext() {
+    private fun pump() {
         val g = gatt ?: return
-        val ch = readQueue.removeFirstOrNull() ?: return
-        val ok = runCatching { g.readCharacteristic(ch) }.getOrDefault(false)
-        if (!ok) readNext()
+        val next = readQueue.removeFirstOrNull() ?: return
+        val started = when (next) {
+            is Pending.Read -> runCatching { g.readCharacteristic(next.characteristic) }.getOrDefault(false)
+            is Pending.Subscribe -> subscribe(g, next.characteristic)
+        }
+        if (!started) pump()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun subscribe(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic): Boolean {
+        if (!g.setCharacteristicNotification(characteristic, true)) return false
+        val descriptor = characteristic.getDescriptor(CCCD) ?: return false
+        val indicate = characteristic.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0
+        val enable = if (indicate) byteArrayOf(0x02, 0x00) else byteArrayOf(0x01, 0x00)
+        return if (Build.VERSION.SDK_INT >= 33) {
+            g.writeDescriptor(descriptor, enable) == BluetoothStatusCodes.SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            descriptor.value = enable
+            @Suppress("DEPRECATION")
+            g.writeDescriptor(descriptor)
+        }
+    }
+
+    private fun store(characteristic: BluetoothGattCharacteristic, bytes: ByteArray?) {
+        if (bytes == null || bytes.isEmpty()) return
+        values[characteristic.uuid.toString()] = bytes
     }
 
     private val callback = object : BluetoothGattCallback() {
@@ -163,15 +204,21 @@ class BleGattClient(context: Context) {
                 rebuild(g)
                 state = State.Connected
                 readQueue.clear()
+                val subscribe = mutableListOf<BluetoothGattCharacteristic>()
                 for (svc in g.services) {
                     for (ch in svc.characteristics) {
-                        if (ch.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0) {
-                            readQueue.add(ch)
+                        val props = ch.properties
+                        if (props and BluetoothGattCharacteristic.PROPERTY_READ != 0) {
+                            readQueue.add(Pending.Read(ch))
+                        }
+                        if (props and (BluetoothGattCharacteristic.PROPERTY_NOTIFY or BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0) {
+                            subscribe.add(ch)
                         }
                     }
                 }
+                subscribe.forEach { readQueue.add(Pending.Subscribe(it)) }
                 publish()
-                readNext()
+                pump()
             }
         }
 
@@ -183,9 +230,10 @@ class BleGattClient(context: Context) {
         ) {
             main.post {
                 if (g !== gatt) return@post
+                if (status == BluetoothGatt.GATT_SUCCESS) store(characteristic, value)
                 rebuild(g)
                 publish()
-                readNext()
+                pump()
             }
         }
 
@@ -198,10 +246,54 @@ class BleGattClient(context: Context) {
             if (Build.VERSION.SDK_INT >= 33) return
             main.post {
                 if (g !== gatt) return@post
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    @Suppress("DEPRECATION")
+                    store(characteristic, characteristic.value)
+                }
                 rebuild(g)
                 publish()
-                readNext()
+                pump()
             }
         }
+
+        override fun onCharacteristicChanged(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+        ) {
+            main.post {
+                if (g !== gatt) return@post
+                store(characteristic, value)
+                rebuild(g)
+                publish()
+            }
+        }
+
+        @Deprecated("Superseded by the value overload on API 33+")
+        override fun onCharacteristicChanged(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+        ) {
+            if (Build.VERSION.SDK_INT >= 33) return
+            @Suppress("DEPRECATION")
+            val bytes = characteristic.value
+            main.post {
+                if (g !== gatt) return@post
+                store(characteristic, bytes)
+                rebuild(g)
+                publish()
+            }
+        }
+
+        override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            main.post {
+                if (g !== gatt) return@post
+                pump()
+            }
+        }
+    }
+
+    private companion object {
+        val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     }
 }

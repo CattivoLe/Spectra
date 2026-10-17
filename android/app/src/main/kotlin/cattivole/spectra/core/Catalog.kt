@@ -9,6 +9,9 @@ object Catalog {
     private val services: Map<String, String> by lazy {
         load("spectra/ble-services.tsv") { canonicalUuid(it) }
     }
+    private val characteristics: Map<String, String> by lazy {
+        load("spectra/ble-characteristics.tsv") { canonicalUuid(it) }
+    }
 
     private val suspiciousOui = mapOf(
         "00:40:8C" to "Axis Communications",
@@ -41,6 +44,8 @@ object Catalog {
     fun company(id: Int): String? = companies[id]
 
     fun serviceName(uuid: String): String? = services[canonicalUuid(uuid)]
+
+    fun characteristicName(uuid: String): String? = characteristics[canonicalUuid(uuid)]
 
     fun displayUuid(uuid: String): String {
         val canonical = canonicalUuid(uuid)

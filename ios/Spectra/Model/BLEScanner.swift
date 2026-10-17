@@ -23,6 +23,10 @@ final class BLEScanner: NSObject {
 
     private(set) var state: State = .unavailable(.starting)
     private(set) var devices: [UUID: BLEDevice] = [:]
+    /// Flips only when the list goes empty or gains its first device.
+    /// The options menu reads this instead of `devices`, which changes on
+    /// every advertisement and would redraw the open menu.
+    private(set) var hasDevices = false
     /// Bumped once a second so rows can dim devices that stopped advertising.
     private(set) var now = Date.now
 
@@ -99,6 +103,7 @@ final class BLEScanner: NSObject {
 
     func clear() {
         devices = [:]
+        hasDevices = false
     }
 
     /// Connects to the peripheral and reads its services and characteristics.
@@ -192,6 +197,7 @@ final class BLEScanner: NSObject {
         let device = devices[id] ?? BLEDevice(id: id, rssi: rssi == 127 ? -100 : rssi, seen: seen)
         device.absorb(BLEAdvertisement.parse(fields), peripheralName: peripheral.name, rssi: rssi, at: seen)
         devices[id] = device
+        if !hasDevices { hasDevices = true }
     }
 
     private func uuids(_ value: Any?) -> [String] {

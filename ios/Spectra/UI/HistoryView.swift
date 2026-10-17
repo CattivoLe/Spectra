@@ -59,7 +59,7 @@ struct HistoryView: View {
                     ContentUnavailableView(
                         "Nothing saved",
                         systemImage: "clock.arrow.circlepath",
-                        description: Text("Save what Wi‑Fi, LAN or Bluetooth just found. The Cardputer's side button saves its own scan, and it arrives here when the phone connects.")
+                        description: Text("Save what Wi‑Fi, LAN, Bluetooth or LoRa just found. The Cardputer's side button saves its own scan, and it arrives here when the phone connects.")
                     )
                 }
             }

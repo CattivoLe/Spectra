@@ -1,5 +1,7 @@
 package cattivole.spectra.ui
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,7 +34,6 @@ import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WifiFind
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +45,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
@@ -67,6 +69,7 @@ import cattivole.spectra.core.SecondaryChannel
 import cattivole.spectra.core.SignalQuality
 import cattivole.spectra.core.TrackedNetwork
 import cattivole.spectra.core.WifiClient
+import cattivole.spectra.platform.Permissions
 import cattivole.spectra.platform.PhoneWifiScanner
 import java.util.Locale
 
@@ -117,15 +120,6 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(
-                        text = { Text(tr("Channels")) },
-                        leadingIcon = { Icon(Icons.Rounded.WaterfallChart, null) },
-                        onClick = {
-                            menu = false
-                            nav.channels()
-                        },
-                    )
-                    HorizontalDivider()
-                    DropdownMenuItem(
                         text = { Text(tr("Clear list")) },
                         leadingIcon = { Icon(Icons.Rounded.DeleteSweep, null) },
                         onClick = {
@@ -143,6 +137,12 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
         },
         overlay = {
             when {
+                all.isEmpty() && model.phone.status == PhoneWifiScanner.Status.SCANNING -> EmptyState(
+                    icon = Icons.Rounded.Wifi,
+                    title = tr("Listening"),
+                    body = tr("Networks appear here after the first scan."),
+                    busy = true,
+                )
                 all.isEmpty() && !model.link.isConnected && model.phone.lastResults == 0 -> EmptyState(
                     icon = Icons.Rounded.WifiFind,
                     title = tr("No networks yet"),
@@ -239,7 +239,9 @@ private fun WifiStatusChips(model: SpectraModel, nav: Navigator) {
                 onClick = link::scanNow,
             )
         }
-        val phoneNetworks = store.networks().values.filter { it.source == RadioSource.PHONE && it.isInRange }
+        val phoneNetworks = store.phoneSightings().filter { it.isInRange }
+        val context = LocalContext.current
+        val requestPermissions = LocalRequestPermissions.current
         StatusChip(
             icon = Icons.Rounded.PhoneAndroid,
             title = tr("This phone"),
@@ -253,7 +255,15 @@ private fun WifiStatusChips(model: SpectraModel, nav: Navigator) {
             },
             tint = Spectra.colors.revealed,
             busy = model.phone.status == PhoneWifiScanner.Status.SCANNING,
-            onClick = model.phone::refresh,
+            onClick = {
+                when {
+                    !Permissions.canScanWifi(context) -> requestPermissions()
+                    model.phone.status == PhoneWifiScanner.Status.LOCATION_OFF -> context.startActivity(
+                        Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS),
+                    )
+                    else -> model.phone.refresh()
+                }
+            },
         )
         val twoFour = store.networks().values.filter { it.isInRange && it.latest.band == Band.TWO_FOUR }.map { it.latest }
         if (twoFour.isNotEmpty()) {
@@ -271,7 +281,7 @@ private fun WifiStatusChips(model: SpectraModel, nav: Navigator) {
 internal fun phoneRadioNote(model: SpectraModel): String? = when (model.phone.status) {
     PhoneWifiScanner.Status.THROTTLED -> tr("Android is limiting Wi-Fi scans. Showing the last results the system kept.")
     PhoneWifiScanner.Status.WIFI_OFF -> tr("Wi-Fi is off, so the phone radio is quiet.")
-    PhoneWifiScanner.Status.PERMISSION -> tr("Nearby Wi-Fi permission is off, so network names stay hidden.")
+    PhoneWifiScanner.Status.PERMISSION -> tr("Location and nearby Wi-Fi must be allowed, or the phone radio stays quiet.")
     PhoneWifiScanner.Status.LOCATION_OFF -> tr("Location services must be on or this Android version returns an empty scan.")
     PhoneWifiScanner.Status.SCANNING, PhoneWifiScanner.Status.IDLE -> null
 }

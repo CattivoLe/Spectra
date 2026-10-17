@@ -35,6 +35,18 @@ final class SensorLink: NSObject {
     private(set) var info: SensorInfo?
     private(set) var batteryLevel: Int?
     private(set) var isCharging: Bool?
+    private(set) var loraDevices: [SensorProtocol.LoRaDevice] = []
+    private(set) var loraScanning = false
+    /// Frequency and spreading factor of the dwell in progress. Nil until the
+    /// first step of a scan, and again once the scan ends.
+    private(set) var loraTune: (freqKHz: UInt32, spreadingFactor: Int, step: Int, total: Int)?
+    private var loraWatch: Task<Void, Never>?
+    struct CapFix: Equatable {
+        var latitude: Double
+        var longitude: Double
+        var satellites: Int
+    }
+    private(set) var capFix: CapFix?
     /// Set while an application image is being sent to the sensor.
     private(set) var firmwareUpdate: FirmwareUpdateProgress?
 
@@ -130,6 +142,50 @@ final class SensorLink: NSObject {
         state = .idle
     }
 
+    func scanLoRa() {
+        guard state != .demo, !loraScanning else { return }
+        loraDevices = []
+        loraTune = nil
+        loraScanning = true
+        armLoraWatch()
+        send(.scanLoRa)
+    }
+
+    /// The line the Cardputer draws while it dwells: frequency, SF, and how
+    /// far through the channel list this step is.
+    var loraStatus: String {
+        guard let tune = loraTune else {
+            return String(localized: "Scanning the 864–870 MHz band…")
+        }
+        return String(
+            format: "%d.%03d MHz · SF%d · %d/%d",
+            Int(tune.freqKHz / 1000),
+            Int(tune.freqKHz % 1000),
+            tune.spreadingFactor,
+            tune.step,
+            tune.total
+        )
+    }
+
+    /// A quiet pass is about forty seconds. If the end notice is lost, stop
+    /// the spinner once the link has been silent for two minutes.
+    private func armLoraWatch() {
+        loraWatch?.cancel()
+        loraWatch = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
+            guard !Task.isCancelled, let self, self.loraScanning else { return }
+            self.loraScanning = false
+            self.loraTune = nil
+        }
+    }
+
+    private func endLoraScan() {
+        loraWatch?.cancel()
+        loraWatch = nil
+        loraScanning = false
+        loraTune = nil
+    }
+
     func scanNow() {
         if let demo {
             demo.scan()
@@ -197,6 +253,9 @@ final class SensorLink: NSObject {
             demo?.stop()
             demo = nil
             info = nil
+            loraDevices = []
+            endLoraScan()
+            capFix = nil
             store.abandonScan()
             updateIdleState()
         }
@@ -218,6 +277,44 @@ final class SensorLink: NSObject {
             return
         }
         if let message = SensorProtocol.decode(data) {
+            if case .savedPosition(let captureID, let latitude, let longitude) = message {
+                history.notePosition(captureID: captureID, source: sensorSource, latitude: latitude, longitude: longitude)
+                return
+            }
+            if case .gps(let valid, let latitude, let longitude, let satellites) = message {
+                capFix = valid ? CapFix(latitude: latitude, longitude: longitude, satellites: satellites) : nil
+                return
+            }
+            if case .loraScan(_, let started, _, _) = message {
+                if started {
+                    loraDevices = []
+                    loraTune = nil
+                    loraScanning = true
+                    armLoraWatch()
+                } else {
+                    endLoraScan()
+                }
+                return
+            }
+            if case .loraProgress(_, let freqKHz, let spreadingFactor, let step, let total) = message {
+                loraTune = (freqKHz, spreadingFactor, step, total)
+                loraScanning = true
+                armLoraWatch()
+                return
+            }
+            if case .lora(_, let device) = message {
+                if let index = loraDevices.firstIndex(where: {
+                    $0.freqKHz == device.freqKHz && $0.spreadingFactor == device.spreadingFactor && $0.id == device.id
+                }) {
+                    if device.rssi > loraDevices[index].rssi {
+                        loraDevices[index] = device
+                    }
+                } else {
+                    loraDevices.append(device)
+                }
+                loraDevices.sort { $0.rssi > $1.rssi }
+                return
+            }
             if case .saved(let record) = message {
                 if history.ingest(record, source: sensorSource) {
                     send(.ackSaved(captureID: record.captureID))
@@ -246,6 +343,9 @@ final class SensorLink: NSObject {
         control = nil
         firmware = nil
         info = nil
+        loraDevices = []
+        endLoraScan()
+        capFix = nil
         batteryLevel = nil
         isCharging = nil
         store.abandonScan()
@@ -626,6 +726,9 @@ extension SensorLink: CBCentralManagerDelegate {
         control = nil
         firmware = nil
         info = nil
+        loraDevices = []
+        endLoraScan()
+        capFix = nil
         store.abandonScan()
         finishFirmwareWrite(FirmwareUpdate.TransferError.linkLost)
         state = .connecting(name: name(of: peripheral))
@@ -694,6 +797,9 @@ extension SensorLink: CBPeripheralDelegate {
                 if let bat = decoded.batteryLevel {
                     batteryLevel = bat
                     isCharging = decoded.isCharging ?? false
+                }
+                if let latitude = decoded.latitude, let longitude = decoded.longitude {
+                    capFix = CapFix(latitude: latitude, longitude: longitude, satellites: decoded.satellites ?? 0)
                 }
             }
         default:

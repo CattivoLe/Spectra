@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.ExpandLess
@@ -46,6 +47,7 @@ import cattivole.spectra.core.HistoryEntry
 private fun kindIcon(kind: String): ImageVector = when (kind) {
     "lan" -> Icons.Rounded.Lan
     "bluetooth" -> Icons.Rounded.Bluetooth
+    "lora" -> Icons.Rounded.CellTower
     else -> Icons.Rounded.Wifi
 }
 
@@ -53,12 +55,14 @@ private fun kindIcon(kind: String): ImageVector = when (kind) {
 private fun kindTint(kind: String): Color = when (kind) {
     "lan" -> Spectra.colors.good
     "bluetooth" -> Spectra.colors.info
+    "lora" -> Spectra.colors.revealed
     else -> MaterialTheme.colorScheme.primary
 }
 
 private fun kindTitle(kind: String): String = when (kind) {
     "lan" -> "LAN"
     "bluetooth" -> "Bluetooth"
+    "lora" -> "LoRa"
     else -> "Wi‑Fi"
 }
 
@@ -101,12 +105,12 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
                 EmptyState(
                     Icons.Rounded.History,
                     tr("Nothing saved"),
-                    tr("Save what Wi‑Fi, LAN or Bluetooth just found. The Cardputer's side button saves its own scan, and it arrives here when the phone connects."),
+                    tr("Save what Wi‑Fi, LAN, Bluetooth or LoRa just found. The Cardputer's side button saves its own scan, and it arrives here when the phone connects."),
                 )
             }
         },
     ) {
-        for (kind in listOf("networks", "lan", "bluetooth")) {
+        for (kind in listOf("networks", "lan", "bluetooth", "lora")) {
             val rows = history.entries.filter { it.kind == kind }
             if (rows.isEmpty()) continue
             val expanded = kind !in collapsed

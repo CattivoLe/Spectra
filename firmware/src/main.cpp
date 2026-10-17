@@ -4,6 +4,8 @@
 // results to the Spectra iOS app over BLE. The wire format is described in
 // docs/protocol.md.
 
+#include "LoraCap.h"
+
 #include <M5Cardputer.h>
 #include <ESPmDNS.h>
 #include <HWCDC.h>
@@ -21,9 +23,9 @@
 
 // The phone app finds this tag in a firmware.bin to show which version it
 // carries. The version below points into it, so the linker keeps the tag.
-static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.8.7";
+static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.9.1";
 static constexpr const char* kFirmwareVersion = kFirmwareTag + 11;
-static constexpr uint8_t kProtocolVersion = 6;
+static constexpr uint8_t kProtocolVersion = 7;
 
 static constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
 static constexpr char kInfoUuid[] = "53500002-8F2D-4B6A-9C1E-737065637472";
@@ -34,6 +36,7 @@ static constexpr char kFirmwareUuid[] = "53500005-8F2D-4B6A-9C1E-737065637472";
 static constexpr uint8_t kCmdScanOnce = 0x01;
 static constexpr uint8_t kCmdSetInterval = 0x02;
 static constexpr uint8_t kCmdAckSaved = 0x03;
+static constexpr uint8_t kCmdScanLora = 0x04;
 
 static constexpr uint8_t kMsgScanStarted = 0x10;
 static constexpr uint8_t kMsgAccessPoint = 0x11;
@@ -48,6 +51,12 @@ static constexpr uint8_t kMsgBattery = 0x19;
 static constexpr uint8_t kMsgSavedWifi = 0x1A;
 static constexpr uint8_t kMsgSavedBle = 0x1B;
 static constexpr uint8_t kMsgSavedLan = 0x1C;
+static constexpr uint8_t kMsgSavedGps = 0x1D;
+static constexpr uint8_t kMsgLoraDevice = 0x1E;
+static constexpr uint8_t kMsgLoraScan = 0x1F;
+static constexpr uint8_t kMsgLoraProgress = 0x22;
+static constexpr uint8_t kMsgSavedLora = 0x20;
+static constexpr uint8_t kMsgGps = 0x21;
 static constexpr uint8_t kMsgUpdate = 0x30;
 
 static constexpr uint8_t kOtaBegin = 0x01;
@@ -181,6 +190,8 @@ struct StoredCapture {
 static std::vector<KeptWifi> keptWifi;
 static std::vector<KeptBle> keptBle;
 static std::vector<KeptLan> keptLan;
+static std::vector<LoraDevice> keptLora;
+static char gpsLabel[24] = "";
 static char lanNote[16] = "";
 static int menuIndex = 0;
 static int listOffset = 0;
@@ -193,7 +204,9 @@ static uint32_t lastOutMs = 0;
 static portMUX_TYPE ackMux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t ackIds[8];
 static uint8_t ackCount = 0;
-static const char *kMenuNames[] = {"Networks", "LAN", "Bluetooth"};
+static constexpr int kTabCount = 5;
+static constexpr int kTabLink = 4;
+static const char *kMenuNames[] = {"WiFi", "LAN", "BLE", "LoRa", "Join"};
 
 // Wi-Fi join for LAN scans. The Cardputer stays unassociated for sniffing, but
 // mDNS needs a real link, so the user can pick a network and type a password
@@ -597,17 +610,28 @@ static bool readBatteryCharging() {
 }
 
 static void updateInfo() {
-  char json[200];
+  char json[360];
   const int bat = readBatteryPercent();
-  char batJson[32] = "";
+  char batJson[40] = "";
   if (bat >= 0) {
     snprintf(batJson, sizeof(batJson), ",\"bat\":%d,\"chg\":%s", bat,
              readBatteryCharging() ? "true" : "false");
   }
+  char capJson[96] = "";
+  if (loraCapAttached()) {
+    GpsFix fix;
+    if (loraCapFix(fix)) {
+      snprintf(capJson, sizeof(capJson), ",\"lora\":%s,\"lat\":%ld,\"lon\":%ld,\"sats\":%u",
+               loraCapReady() ? "true" : "false", static_cast<long>(fix.latE7),
+               static_cast<long>(fix.lonE7), fix.sats);
+    } else {
+      snprintf(capJson, sizeof(capJson), ",\"lora\":%s", loraCapReady() ? "true" : "false");
+    }
+  }
   snprintf(json, sizeof(json),
-           "{\"proto\":%u,\"fw\":\"%s\",\"chip\":\"ESP32-S3\",\"bands\":[\"2.4\"],\"interval\":%u%s%s}",
+           "{\"proto\":%u,\"fw\":\"%s\",\"chip\":\"ESP32-S3\",\"bands\":[\"2.4\"],\"interval\":%u%s%s%s}",
            kProtocolVersion, kFirmwareVersion, scanIntervalSec,
-           otaUpdatable ? ",\"ota\":true" : "", batJson);
+           otaUpdatable ? ",\"ota\":true" : "", batJson, capJson);
   infoChar->setValue(json);
 }
 
@@ -670,6 +694,12 @@ class ControlCallbacks : public NimBLECharacteristicCallbacks {
           taskEXIT_CRITICAL(&ackMux);
         }
         break;
+      case kCmdScanLora:
+        taskENTER_CRITICAL(&radioMux);
+        requestedKind = 3;
+        scanRequested = true;
+        taskEXIT_CRITICAL(&radioMux);
+        break;
       default:
         break;
     }
@@ -686,6 +716,31 @@ static void sendMessage(const uint8_t *data, size_t length) {
       return;
     }
     delay(10);
+  }
+}
+
+// One try, then the outbox. A LoRa pass blocks the main loop, so a dropped
+// notify would leave the phone spinning after the Cardputer has moved on.
+static void flushOutboxNow() {
+  while (!outbox.empty() && isConnected()) {
+    const std::vector<uint8_t> &msg = outbox.front();
+    if (!resultsChar->notify(msg.data(), msg.size())) {
+      return;
+    }
+    outbox.erase(outbox.begin());
+  }
+}
+
+static void sendLive(const uint8_t *data, size_t length) {
+  if (!isConnected()) {
+    return;
+  }
+  flushOutboxNow();
+  if (resultsChar->notify(data, length)) {
+    return;
+  }
+  if (outbox.size() < 64) {
+    outbox.emplace_back(data, data + length);
   }
 }
 
@@ -894,7 +949,9 @@ static bool otaCrcSelfCheck() {
 
 // Whether an update can actually be written and booted. The app must run from
 // an OTA app partition (otherwise the bootloader ignores what we flash) and
-// there must be another slot with room for the image.
+// there must be a different slot with room for the image. With a single OTA
+// slot, IDF returns that same partition as the "next" one; Update.begin then
+// refuses to overwrite the running image.
 static bool otaAvailable() {
   const esp_partition_t *running = esp_ota_get_running_partition();
   if (running == nullptr || running->type != ESP_PARTITION_TYPE_APP ||
@@ -903,7 +960,7 @@ static bool otaAvailable() {
     return false;
   }
   const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
-  return next != nullptr && ESP.getFreeSketchSpace() >= 32;
+  return next != nullptr && next != running && next->size >= 32;
 }
 
 static void putU32(uint8_t *p, uint32_t value) {
@@ -998,9 +1055,15 @@ static void otaBegin(uint32_t size, uint32_t crc) {
   esp_wifi_scan_stop();
   otaPercent = 0;
   uiDirty = true;
+  // A dropped link can leave the Arduino updater open. Begin then fails
+  // forever with "already running" until something aborts it.
+  if (Update.isRunning()) {
+    Update.abort();
+  }
   if (!Update.begin(size)) {
+    const uint8_t error = Update.getError() == UPDATE_ERROR_SIZE ? kOtaErrTooLarge : kOtaErrBegin;
     otaCleanup(true);
-    notifyOta(kOtaFailed, kOtaErrBegin);
+    notifyOta(kOtaFailed, error);
     return;
   }
   otaExpected = size;
@@ -1180,6 +1243,12 @@ static void showBanner(const char *text) {
   uiDirty = true;
 }
 
+static size_t storedRecordSize(uint8_t kind) {
+  if (kind == 1) return 41;
+  if (kind == 4) return 13;
+  return 29;
+}
+
 static void enqueueCapture(StoredCapture &cap) {
   if (cap.queued || cap.blob.size() < 11) {
     return;
@@ -1189,9 +1258,18 @@ static void enqueueCapture(StoredCapture &cap) {
   const uint32_t id = getU32(blob + 1);
   const uint32_t when = getU32(blob + 5);
   const uint16_t count = readU16(blob + 9);
-  const size_t record = kind == 1 ? 41 : 29;
+  const size_t record = storedRecordSize(kind);
   if (count == 0 || 11 + static_cast<size_t>(count) * record > cap.blob.size()) {
     return;
+  }
+  const size_t bodyEnd = 11 + static_cast<size_t>(count) * record;
+  if (bodyEnd + 11 <= cap.blob.size() && blob[bodyEnd] == 'G' && blob[bodyEnd + 1] == 'P') {
+    uint8_t pos[18];
+    pos[0] = kMsgSavedGps;
+    putU32(pos + 1, id);
+    putU32(pos + 5, when);
+    memcpy(pos + 9, blob + bodyEnd + 2, 9);
+    outbox.emplace_back(pos, pos + sizeof(pos));
   }
   for (uint16_t i = 0; i < count; ++i) {
     const uint8_t *row = blob + 11 + static_cast<size_t>(i) * record;
@@ -1235,6 +1313,14 @@ static void enqueueCapture(StoredCapture &cap) {
       msg[17] = nameLen;
       memcpy(msg + 18, row + 4, nameLen);
       len = 18 + nameLen;
+    } else if (kind == 4) {
+      msg[0] = kMsgSavedLora;
+      putU32(msg + 1, id);
+      putU32(msg + 5, when);
+      putU16(msg + 9, i);
+      putU16(msg + 11, count);
+      memcpy(msg + 13, row, 13);
+      len = 26;
     } else {
       return;
     }
@@ -1324,12 +1410,22 @@ static bool storeBlob(uint8_t kind, const uint8_t *body, size_t bodyLen, uint16_
     return false;
   }
 
-  std::vector<uint8_t> blob(11 + bodyLen);
+  GpsFix located;
+  const bool haveFix = loraCapFix(located);
+  std::vector<uint8_t> blob(11 + bodyLen + (haveFix ? 11 : 0));
   blob[0] = kind;
   putU32(blob.data() + 1, id);
   putU32(blob.data() + 5, unixNow());
   putU16(blob.data() + 9, count);
   memcpy(blob.data() + 11, body, bodyLen);
+  if (haveFix) {
+    uint8_t *tail = blob.data() + 11 + bodyLen;
+    tail[0] = 'G';
+    tail[1] = 'P';
+    putU32(tail + 2, static_cast<uint32_t>(located.latE7));
+    putU32(tail + 6, static_cast<uint32_t>(located.lonE7));
+    tail[10] = located.sats;
+  }
 
   char key[4];
   snprintf(key, sizeof(key), "c%d", slot);
@@ -1376,6 +1472,24 @@ static bool saveBle() {
     memcpy(row + 8, keptBle[i].name, 20);
   }
   return storeBlob(3, body.data(), body.size(), count);
+}
+
+static bool saveLora() {
+  if (keptLora.empty()) {
+    return false;
+  }
+  const uint16_t count = static_cast<uint16_t>(std::min<size_t>(keptLora.size(), 40));
+  std::vector<uint8_t> body(static_cast<size_t>(count) * 13);
+  for (uint16_t i = 0; i < count; ++i) {
+    uint8_t *row = body.data() + static_cast<size_t>(i) * 13;
+    putU32(row, keptLora[i].freqKhz);
+    row[4] = keptLora[i].sf;
+    putU16(row + 5, static_cast<uint16_t>(keptLora[i].rssi));
+    row[7] = static_cast<uint8_t>(keptLora[i].snr);
+    row[8] = keptLora[i].flags;
+    putU32(row + 9, keptLora[i].id);
+  }
+  return storeBlob(4, body.data(), body.size(), count);
 }
 
 static bool saveLan() {
@@ -1552,23 +1666,62 @@ static void drainAcks() {
 // Display
 // ---------------------------------------------------------------------------
 
+static int capIconWidth() {
+  int width = 0;
+  if (loraCapAttached()) {
+    width += 12;
+  }
+  if (loraCapReady()) {
+    width += 12;
+  }
+  return width;
+}
+
+// A crosshair when the cap's GNSS is present (green once it has a fix) and
+// an antenna when the SX1262 answered. Both sit just left of the battery.
+static void drawCapIcons(int x) {
+  auto &d = M5Cardputer.Display;
+  if (loraCapAttached()) {
+    GpsFix fix;
+    const uint16_t color = loraCapFix(fix) ? TFT_GREEN : TFT_WHITE;
+    d.drawCircle(x + 5, 9, 3, color);
+    d.fillCircle(x + 5, 9, 1, color);
+    x += 12;
+  }
+  if (loraCapReady()) {
+    d.drawFastVLine(x + 5, 5, 8, TFT_WHITE);
+    d.drawLine(x + 5, 5, x + 1, 10, TFT_WHITE);
+    d.drawLine(x + 5, 5, x + 9, 10, TFT_WHITE);
+    d.drawLine(x + 2, 8, x + 8, 8, TFT_WHITE);
+  }
+}
+
 static void drawStatus(const char *line) {
   auto &d = M5Cardputer.Display;
   d.fillRect(0, 0, d.width(), 18, 0x10A2);
-  d.setTextColor(TFT_WHITE, 0x10A2);
-  d.setCursor(6, 5);
-  d.print(line);
 
   const int bat = readBatteryPercent();
-  if (bat < 0) {
-    return;
+  int right = d.width() - 2;
+  if (bat >= 0) {
+    const bool charging = readBatteryCharging();
+    char cell[12];
+    snprintf(cell, sizeof(cell), "%s%d%%", charging ? "+" : "", bat);
+    const int cellX = d.width() - static_cast<int>(strlen(cell)) * 6 - 4;
+    d.setTextColor(charging ? TFT_GREEN : TFT_WHITE, 0x10A2);
+    d.setCursor(cellX, 5);
+    d.print(cell);
+    right = cellX - 2;
   }
-  const bool charging = readBatteryCharging();
-  char cell[12];
-  snprintf(cell, sizeof(cell), "%s%d%%", charging ? "+" : "", bat);
-  d.setTextColor(charging ? TFT_GREEN : TFT_WHITE, 0x10A2);
-  d.setCursor(d.width() - static_cast<int>(strlen(cell)) * 6 - 4, 5);
-  d.print(cell);
+  right -= capIconWidth();
+  if (right < d.width() - 2) {
+    drawCapIcons(right);
+  }
+  const int maxChars = std::max(0, (right - 6) / 6);
+  char shown[48];
+  snprintf(shown, sizeof(shown), "%.*s", maxChars, line);
+  d.setTextColor(TFT_WHITE, 0x10A2);
+  d.setCursor(6, 5);
+  d.print(shown);
 }
 
 static void drawUpdating() {
@@ -1587,33 +1740,93 @@ static void drawUpdating() {
 }
 
 static int listCount() {
-  if (menuIndex == 0) {
-    return static_cast<int>(keptWifi.size());
+  switch (menuIndex) {
+    case 0: return static_cast<int>(keptWifi.size());
+    case 1: return static_cast<int>(keptLan.size());
+    case 2: return static_cast<int>(keptBle.size());
+    case 3: return static_cast<int>(keptLora.size());
+    default: return 0;
   }
-  if (menuIndex == 1) {
-    return static_cast<int>(keptLan.size());
-  }
-  return static_cast<int>(keptBle.size());
 }
+
+static constexpr int kListTop = 36;
 
 static int listRows() {
-  int rows = 0;
-  const int limit = M5Cardputer.Display.height() - 8;
-  for (int y = 72; y <= limit; y += 10) {
-    ++rows;
-  }
-  return rows;
+  return std::max(1, static_cast<int>(M5Cardputer.Display.height() - kListTop) / 10);
 }
 
-static void drawWifiUi();
+static bool apHasActivity(const uint8_t bssid[6]) {
+  for (const StationEntry &sta : capturedStations) {
+    if (sta.associated && memcmp(sta.bssid, bssid, 6) == 0) {
+      return true;
+    }
+  }
+  for (const TrafficEntry &traffic : capturedTraffic) {
+    if (traffic.packets > 0 && memcmp(traffic.bssid, bssid, 6) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void drawLinkTab();
+
+static void drawTabs() {
+  auto &d = M5Cardputer.Display;
+  const int width = d.width() / kTabCount;
+  for (int i = 0; i < kTabCount; ++i) {
+    const int x = i * width;
+    const bool on = i == menuIndex;
+    d.fillRect(x, 18, width, 14, on ? TFT_WHITE : TFT_BLACK);
+    d.setTextColor(on ? TFT_BLACK : TFT_DARKGREY, on ? TFT_WHITE : TFT_BLACK);
+    const int textWidth = static_cast<int>(strlen(kMenuNames[i])) * 6;
+    d.setCursor(x + (width - textWidth) / 2, 22);
+    d.print(kMenuNames[i]);
+  }
+  d.drawFastHLine(0, 32, d.width(), 0x10A2);
+}
+
+static void drawLoraList() {
+  auto &d = M5Cardputer.Display;
+  d.fillRect(0, kListTop, d.width(), d.height() - kListTop, TFT_BLACK);
+  int y = kListTop;
+  int skip = listOffset;
+  if (keptLora.empty()) {
+    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    d.setCursor(4, y);
+    if (!loraCapAttached()) {
+      d.print("No LoRa cap");
+    } else if (!loraCapReady()) {
+      d.print("LoRa init failed");
+    } else if (gpsLabel[0] == '\0') {
+      d.print("GPS searching");
+    }
+    return;
+  }
+  for (const LoraDevice &dev : keptLora) {
+    if (skip > 0) {
+      --skip;
+      continue;
+    }
+    if (y > d.height() - 8) {
+      break;
+    }
+    const uint16_t color = dev.rssi >= -100 ? TFT_GREEN : dev.rssi >= -120 ? TFT_YELLOW : TFT_ORANGE;
+    d.setTextColor(color, TFT_BLACK);
+    d.setCursor(4, y);
+    d.printf("%4d", dev.rssi);
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.setCursor(34, y);
+    d.printf("%lu.%lu SF%u %08lX", static_cast<unsigned long>(dev.freqKhz / 1000),
+             static_cast<unsigned long>((dev.freqKhz % 1000) / 100), dev.sf,
+             static_cast<unsigned long>(dev.id));
+    y += 10;
+  }
+}
 
 static void drawUi() {
   if (otaPercent >= 0) {
     drawUpdating();
-    return;
-  }
-  if (wifiUi != WifiUi::None) {
-    drawWifiUi();
     return;
   }
   auto &d = M5Cardputer.Display;
@@ -1629,31 +1842,11 @@ static void drawUi() {
     snprintf(header, sizeof(header), "%s  waiting", deviceName);
   }
   drawStatus(header);
-
-  for (int i = 0; i < 3; ++i) {
-    const int y = 22 + i * 12;
-    const bool on = i == menuIndex;
-    d.fillRect(0, y - 1, d.width(), 12, on ? TFT_WHITE : TFT_BLACK);
-    d.setTextColor(on ? TFT_BLACK : TFT_WHITE, on ? TFT_WHITE : TFT_BLACK);
-    d.setCursor(4, y);
-    d.printf("%c %s", on ? '>' : ' ', kMenuNames[i]);
-    d.setCursor(118, y);
-    if (i == 0) {
-      d.printf("%u", static_cast<unsigned>(keptWifi.size()));
-    } else if (i == 1) {
-      if (keptLan.empty() && lanNote[0] != '\0') {
-        d.print(lanNote);
-      } else {
-        d.printf("%u", static_cast<unsigned>(keptLan.size()));
-      }
-    } else {
-      d.printf("%u", static_cast<unsigned>(keptBle.size()));
-    }
+  drawTabs();
+  if (menuIndex == kTabLink) {
+    drawLinkTab();
+    return;
   }
-
-  d.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  d.setCursor(4, 58);
-  d.print("Fn+;./,/ nav  Enter scan  Tab WiFi");
 
   const int maxOffset = std::max(0, listCount() - listRows());
   if (listOffset > maxOffset) {
@@ -1663,9 +1856,14 @@ static void drawUi() {
     listOffset = 0;
   }
 
-  int y = 72;
+  int y = kListTop;
   int skip = listOffset;
   if (menuIndex == 0) {
+    if (keptWifi.empty()) {
+      d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      d.setCursor(4, y);
+      d.print("No networks");
+    }
     for (const KeptWifi &ap : keptWifi) {
       if (skip > 0) {
         --skip;
@@ -1678,15 +1876,26 @@ static void drawUi() {
       d.setTextColor(color, TFT_BLACK);
       d.setCursor(4, y);
       d.printf("%4d", ap.rssi);
-      d.setTextColor(TFT_WHITE, TFT_BLACK);
+      const bool open = ap.auth == WIFI_AUTH_OPEN;
+      const bool busy = apHasActivity(ap.bssid);
+      d.setTextColor(open ? TFT_GREEN : TFT_WHITE, TFT_BLACK);
       d.setCursor(34, y);
+      d.print(open ? "o" : "*");
+      d.setTextColor(busy ? TFT_YELLOW : TFT_BLACK, TFT_BLACK);
+      d.print(busy ? "+" : " ");
+      d.setTextColor(TFT_WHITE, TFT_BLACK);
       const char *name = ap.ssid[0] != '\0' ? ap.ssid : "(hidden)";
-      char shown[22];
-      snprintf(shown, sizeof(shown), "%s", name);
+      char shown[28];
+      snprintf(shown, sizeof(shown), " %.26s", name);
       d.print(shown);
       y += 10;
     }
   } else if (menuIndex == 1) {
+    if (keptLan.empty()) {
+      d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      d.setCursor(4, y);
+      d.print(lanNote[0] != '\0' ? lanNote : "No hosts");
+    }
     for (const KeptLan &host : keptLan) {
       if (skip > 0) {
         --skip;
@@ -1702,6 +1911,8 @@ static void drawUi() {
       d.print(host.name);
       y += 10;
     }
+  } else if (menuIndex == 3) {
+    drawLoraList();
   } else {
     for (const KeptBle &dev : keptBle) {
       if (skip > 0) {
@@ -1852,6 +2063,104 @@ static void runScan() {
   uiDirty = true;
 }
 
+static void sendLoraDevice(const LoraDevice &dev) {
+  uint8_t msg[16];
+  msg[0] = kMsgLoraDevice;
+  putU16(msg + 1, scanId);
+  putU32(msg + 3, dev.freqKhz);
+  msg[7] = dev.sf;
+  putU16(msg + 8, static_cast<uint16_t>(dev.rssi));
+  msg[10] = static_cast<uint8_t>(dev.snr);
+  msg[11] = dev.flags;
+  putU32(msg + 12, dev.id);
+  sendLive(msg, sizeof(msg));
+}
+
+static void sendLoraProgress(uint32_t freqKhz, uint8_t sf, uint16_t index, uint16_t total) {
+  uint8_t msg[12] = {kMsgLoraProgress};
+  putU16(msg + 1, scanId);
+  putU32(msg + 3, freqKhz);
+  msg[7] = sf;
+  putU16(msg + 8, index);
+  putU16(msg + 10, total);
+  sendLive(msg, sizeof(msg));
+}
+
+static void onLoraProgress(uint32_t freqKhz, uint8_t sf, uint16_t index, uint16_t total) {
+  char line[28];
+  snprintf(line, sizeof(line), "%lu.%03lu SF%u", static_cast<unsigned long>(freqKhz / 1000),
+           static_cast<unsigned long>(freqKhz % 1000), sf);
+  drawStatus(line);
+  sendLoraProgress(freqKhz, sf, index, total);
+}
+
+static void onLoraHeard(const LoraDevice &dev) {
+  for (LoraDevice &have : keptLora) {
+    if (have.freqKhz == dev.freqKhz && have.sf == dev.sf && have.id == dev.id) {
+      if (dev.rssi > have.rssi) {
+        have = dev;
+        sendLoraDevice(dev);
+        drawLoraList();
+      }
+      return;
+    }
+  }
+  if (keptLora.size() >= 40) {
+    return;
+  }
+  keptLora.push_back(dev);
+  sendLoraDevice(dev);
+  drawLoraList();
+}
+
+static void sendLoraScan(uint8_t phase, uint16_t count, uint16_t durationMs) {
+  uint8_t msg[8] = {kMsgLoraScan};
+  putU16(msg + 1, scanId);
+  msg[3] = phase;
+  putU16(msg + 4, count);
+  putU16(msg + 6, durationMs);
+  sendLive(msg, sizeof(msg));
+}
+
+static void sendGpsFix() {
+  if (!isConnected() || !loraCapAttached()) {
+    return;
+  }
+  GpsFix fix;
+  const bool have = loraCapFix(fix);
+  uint8_t msg[11];
+  msg[0] = kMsgGps;
+  putU32(msg + 1, have ? static_cast<uint32_t>(fix.latE7) : 0);
+  putU32(msg + 5, have ? static_cast<uint32_t>(fix.lonE7) : 0);
+  msg[9] = have ? fix.sats : 0;
+  msg[10] = have ? 1 : 0;
+  sendMessage(msg, sizeof(msg));
+}
+
+static void runLoraScan() {
+  if (!loraCapReady()) {
+    showBanner(loraCapAttached() ? "LoRa init failed" : "No LoRa cap");
+    sendLoraScan(2, 0, 0);
+    uiDirty = true;
+    return;
+  }
+  ++scanId;
+  keptLora.clear();
+  menuIndex = 3;
+  listOffset = 0;
+  drawUi();
+  drawStatus("Scanning LoRa...");
+  sendLoraScan(1, 0, 0);
+  const uint32_t started = millis();
+  loraCapScan(onLoraProgress, onLoraHeard);
+  std::sort(keptLora.begin(), keptLora.end(),
+            [](const LoraDevice &a, const LoraDevice &b) { return a.rssi > b.rssi; });
+  const uint32_t elapsed = millis() - started;
+  sendLoraScan(2, static_cast<uint16_t>(keptLora.size()),
+               static_cast<uint16_t>(std::min<uint32_t>(elapsed, 0xFFFF)));
+  uiDirty = true;
+}
+
 // ---------------------------------------------------------------------------
 // BLE setup
 // ---------------------------------------------------------------------------
@@ -1889,7 +2198,7 @@ static void setupBle() {
 }
 
 static void moveMode(int direction) {
-  menuIndex = (menuIndex + (direction < 0 ? 2 : 1)) % 3;
+  menuIndex = (menuIndex + (direction < 0 ? kTabCount - 1 : 1)) % kTabCount;
   listOffset = 0;
   uiDirty = true;
 }
@@ -1900,14 +2209,10 @@ static void moveList(int direction) {
     if (listOffset > 0) {
       --listOffset;
       uiDirty = true;
-    } else {
-      moveMode(-1);
     }
   } else if (listOffset < maxOffset) {
     ++listOffset;
     uiDirty = true;
-  } else {
-    moveMode(1);
   }
 }
 
@@ -1937,6 +2242,7 @@ static void startWifiPick() {
   wifiListOffset = 0;
   wifiInputSeeded = false;
   wifiUi = WifiUi::Pick;
+  menuIndex = kTabLink;
   uiDirty = true;
 }
 
@@ -2050,50 +2356,45 @@ static void serviceWifiUi() {
   }
 }
 
-static void drawWifiUi() {
+static void drawLinkTab() {
   auto &d = M5Cardputer.Display;
-  d.setTextSize(1);
-  d.fillScreen(TFT_BLACK);
   if (wifiUi == WifiUi::Pick) {
-    drawStatus("Wi-Fi: pick network");
-    const int rows = (d.height() - 26) / 12;
+    const int rows = std::max(1, static_cast<int>(d.height() - kListTop) / 12);
     if (wifiSel < wifiListOffset) {
       wifiListOffset = wifiSel;
     }
     if (wifiSel >= wifiListOffset + rows) {
       wifiListOffset = wifiSel - rows + 1;
     }
-    int y = 24;
+    int y = kListTop;
     for (int i = wifiListOffset; i < static_cast<int>(wifiList.size()); ++i) {
-      if (y > d.height() - 14) {
+      if (y > d.height() - 10) {
         break;
       }
       const bool on = i == wifiSel;
       d.fillRect(0, y - 1, d.width(), 12, on ? TFT_WHITE : TFT_BLACK);
       d.setTextColor(on ? TFT_BLACK : TFT_WHITE, on ? TFT_WHITE : TFT_BLACK);
       d.setCursor(4, y);
-      char shown[26];
-      snprintf(shown, sizeof(shown), "%s", wifiList[i].c_str());
+      char shown[36];
+      snprintf(shown, sizeof(shown), "%.34s", wifiList[i].c_str());
       d.print(shown);
       y += 12;
     }
     if (wifiList.empty()) {
       d.setTextColor(TFT_DARKGREY, TFT_BLACK);
-      d.setCursor(4, 40);
+      d.setCursor(4, kListTop);
       d.print("No networks found");
     }
-    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    d.setCursor(4, d.height() - 10);
-    d.print("Fn+;. move  Enter pick  Tab back");
-  } else if (wifiUi == WifiUi::Pass) {
-    drawStatus("Wi-Fi: password");
-    d.setTextColor(TFT_WHITE, TFT_BLACK);
-    d.setCursor(4, 28);
+    return;
+  }
+  d.setTextColor(TFT_WHITE, TFT_BLACK);
+  d.setCursor(4, kListTop);
+  if (wifiUi == WifiUi::Pass) {
     char ssidLine[40];
-    snprintf(ssidLine, sizeof(ssidLine), "SSID: %s", wifiSsid);
+    snprintf(ssidLine, sizeof(ssidLine), "%.34s", wifiSsid);
     d.print(ssidLine);
-    d.setCursor(4, 44);
-    d.print("Pass: ");
+    d.setCursor(4, kListTop + 16);
+    d.print("Pass ");
     char masked[34];
     const uint8_t dots = wifiPassLen < 32 ? wifiPassLen : 32;
     for (uint8_t i = 0; i < dots; ++i) {
@@ -2102,28 +2403,27 @@ static void drawWifiUi() {
     masked[dots] = '\0';
     d.print(masked);
     d.print("_");
-    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    d.setCursor(4, d.height() - 10);
-    d.print("type  Del erase  Enter join  Tab");
-  } else {
-    drawStatus("Wi-Fi");
-    d.setTextColor(TFT_WHITE, TFT_BLACK);
-    d.setCursor(4, 40);
-    d.print(wifiMsg);
-    d.setCursor(4, 56);
-    d.print(wifiSsid);
-    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    d.setCursor(4, d.height() - 10);
-    d.print("Tab cancel");
+    return;
   }
+  if (wifiUi == WifiUi::Connecting) {
+    d.print(wifiMsg);
+    d.setCursor(4, kListTop + 16);
+    d.print(wifiSsid);
+    return;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    d.print(WiFi.SSID().c_str());
+    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    d.setCursor(4, kListTop + 16);
+    d.print(WiFi.localIP().toString().c_str());
+    return;
+  }
+  d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  d.print(wifiHaveCreds ? wifiSsid : "No network");
 }
 
 static void handleKeyboard() {
   if (scanInProgress || otaActive || otaJobBusy) {
-    return;
-  }
-  if (wifiUi != WifiUi::None) {
-    handleWifiKeys();
     return;
   }
   const Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
@@ -2155,7 +2455,7 @@ static void handleKeyboard() {
     if (first || static_cast<int32_t>(now - repeatAt) >= 0) {
       if (mode != 0) {
         moveMode(mode);
-      } else {
+      } else if (menuIndex != kTabLink) {
         moveList(scroll);
       }
       held = gesture;
@@ -2165,21 +2465,22 @@ static void handleKeyboard() {
     held = 0;
   }
 
+  // Joining a network owns Enter, Tab and the vertical arrows. Horizontal
+  // arrows already switched tabs above, so a half-typed password survives.
   static bool enterHeld = false;
-  if (keys.enter && !enterHeld) {
-    taskENTER_CRITICAL(&radioMux);
-    requestedKind = static_cast<uint8_t>(menuIndex);
-    scanRequested = true;
-    taskEXIT_CRITICAL(&radioMux);
+  if (menuIndex == kTabLink && wifiUi != WifiUi::None) {
+    handleWifiKeys();
+  } else if (keys.enter && !enterHeld) {
+    if (menuIndex == kTabLink) {
+      startWifiPick();
+    } else {
+      taskENTER_CRITICAL(&radioMux);
+      requestedKind = static_cast<uint8_t>(menuIndex);
+      scanRequested = true;
+      taskEXIT_CRITICAL(&radioMux);
+    }
   }
   enterHeld = keys.enter;
-
-  // Tab opens the Wi-Fi setup so the LAN scan has a link to work on.
-  static bool tabHeld = false;
-  if (keys.tab && !tabHeld) {
-    startWifiPick();
-  }
-  tabHeld = keys.tab;
 }
 
 static void handleSideButton() {
@@ -2191,10 +2492,14 @@ static void handleSideButton() {
     saved = saveWifi();
   } else if (menuIndex == 1) {
     saved = saveLan();
-  } else {
+  } else if (menuIndex == 2) {
     saved = saveBle();
+  } else if (menuIndex == 3) {
+    saved = saveLora();
   }
-  showBanner(saved ? "Saved" : "Nothing to save");
+  GpsFix located;
+  const bool withGps = saved && loraCapFix(located);
+  showBanner(!saved ? "Nothing to save" : withGps ? "Saved + GPS" : "Saved");
   if (saved && isConnected()) {
     queueUnsent();
   }
@@ -2209,6 +2514,7 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
+  loraCapBegin();
 
   otaCrcOk = otaCrcSelfCheck();
   otaUpdatable = otaCrcOk && otaAvailable();
@@ -2244,6 +2550,7 @@ void loop() {
     uiDirty = true;
     if (isConnected()) {
       queueUnsent();
+      sendGpsFix();
       // iOS keeps a copy of the service list per device and reuses it, so a
       // phone that met firmware without the Firmware characteristic never
       // sees it. A Service Changed indication makes it look again; it is sent
@@ -2263,6 +2570,21 @@ void loop() {
     }
   }
   watchBattery();
+  loraCapPoll();
+  if (loraCapAttached()) {
+    char nextGps[24];
+    loraCapFormat(nextGps, sizeof(nextGps));
+    if (std::strcmp(nextGps, gpsLabel) != 0) {
+      snprintf(gpsLabel, sizeof(gpsLabel), "%s", nextGps);
+      uiDirty = true;
+      updateInfo();
+    }
+    static uint32_t nextGpsNotify = 0;
+    if (isConnected() && static_cast<int32_t>(millis() - nextGpsNotify) >= 0) {
+      sendGpsFix();
+      nextGpsNotify = millis() + 5000;
+    }
+  }
   drainAcks();
   if (banner[0] != '\0' && static_cast<int32_t>(millis() - bannerUntil) >= 0) {
     banner[0] = '\0';
@@ -2277,7 +2599,9 @@ void loop() {
   if (due && !scanRequested) {
     requestedKind = 0;
   }
-  if ((scanRequested || due) && !otaActive && !otaJobBusy && wifiUi == WifiUi::None) {
+  const bool joinBusy =
+      wifiUi == WifiUi::Connecting || (menuIndex == kTabLink && wifiUi != WifiUi::None);
+  if ((scanRequested || due) && !otaActive && !otaJobBusy && !joinBusy) {
     scanRequested = false;
     kind = requestedKind;
     scanInProgress = true;
@@ -2291,6 +2615,8 @@ void loop() {
       runLanScan();
     } else if (kind == 2) {
       runBluetoothScan();
+    } else if (kind == 3) {
+      runLoraScan();
     } else {
       runScan();
     }
