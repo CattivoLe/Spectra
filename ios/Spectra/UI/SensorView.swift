@@ -71,7 +71,16 @@ struct SensorView: View {
 
                     if let info = link.info {
                         Section {
-                            InfoRow("Firmware", value: info.fw)
+                            InfoRow("Firmware") {
+                                HStack(spacing: 6) {
+                                    Text(info.fw)
+                                    if firmwareUpToDate {
+                                        Image(systemName: "checkmark.seal.fill")
+                                            .foregroundStyle(.green)
+                                            .accessibilityLabel("Up to date")
+                                    }
+                                }
+                            }
                             InfoRow("Reported interval", value: SensorLink.intervalLabel(info.interval))
                             InfoRow("Updates", value: info.ota ? String(localized: "From the app") : String(localized: "Not from the app"))
                             if let level = link.batteryLevel {
@@ -86,8 +95,6 @@ struct SensorView: View {
                             if case .connected = link.state, info.ota, link.firmwareUpdate?.isRunning != true {
                                 if let bundled = BundledFirmware.current {
                                     if let version = bundled.version, version == info.fw {
-                                        Label("Firmware is up to date", systemImage: "checkmark.seal.fill")
-                                            .foregroundStyle(.green)
                                         Button("Reinstall \(version)", systemImage: "arrow.clockwise") {
                                             offer(PendingFirmware(name: "firmware.bin", data: bundled.data, version: version))
                                         }
@@ -172,6 +179,16 @@ struct SensorView: View {
 
     private func offer(_ firmware: PendingFirmware) {
         pendingFirmware = firmware
+    }
+
+    /// The connected sensor already runs the firmware this app build carries.
+    private var firmwareUpToDate: Bool {
+        guard case .connected = link.state,
+              let info = link.info, info.ota,
+              link.firmwareUpdate?.isRunning != true,
+              let version = BundledFirmware.current?.version
+        else { return false }
+        return version == info.fw
     }
 
     private struct BundledFirmware {

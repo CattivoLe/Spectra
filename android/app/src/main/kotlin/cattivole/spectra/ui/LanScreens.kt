@@ -104,6 +104,7 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
                     DropdownMenuItem(
                         text = { Text(if (lan.scanning) tr("Stop") else tr("Scan now")) },
                         leadingIcon = { Icon(if (lan.scanning) Icons.Rounded.Stop else Icons.Rounded.Refresh, null) },
+                        enabled = lan.scanning || !lan.noNetwork,
                         onClick = {
                             if (lan.scanning) lan.stop() else lan.scan()
                             menu = false

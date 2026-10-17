@@ -23,14 +23,13 @@ struct BLEView: View {
     }
 
     enum Scope: String, CaseIterable, Identifiable {
-        case all, named, apple
+        case all, named
         var id: Self { self }
 
         var label: LocalizedStringKey {
             switch self {
             case .all: "All devices"
             case .named: "With a name"
-            case .apple: "Apple"
             }
         }
     }
@@ -122,13 +121,33 @@ struct BLEView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Picker("Sort by", selection: $sort) {
-                            ForEach(Sort.allCases) { Text($0.label).tag($0) }
+                        Section("Sort by") {
+                            ForEach(Sort.allCases) { option in
+                                Button {
+                                    sort = option
+                                } label: {
+                                    if sort == option {
+                                        Label(option.label, systemImage: "checkmark")
+                                    } else {
+                                        Text(option.label)
+                                    }
+                                }
+                            }
                         }
-                        Picker("Show", selection: $scope) {
-                            ForEach(Scope.allCases) { Text($0.label).tag($0) }
+                        Section("Show") {
+                            ForEach(Scope.allCases) { option in
+                                Button {
+                                    scope = option
+                                } label: {
+                                    if scope == option {
+                                        Label(option.label, systemImage: "checkmark")
+                                    } else {
+                                        Text(option.label)
+                                    }
+                                }
+                            }
+                            Toggle("Show out of range", isOn: $showOutOfRange)
                         }
-                        Toggle("Show out of range", isOn: $showOutOfRange)
                         Divider()
                         Button(scanner.isScanning ? "Stop" : "Scan now", systemImage: scanner.isScanning ? "stop" : "arrow.clockwise") {
                             if scanner.isScanning { scanner.stop() } else { scanner.start() }
@@ -165,7 +184,6 @@ struct BLEView: View {
         switch scope {
         case .all: true
         case .named: device.hasOwnName
-        case .apple: device.companyID == BLEAdvertisement.appleCompany
         }
     }
 

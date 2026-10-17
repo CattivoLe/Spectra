@@ -92,7 +92,7 @@ struct LANView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("Scan now", systemImage: "arrow.clockwise", action: scanner.scan)
-                            .disabled(scanner.isScanning)
+                            .disabled(scanner.isScanning || noNetwork)
                         if !scanner.devices.isEmpty {
                             Divider()
                             Button("Clear list", systemImage: "trash", role: .destructive) {
@@ -105,6 +105,11 @@ struct LANView: View {
                 }
             }
         }
+    }
+
+    private var noNetwork: Bool {
+        if case .noNetwork = scanner.state { return true }
+        return false
     }
 
     private func runScan() async {

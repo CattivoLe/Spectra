@@ -225,7 +225,7 @@ fun ChannelSpectrum(
     val nameStyle = TextStyle(fontSize = 10.sp, color = onSurface)
     val floor = -100.0
     val loudest = (readings.maxOfOrNull { it.rssi } ?: -70).toDouble()
-    val ceiling = minOf(-20.0, maxOf(floor + 30, ceil((loudest + 10) / 10) * 10))
+    val ceiling = minOf(-20.0, maxOf(floor + 25, ceil((loudest + 5) / 5) * 5))
     val range = domain ?: run {
         val low = minOf(ticks.first().toDouble(), readings.minOfOrNull { it.occupiedChannels.start } ?: ticks.first().toDouble())
         val high = maxOf(ticks.last().toDouble(), readings.maxOfOrNull { it.occupiedChannels.endInclusive } ?: ticks.last().toDouble())

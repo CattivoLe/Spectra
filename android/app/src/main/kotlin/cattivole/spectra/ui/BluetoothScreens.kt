@@ -47,7 +47,7 @@ import cattivole.spectra.core.hex
 import cattivole.spectra.platform.DeviceBleScanner
 
 private enum class BleSort { SIGNAL, NAME, RECENT }
-private enum class BleScope { ALL, NAMED, APPLE }
+private enum class BleScope { ALL, NAMED }
 
 private fun unavailableTitle(why: DeviceBleScanner.Availability): String = when (why) {
     DeviceBleScanner.Availability.STARTING -> tr("Starting Bluetooth…")
@@ -74,7 +74,6 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
             when (scope) {
                 BleScope.ALL -> true
                 BleScope.NAMED -> device.hasOwnName
-                BleScope.APPLE -> device.companyId == BleAdvertisement.APPLE_COMPANY
             } &&
             (
                 needle.isEmpty() ||
@@ -197,7 +196,6 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
                     ToggleChip(tr("Name"), sort == BleSort.NAME, { sort = BleSort.NAME })
                     ToggleChip(tr("Recently seen"), sort == BleSort.RECENT, { sort = BleSort.RECENT })
                     ToggleChip(tr("With a name"), scope == BleScope.NAMED, { scope = if (scope == BleScope.NAMED) BleScope.ALL else BleScope.NAMED })
-                    ToggleChip("Apple", scope == BleScope.APPLE, { scope = if (scope == BleScope.APPLE) BleScope.ALL else BleScope.APPLE })
                     ToggleChip(tr("Out of range"), showOut, { showOut = !showOut })
                 }
             }

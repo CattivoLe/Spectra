@@ -149,8 +149,8 @@ struct ChannelSpectrumChart: View {
     /// for its label, so quiet airwaves don't sit at the bottom of an empty chart.
     private var ceiling: Double {
         let loudest = Double(readings.map(\.rssi).max() ?? -70)
-        let top = ((loudest + 10) / 10).rounded(.up) * 10
-        return min(-20, max(Self.floor + 30, top))
+        let top = ((loudest + 5) / 5).rounded(.up) * 5
+        return min(-20, max(Self.floor + 25, top))
     }
 
     private var signalMarks: [Double] {

@@ -3660,6 +3660,16 @@
         }
       }
     },
+    "Up to date" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Актуальна"
+          }
+        }
+      }
+    },
     "UPnP name" : {
       "localizations" : {
         "ru" : {
