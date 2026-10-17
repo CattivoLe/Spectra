@@ -60,6 +60,18 @@
           }
         }
       }
+    },
+    "NSLocationWhenInUseUsageDescription" : {
+      "comment" : "Privacy - Location When In Use Usage Description",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Spectra tags a saved scan with where your phone is, so you can tell captures apart on the map."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

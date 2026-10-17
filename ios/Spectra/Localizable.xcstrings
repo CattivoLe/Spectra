@@ -1,26 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "iOS does not see the sensor's update channel, probably from an old cached list of its services. Turn Bluetooth off and on in Settings, reconnect and try again." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iOS не видит канал обновления сенсора — скорее всего, из-за старого сохранённого списка его сервисов. Выключите и включите Bluetooth в Настройках, подключитесь заново и повторите."
-          }
-        }
-      }
-    },
-    "The Cardputer reboots when the transfer finishes. Keep it powered and nearby." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cardputer перезагрузится в конце передачи. Не выключайте его и держите рядом."
-          }
-        }
-      }
-    },
     "—" : {
       "localizations" : {
         "ru" : {
@@ -1463,6 +1443,7 @@
       }
     },
     "Firmware is up to date" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ru" : {
           "stringUnit" : {
@@ -1806,6 +1787,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "iOS назначает этот идентификатор сам. Это не Bluetooth-адрес, и в другом приложении он будет другим."
+          }
+        }
+      }
+    },
+    "iOS does not see the sensor's update channel, probably from an old cached list of its services. Turn Bluetooth off and on in Settings, reconnect and try again." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iOS не видит канал обновления сенсора — скорее всего, из-за старого сохранённого списка его сервисов. Выключите и включите Bluetooth в Настройках, подключитесь заново и повторите."
           }
         }
       }
@@ -3339,6 +3330,16 @@
         }
       }
     },
+    "The Cardputer reboots when the transfer finishes. Keep it powered and nearby." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cardputer перезагрузится в конце передачи. Не выключайте его и держите рядом."
+          }
+        }
+      }
+    },
     "The graph fills in as advertisements arrive." : {
       "localizations" : {
         "ru" : {
@@ -3618,6 +3619,16 @@
         }
       }
     },
+    "Up to date" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Актуальна"
+          }
+        }
+      }
+    },
     "Update cancelled." : {
       "localizations" : {
         "ru" : {
@@ -3656,16 +3667,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Обновления"
-          }
-        }
-      }
-    },
-    "Up to date" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Актуальна"
           }
         }
       }
