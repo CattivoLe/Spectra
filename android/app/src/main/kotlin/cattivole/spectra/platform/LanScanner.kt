@@ -256,13 +256,17 @@ class LanScanner(context: Context) {
         )
     }
 
-    private data class SubnetCandidate(val wifi: Boolean, val info: SubnetInfo)
+    private data class SubnetCandidate(val wifi: Boolean, val hasGateway: Boolean, val info: SubnetInfo)
 
     /**
-     * The Wi-Fi or Ethernet subnet the phone shares with the LAN. A VPN is
-     * skipped: its network often still advertises the Wi-Fi transport, so
-     * `activeNetwork` would hand back the tunnel's own tiny subnet (e.g.
-     * `26.26.26.0/30`) and the real network would never be scanned.
+     * The Wi-Fi or Ethernet subnet the phone shares with the LAN.
+     *
+     * The phone often carries extra virtual interfaces: a VPN, or a local
+     * tunnel app (ad blocker, private DNS, proxy) that assigns a tiny
+     * `/30` such as `26.26.26.0/30` with a `0.0.0.0` gateway. `activeNetwork`
+     * can point at one of those, so the real network is never walked. Every
+     * network is considered instead: VPN transports are dropped, and the one
+     * with a real default gateway and the widest subnet wins.
      */
     @Suppress("DEPRECATION")
     private fun currentSubnet(): SubnetInfo? {
@@ -275,20 +279,25 @@ class LanScanner(context: Context) {
                 val ethernet = caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
                 if (!wifi && !ethernet) continue
                 val properties = manager.getLinkProperties(network) ?: continue
-                val address = properties.linkAddresses.firstOrNull {
-                    val host = it.address
-                    host is Inet4Address && !host.isLoopbackAddress && !host.isLinkLocalAddress
-                } ?: continue
-                val ip = address.address.hostAddress ?: continue
                 val gateway = properties.routes
                     .firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }
                     ?.gateway?.hostAddress
+                    ?.takeIf { it != "0.0.0.0" }
+                val ipv4 = properties.linkAddresses.filter {
+                    val host = it.address
+                    host is Inet4Address && !host.isLoopbackAddress && !host.isLinkLocalAddress
+                }
+                if (ipv4.isEmpty()) continue
+                // With two addresses on one interface, keep the one on the gateway's subnet.
+                val chosen = gateway?.let { gw -> ipv4.firstOrNull { sameSubnet(it, gw) } } ?: ipv4.first()
+                val ip = chosen.address.hostAddress ?: continue
                 add(
                     SubnetCandidate(
                         wifi,
+                        gateway != null,
                         SubnetInfo(
                             localIp = ip,
-                            prefixLength = address.prefixLength,
+                            prefixLength = chosen.prefixLength,
                             gateway = gateway,
                             interfaceName = properties.interfaceName,
                         ),
@@ -296,10 +305,24 @@ class LanScanner(context: Context) {
                 )
             }
         }
-        // Prefer Wi-Fi, then an interface that actually has a default gateway.
+        // A real default gateway first, then Wi-Fi, then the widest subnet —
+        // a tunnel's /30 with no gateway sinks to the bottom.
         return candidates
-            .sortedWith(compareByDescending<SubnetCandidate> { it.wifi }.thenByDescending { it.info.gateway != null })
+            .sortedWith(
+                compareByDescending<SubnetCandidate> { it.hasGateway }
+                    .thenByDescending { it.wifi }
+                    .thenBy { it.info.prefixLength },
+            )
             .firstOrNull()?.info
+    }
+
+    private fun sameSubnet(address: android.net.LinkAddress, gateway: String): Boolean {
+        val ip = ipv4(address.address.hostAddress ?: return false) ?: return false
+        val gw = ipv4(gateway) ?: return false
+        val prefix = address.prefixLength
+        if (prefix <= 0 || prefix > 32) return false
+        val mask = (-1L shl (32 - prefix)) and 0xFFFF_FFFFL
+        return (ip and mask) == (gw and mask)
     }
 
     private fun hostAddresses(info: SubnetInfo): List<String> {
