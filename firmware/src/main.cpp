@@ -20,7 +20,7 @@
 
 // The phone app finds this tag in a firmware.bin to show which version it
 // carries. The version below points into it, so the linker keeps the tag.
-static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.8.5";
+static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.8.6";
 static constexpr const char* kFirmwareVersion = kFirmwareTag + 11;
 static constexpr uint8_t kProtocolVersion = 6;
 
@@ -193,6 +193,23 @@ static portMUX_TYPE ackMux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t ackIds[8];
 static uint8_t ackCount = 0;
 static const char *kMenuNames[] = {"Networks", "LAN", "Bluetooth"};
+
+// Wi-Fi join for LAN scans. The Cardputer stays unassociated for sniffing, but
+// mDNS needs a real link, so the user can pick a network and type a password
+// here; the credentials persist in NVS and the LAN scan reconnects as needed.
+enum class WifiUi : uint8_t { None, Pick, Pass, Connecting };
+static WifiUi wifiUi = WifiUi::None;
+static std::vector<String> wifiList;
+static int wifiSel = 0;
+static int wifiListOffset = 0;
+static char wifiSsid[33] = "";
+static char wifiPass[65] = "";
+static uint8_t wifiPassLen = 0;
+static char wifiMsg[28] = "";
+static uint32_t wifiConnectUntil = 0;
+static bool wifiHaveCreds = false;
+// Swallows the key that opened the setup so its release is not read as a press.
+static bool wifiInputSeeded = false;
 
 static uint16_t lastStationCount = 0;
 static uint16_t lastProbeCount = 0;
@@ -1374,13 +1391,59 @@ static void rememberLan(const IPAddress &ip, const String &name) {
   keptLan.push_back(row);
 }
 
+static void loadWifiCreds() {
+  Preferences prefs;
+  prefs.begin("spectra", true);
+  const String ssid = prefs.getString("wifiSsid", "");
+  const String pass = prefs.getString("wifiPass", "");
+  prefs.end();
+  if (ssid.length() > 0) {
+    snprintf(wifiSsid, sizeof(wifiSsid), "%s", ssid.c_str());
+    snprintf(wifiPass, sizeof(wifiPass), "%s", pass.c_str());
+    wifiHaveCreds = true;
+  }
+}
+
+static void saveWifiCreds(const char *ssid, const char *pass) {
+  Preferences prefs;
+  prefs.begin("spectra", false);
+  prefs.putString("wifiSsid", ssid);
+  prefs.putString("wifiPass", pass);
+  prefs.end();
+  wifiHaveCreds = true;
+}
+
+// Brings the stored network up, blocking up to timeoutMs. Promiscuous sniffing
+// hops channels and drops any association, so the link is re-established here
+// on demand rather than kept alive.
+static bool ensureWifiLink(uint32_t timeoutMs) {
+  if (WiFi.status() == WL_CONNECTED) {
+    return true;
+  }
+  if (!wifiHaveCreds) {
+    return false;
+  }
+  WiFi.begin(wifiSsid, wifiPass);
+  const uint32_t until = millis() + timeoutMs;
+  while (WiFi.status() != WL_CONNECTED && static_cast<int32_t>(millis() - until) < 0) {
+    delay(100);
+  }
+  return WiFi.status() == WL_CONNECTED;
+}
+
 static void runLanScan() {
   keptLan.clear();
   lanNote[0] = '\0';
   if (WiFi.status() != WL_CONNECTED) {
-    snprintf(lanNote, sizeof(lanNote), "no Wi-Fi");
-    uiDirty = true;
-    return;
+    if (wifiHaveCreds) {
+      drawStatus("Wi-Fi link...");
+      ensureWifiLink(6000);
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+      snprintf(lanNote, sizeof(lanNote), wifiHaveCreds ? "link failed" : "no Wi-Fi");
+      uiDirty = true;
+      return;
+    }
   }
   drawStatus("Scanning LAN...");
   if (!MDNS.begin("spectra")) {
@@ -1522,9 +1585,15 @@ static int listRows() {
   return rows;
 }
 
+static void drawWifiUi();
+
 static void drawUi() {
   if (otaPercent >= 0) {
     drawUpdating();
+    return;
+  }
+  if (wifiUi != WifiUi::None) {
+    drawWifiUi();
     return;
   }
   auto &d = M5Cardputer.Display;
@@ -1564,7 +1633,7 @@ static void drawUi() {
 
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.setCursor(4, 58);
-  d.print("Fn+;. scroll  Fn+,/ mode  Enter");
+  d.print("Fn+;./,/ nav  Enter scan  Tab WiFi");
 
   const int maxOffset = std::max(0, listCount() - listRows());
   if (listOffset > maxOffset) {
@@ -1822,8 +1891,219 @@ static void moveList(int direction) {
   }
 }
 
+// Scans for networks and opens the picker. Blocks for the scan (~2 s).
+static void startWifiPick() {
+  drawStatus("Scanning Wi-Fi...");
+  wifiList.clear();
+  const int16_t n = WiFi.scanNetworks(false, true);
+  for (int16_t i = 0; i < n && wifiList.size() < 24; ++i) {
+    const String s = WiFi.SSID(i);
+    if (s.length() == 0) {
+      continue;
+    }
+    bool dup = false;
+    for (const String &have : wifiList) {
+      if (have == s) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup) {
+      wifiList.push_back(s);
+    }
+  }
+  WiFi.scanDelete();
+  wifiSel = 0;
+  wifiListOffset = 0;
+  wifiInputSeeded = false;
+  wifiUi = WifiUi::Pick;
+  uiDirty = true;
+}
+
+// Keyboard handling while the Wi-Fi setup screens are open.
+static void handleWifiKeys() {
+  const Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
+  static bool prevEnter = false, prevTab = false, prevDel = false;
+  static std::vector<char> prevWord;
+  static int heldDir = 0;
+  static uint32_t repeatAt = 0;
+
+  // First frame after opening: record the held keys without acting, so the key
+  // that opened the screen is not immediately read as a press here.
+  if (!wifiInputSeeded) {
+    prevEnter = keys.enter;
+    prevTab = keys.tab;
+    prevDel = keys.del;
+    prevWord.assign(keys.word.begin(), keys.word.end());
+    wifiInputSeeded = true;
+    return;
+  }
+
+  const bool enterEdge = keys.enter && !prevEnter;
+  const bool tabEdge = keys.tab && !prevTab;
+  const bool delEdge = keys.del && !prevDel;
+
+  if (wifiUi == WifiUi::Pick) {
+    const int dir = (keys.up && !keys.down) ? -1 : (keys.down && !keys.up) ? 1 : 0;
+    if (dir != 0 && !wifiList.empty()) {
+      const uint32_t now = millis();
+      const bool first = dir != heldDir;
+      if (first || static_cast<int32_t>(now - repeatAt) >= 0) {
+        wifiSel += dir;
+        if (wifiSel < 0) {
+          wifiSel = 0;
+        }
+        if (wifiSel >= static_cast<int>(wifiList.size())) {
+          wifiSel = static_cast<int>(wifiList.size()) - 1;
+        }
+        heldDir = dir;
+        repeatAt = now + (first ? 360 : 140);
+        uiDirty = true;
+      }
+    } else if (dir == 0) {
+      heldDir = 0;
+    }
+    if (tabEdge) {
+      wifiUi = WifiUi::None;
+      uiDirty = true;
+    } else if (enterEdge && !wifiList.empty()) {
+      snprintf(wifiSsid, sizeof(wifiSsid), "%s", wifiList[wifiSel].c_str());
+      wifiPass[0] = '\0';
+      wifiPassLen = 0;
+      wifiUi = WifiUi::Pass;
+      uiDirty = true;
+    }
+  } else if (wifiUi == WifiUi::Pass) {
+    if (tabEdge) {
+      wifiUi = WifiUi::Pick;
+      uiDirty = true;
+    } else if (enterEdge) {
+      saveWifiCreds(wifiSsid, wifiPass);
+      WiFi.begin(wifiSsid, wifiPass);
+      wifiConnectUntil = millis() + 12000;
+      snprintf(wifiMsg, sizeof(wifiMsg), "Connecting...");
+      wifiUi = WifiUi::Connecting;
+      uiDirty = true;
+    } else {
+      if (delEdge && wifiPassLen > 0) {
+        wifiPass[--wifiPassLen] = '\0';
+        uiDirty = true;
+      }
+      for (const char c : keys.word) {
+        if (std::find(prevWord.begin(), prevWord.end(), c) != prevWord.end()) {
+          continue;
+        }
+        if (c >= 32 && c < 127 && wifiPassLen < sizeof(wifiPass) - 1) {
+          wifiPass[wifiPassLen++] = c;
+          wifiPass[wifiPassLen] = '\0';
+          uiDirty = true;
+        }
+      }
+    }
+  } else if (wifiUi == WifiUi::Connecting) {
+    if (tabEdge) {
+      wifiUi = WifiUi::None;
+      uiDirty = true;
+    }
+  }
+
+  prevEnter = keys.enter;
+  prevTab = keys.tab;
+  prevDel = keys.del;
+  prevWord.assign(keys.word.begin(), keys.word.end());
+}
+
+// Watches a pending connection and reports the outcome.
+static void serviceWifiUi() {
+  if (wifiUi != WifiUi::Connecting) {
+    return;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiUi = WifiUi::None;
+    showBanner("Wi-Fi OK");
+    uiDirty = true;
+  } else if (static_cast<int32_t>(millis() - wifiConnectUntil) >= 0) {
+    snprintf(wifiMsg, sizeof(wifiMsg), "Failed, try again");
+    wifiUi = WifiUi::Pass;
+    showBanner("Wi-Fi failed");
+    uiDirty = true;
+  }
+}
+
+static void drawWifiUi() {
+  auto &d = M5Cardputer.Display;
+  d.setTextSize(1);
+  d.fillScreen(TFT_BLACK);
+  if (wifiUi == WifiUi::Pick) {
+    drawStatus("Wi-Fi: pick network");
+    const int rows = (d.height() - 26) / 12;
+    if (wifiSel < wifiListOffset) {
+      wifiListOffset = wifiSel;
+    }
+    if (wifiSel >= wifiListOffset + rows) {
+      wifiListOffset = wifiSel - rows + 1;
+    }
+    int y = 24;
+    for (int i = wifiListOffset; i < static_cast<int>(wifiList.size()); ++i) {
+      if (y > d.height() - 14) {
+        break;
+      }
+      const bool on = i == wifiSel;
+      d.fillRect(0, y - 1, d.width(), 12, on ? TFT_WHITE : TFT_BLACK);
+      d.setTextColor(on ? TFT_BLACK : TFT_WHITE, on ? TFT_WHITE : TFT_BLACK);
+      d.setCursor(4, y);
+      char shown[26];
+      snprintf(shown, sizeof(shown), "%s", wifiList[i].c_str());
+      d.print(shown);
+      y += 12;
+    }
+    if (wifiList.empty()) {
+      d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      d.setCursor(4, 40);
+      d.print("No networks found");
+    }
+    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    d.setCursor(4, d.height() - 10);
+    d.print("Fn+;. move  Enter pick  Tab back");
+  } else if (wifiUi == WifiUi::Pass) {
+    drawStatus("Wi-Fi: password");
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.setCursor(4, 28);
+    char ssidLine[40];
+    snprintf(ssidLine, sizeof(ssidLine), "SSID: %s", wifiSsid);
+    d.print(ssidLine);
+    d.setCursor(4, 44);
+    d.print("Pass: ");
+    char masked[34];
+    const uint8_t dots = wifiPassLen < 32 ? wifiPassLen : 32;
+    for (uint8_t i = 0; i < dots; ++i) {
+      masked[i] = '*';
+    }
+    masked[dots] = '\0';
+    d.print(masked);
+    d.print("_");
+    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    d.setCursor(4, d.height() - 10);
+    d.print("type  Del erase  Enter join  Tab");
+  } else {
+    drawStatus("Wi-Fi");
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.setCursor(4, 40);
+    d.print(wifiMsg);
+    d.setCursor(4, 56);
+    d.print(wifiSsid);
+    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    d.setCursor(4, d.height() - 10);
+    d.print("Tab cancel");
+  }
+}
+
 static void handleKeyboard() {
   if (scanInProgress || otaActive || otaJobBusy) {
+    return;
+  }
+  if (wifiUi != WifiUi::None) {
+    handleWifiKeys();
     return;
   }
   const Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
@@ -1873,6 +2153,13 @@ static void handleKeyboard() {
     taskEXIT_CRITICAL(&radioMux);
   }
   enterHeld = keys.enter;
+
+  // Tab opens the Wi-Fi setup so the LAN scan has a link to work on.
+  static bool tabHeld = false;
+  if (keys.tab && !tabHeld) {
+    startWifiPick();
+  }
+  tabHeld = keys.tab;
 }
 
 static void handleSideButton() {
@@ -1907,6 +2194,11 @@ void setup() {
   xTaskCreatePinnedToCore(otaTaskMain, "ota", 16384, nullptr, 1, &otaTask, 1);
   setupBle();
   loadStored();
+  loadWifiCreds();
+  if (wifiHaveCreds) {
+    // Bring the saved network up in the background so the LAN scan is ready.
+    WiFi.begin(wifiSsid, wifiPass);
+  }
   uiDirty = true;
 }
 
@@ -1918,6 +2210,7 @@ void loop() {
   if (!otaActive) {
     handleKeyboard();
     handleSideButton();
+    serviceWifiUi();
   }
 
   if (intervalChanged) {
@@ -1963,7 +2256,7 @@ void loop() {
   if (due && !scanRequested) {
     requestedKind = 0;
   }
-  if ((scanRequested || due) && !otaActive && !otaJobBusy) {
+  if ((scanRequested || due) && !otaActive && !otaJobBusy && wifiUi == WifiUi::None) {
     scanRequested = false;
     kind = requestedKind;
     scanInProgress = true;

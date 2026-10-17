@@ -23,7 +23,11 @@ choose **SD** → file → **Install**. Use the app image, not a merged one with
 bootloader and partitions, or it overwrites Launcher.
 
 The Cardputer advertises as `Spectra-XXXX`. Its screen shows the link state
-and the strongest networks; **S** or **Enter** scans from the keyboard.
+and the strongest networks; **S** or **Enter** scans from the keyboard. It
+works on its own: scans are saved to flash with the side button and uploaded
+the next time a phone connects. **Tab** opens Wi-Fi setup — pick a network and
+type the password — so the on-device LAN scan has a link to walk; the
+credentials are remembered and reconnect on their own.
 
 Firmware 0.6.0 and newer can also be installed from the Sensor tab: **Update
 firmware**, then pick `firmware.bin` from `pio run` — the same app image
