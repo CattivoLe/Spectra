@@ -40,6 +40,7 @@ class LanDevice(
     var macAddress: MacAddress? = null,
     hostnames: List<String> = emptyList(),
     var openPorts: List<DiscoveredPort> = emptyList(),
+    var services: List<ServiceAdvertisement> = emptyList(),
     var portsScanned: Boolean = false,
     var isGateway: Boolean = false,
     var isLocalDevice: Boolean = false,
@@ -66,11 +67,28 @@ class LanDevice(
     val manufacturer: String?
         get() {
             val mac = macAddress ?: return null
+            if (mac.isLocallyAdministered) return null
             return mac.vendor() ?: Catalog.suspiciousOui(mac.oui)
         }
 
+    val identity: HostIdentity
+        get() {
+            val upnp = profile.upnp
+            val found = HostIdentity.recognize(
+                names = hostnames,
+                services = services,
+                ports = openPorts.map { it.number },
+                vendor = manufacturer,
+                upnpName = upnp?.friendlyName,
+                upnpModel = upnp?.model,
+                upnpMaker = upnp?.manufacturer,
+                upnpType = upnp?.deviceType,
+            )
+            return if (isLocalDevice) HostIdentity.mergeBlanks(found, HostIdentity.thisDevice()) else found
+        }
+
     val displayName: String
-        get() = pinnedName ?: manufacturer ?: ipAddress
+        get() = pinnedName ?: identity.model ?: identity.manufacturer ?: manufacturer ?: ipAddress
 
     val notable: NotableDevice?
         get() = NotableDevice.classify(

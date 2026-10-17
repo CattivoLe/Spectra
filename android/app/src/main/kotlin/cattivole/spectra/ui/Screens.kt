@@ -41,16 +41,19 @@ import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.core.AccessPointReading
 import cattivole.spectra.core.Band
+import cattivole.spectra.core.AuthMode
 import cattivole.spectra.core.Capabilities
 import cattivole.spectra.core.ChannelAdvisor
+import cattivole.spectra.core.Cipher
 import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.RadioSource
+import cattivole.spectra.core.SecondaryChannel
 import cattivole.spectra.platform.DeviceBleScanner
 import cattivole.spectra.platform.PhoneWifiScanner
 import cattivole.spectra.platform.SensorLink
 
 @Composable
-fun NetworksScreen(model: SpectraModel, onOpen: (MacAddress) -> Unit, onSensor: () -> Unit) {
+fun NetworksScreen(model: SpectraModel, onOpen: (MacAddress) -> Unit, onOpenHost: (String) -> Unit, onSensor: () -> Unit) {
     model.generation
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf("signal") }
@@ -162,6 +165,8 @@ fun NetworksScreen(model: SpectraModel, onOpen: (MacAddress) -> Unit, onSensor: 
                         append(" · ")
                         append(network.latest.auth.name)
                         if (network.clients.isNotEmpty()) append(" · ${network.clients.size} clients")
+                        if (!network.wasInLastScan && network.isInRange) append(" · missed ${network.missedScans}")
+                        if (!network.isInRange) append(" · out of range")
                     },
                     trailing = "${network.latest.rssi}",
                     onClick = { onOpen(network.id) },
@@ -170,10 +175,16 @@ fun NetworksScreen(model: SpectraModel, onOpen: (MacAddress) -> Unit, onSensor: 
             if (model.store.probingDevices.isNotEmpty()) {
                 item { SectionTitle("${model.store.probingDevices.size} probing") }
                 items(model.store.probingDevices, key = { it.mac.text }) { device ->
-                    ListItem(
-                        headlineContent = { Text(device.displayName) },
-                        supportingContent = { Text(device.ssids.ifEmpty { listOf("broadcast") }.joinToString()) },
-                        trailingContent = { Text("${device.rssi}") },
+                    val host = lanHost(model, device.mac)
+                    ClickRow(
+                        title = device.displayName,
+                        subtitle = buildString {
+                            append("ch ${device.channel} · ")
+                            append(device.ssids.ifEmpty { listOf("broadcast") }.joinToString())
+                            if (host != null && host.displayName != device.displayName) append(" · on LAN ${host.displayName}")
+                        },
+                        trailing = "${device.rssi}",
+                        onClick = { host?.let { onOpenHost(it.ipAddress) } },
                     )
                 }
             }
@@ -190,7 +201,7 @@ private fun phoneRadioNote(model: SpectraModel): String? = when (model.phone.sta
 }
 
 @Composable
-fun NetworkDetail(model: SpectraModel, id: MacAddress?) {
+fun NetworkDetail(model: SpectraModel, id: MacAddress?, onOpenHost: (String) -> Unit) {
     model.generation
     val network = id?.let { model.store.network(it) }
     ScreenColumn(network?.title ?: "Network") {
@@ -209,26 +220,52 @@ fun NetworkDetail(model: SpectraModel, id: MacAddress?) {
                     }
                 }
                 Sparkline(network.samples.map { it.rssi }, signalColor(reading.rssi), Modifier.padding(horizontal = 16.dp))
+                Text(
+                    "avg ${network.averageRssi} · min ${network.weakestRssi} · max ${network.strongestRssi}",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            networkNotes(reading, network.revealedSsid != null).forEach { note ->
+                item {
+                    Text(note, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+                }
             }
             item { InfoLine("BSSID", reading.bssid.text) }
+            item {
+                InfoLine(
+                    "Address type",
+                    if (reading.bssid.isLocallyAdministered) "Randomised" else "Maker-assigned (OUI ${reading.bssid.oui})",
+                )
+            }
+            reading.bssid.vendor()?.let { item { InfoLine("Maker", it) } }
             item { InfoLine("Band", reading.band.label) }
-            item { InfoLine("Channel", "${reading.channel} · ${reading.frequencyMHz} MHz · ${reading.channelWidthMHz} MHz") }
-            item { InfoLine("Security", "${reading.auth.name} · ${reading.pairwiseCipher.name}") }
+            item { InfoLine("Channel", "${reading.channel} · ${reading.frequencyMHz} MHz · ${widthText(reading)}") }
+            item { InfoLine("Authentication", reading.auth.name) }
+            item { InfoLine("Pairwise cipher", reading.pairwiseCipher.name) }
+            item { InfoLine("Group cipher", reading.groupCipher.name) }
+            item { InfoLine("WPS", if (reading.capabilities and Capabilities.WPS != 0) "On" else "Off") }
             item { InfoLine("Generation", Capabilities.generation(reading.capabilities, reading.phyNote)) }
             item { InfoLine("Standards", Capabilities.standards(reading.capabilities)) }
+            if (reading.capabilities and Capabilities.FTM != 0) item { InfoLine("Fine Timing Measurement", "Supported") }
+            if (reading.capabilities and Capabilities.LONG_RANGE != 0) item { InfoLine("Long range", "802.11 LR") }
             reading.countryCode?.let { item { InfoLine("Country", it) } }
             network.revealedSsid?.let { item { InfoLine("Revealed name", it) } }
             network.vendorInfo?.let { info ->
                 item { InfoLine("WPS device", listOf(info.deviceName, info.manufacturer).filter { it.isNotEmpty() }.joinToString(" · ")) }
             }
             network.traffic?.let { traffic ->
-                item {
-                    InfoLine(
-                        "Traffic",
-                        listOfNotNull(traffic.formattedBytes, model.store.lastScanDurationMs?.let { traffic.estimatedBitrate(it) }).joinToString(" · "),
-                    )
+                item { InfoLine("Volume", traffic.formattedBytes) }
+                item { InfoLine("Packets", traffic.packets.toString()) }
+                model.store.lastScanDurationMs?.let { traffic.estimatedBitrate(it) }?.let { bitrate ->
+                    item { InfoLine("Est. bitrate", bitrate) }
                 }
             }
+            item { InfoLine("First seen", clock(network.firstSeen)) }
+            item { InfoLine("Last seen", ago(network.lastSeen)) }
+            item { InfoLine("Readings", network.samples.size.toString()) }
+            if (network.missedScans > 0) item { InfoLine("Missed scans", network.missedScans.toString()) }
             if (network.source == RadioSource.PHONE) {
                 item {
                     Text(
@@ -242,10 +279,19 @@ fun NetworkDetail(model: SpectraModel, id: MacAddress?) {
                 item { SectionTitle("Clients") }
             }
             items(network.clients, key = { it.mac.text }) { client ->
-                ListItem(
-                    headlineContent = { Text(client.displayName) },
-                    supportingContent = { Text(client.mac.text) },
-                    trailingContent = { Text("${client.rssi}") },
+                val host = lanHost(model, client.mac)
+                val probe = model.store.probingDevices.firstOrNull { it.mac == client.mac }
+                ClickRow(
+                    title = client.displayName,
+                    subtitle = buildString {
+                        append(client.mac.text)
+                        append(" · ${client.rssi} dBm")
+                        if (client.mac.isLocallyAdministered) append(" · random")
+                        probe?.let { append(" · ch ${it.channel}") }
+                        if (host != null) append(" · on LAN ${host.displayName}")
+                    },
+                    trailing = if (client.isAssociated) "linked" else "probe",
+                    onClick = { host?.let { onOpenHost(it.ipAddress) } },
                 )
             }
         }
@@ -305,6 +351,7 @@ fun LanScreen(model: SpectraModel, onOpen: (String) -> Unit) {
     model.generation
     ScreenColumn(
         "LAN",
+        subtitle = lanStatus(model),
         actions = {
             TextButton(onClick = { if (model.lan.scanning) model.lan.stop() else model.lan.scan() }) {
                 Text(if (model.lan.scanning) "Stop" else "Scan")
@@ -312,19 +359,17 @@ fun LanScreen(model: SpectraModel, onOpen: (String) -> Unit) {
         },
     ) {
         SimpleList {
-            item {
-                val subnet = model.lan.subnet
-                Text(
-                    buildString {
-                        append(model.lan.progress.ifEmpty { "Scan lists neighbours on the Wi-Fi you are joined to." })
-                        if (subnet != null) append("\n${subnet.localIp}/${subnet.prefixLength}")
-                        subnet?.gateway?.let { append(" · gateway $it") }
-                        if (model.lan.widePrefix) append("\nThe prefix is wider than /24, so only the local /24 is walked.")
-                    },
-                    modifier = Modifier.padding(16.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                if (model.lan.scanning) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (model.lan.scanning) {
+                item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+            }
+            if (model.lan.widePrefix) {
+                item {
+                    Text(
+                        "The prefix is wider than /24, so only the local /24 is walked.",
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
             items(model.lan.devices, key = { it.ipAddress }) { device ->
                 ClickRow(
@@ -332,6 +377,10 @@ fun LanScreen(model: SpectraModel, onOpen: (String) -> Unit) {
                     subtitle = buildString {
                         append(device.ipAddress)
                         device.macAddress?.let { append(" · ${it.text}") }
+                        listOf(device.identity.manufacturer, device.identity.operatingSystem, device.identity.model)
+                            .filterNotNull()
+                            .filter { it !in device.displayName }
+                            .forEach { append(" · $it") }
                         device.notable?.let { append(" · ${it.title}") }
                         if (device.isGateway) append(" · gateway")
                         if (device.isLocalDevice) append(" · this phone")
@@ -358,9 +407,23 @@ fun LanDetail(model: SpectraModel, ip: String) {
             device.macAddress?.let { mac ->
                 item { InfoLine("Hardware", mac.text) }
                 item { InfoLine("Address type", if (mac.isLocallyAdministered) "Locally administered" else "Universal") }
-                device.manufacturer?.let { item { InfoLine("Maker", it) } }
+                device.identity.manufacturer?.let { item { InfoLine("Manufacturer", it) } }
+                device.identity.operatingSystem?.let { item { InfoLine("System", it) } }
+                device.identity.model?.let { item { InfoLine("Model", it) } }
+                device.manufacturer?.takeIf { maker ->
+                    device.identity.manufacturer?.let { maker.contains(it, true) || it.contains(maker, true) } != true
+                }?.let { item { InfoLine("Maker", it) } }
             }
             device.notable?.let { item { InfoLine("Notable", it.title) } }
+            if (device.services.isNotEmpty()) item { SectionTitle("Advertised") }
+            items(device.services, key = { "${it.type}-${it.name}" }) { service ->
+                ListItem(
+                    headlineContent = { Text(service.kind) },
+                    supportingContent = {
+                        Text(listOfNotNull(service.name, service.model?.takeIf { model -> model !in service.name }).joinToString(" · "))
+                    },
+                )
+            }
             device.profile.upnp?.let { upnp ->
                 upnp.friendlyName?.let { item { InfoLine("UPnP name", it) } }
                 upnp.manufacturer?.let { item { InfoLine("Manufacturer", it) } }
@@ -370,7 +433,17 @@ fun LanDetail(model: SpectraModel, ip: String) {
             device.profile.windows?.let { windows ->
                 windows.computerName?.let { item { InfoLine("Computer", it) } }
                 windows.domain?.let { item { InfoLine("Domain", it) } }
-                if (windows.shares.isNotEmpty()) item { InfoLine("Guest shares", windows.shares.joinToString()) }
+                if (windows.shares.isEmpty() && windows.guestSession) {
+                    item {
+                        Text(
+                            "Guest connection found no shared folders.",
+                            modifier = Modifier.padding(16.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                } else if (windows.shares.isNotEmpty()) {
+                    item { InfoLine("Guest shares", windows.shares.joinToString()) }
+                }
             }
             if (device.openPorts.isNotEmpty()) item { SectionTitle("Open ports") }
             items(device.openPorts, key = { it.number }) { port ->
@@ -393,8 +466,11 @@ fun BluetoothScreen(model: SpectraModel, onOpen: (String) -> Unit) {
         query.isBlank() || device.displayName.contains(query, true) || device.address.contains(query, true) ||
             device.companyName?.contains(query, true) == true
     }.sortedWith(compareByDescending<cattivole.spectra.core.BleDevice> { it.isNearby(model.ble.now) }.thenByDescending { it.orderRssi })
+    val heard = model.ble.devices.values
+    val nearby = heard.count { it.isNearby(model.ble.now) }
     ScreenColumn(
         "Bluetooth",
+        subtitle = bluetoothStatus(model.ble.state, nearby, heard.size),
         actions = {
             TextButton(onClick = { if (model.ble.state is DeviceBleScanner.State.Scanning) model.ble.stop() else model.ble.start() }) {
                 Text(if (model.ble.state is DeviceBleScanner.State.Scanning) "Stop" else "Scan")
@@ -403,20 +479,9 @@ fun BluetoothScreen(model: SpectraModel, onOpen: (String) -> Unit) {
     ) {
         SimpleList {
             item {
-                val status = when (val state = model.ble.state) {
-                    is DeviceBleScanner.State.Scanning -> "${rows.count { it.isNearby(model.ble.now) }} nearby"
-                    is DeviceBleScanner.State.Unavailable -> when (state.why) {
-                        DeviceBleScanner.Availability.POWERED_OFF -> "Bluetooth is off"
-                        DeviceBleScanner.Availability.UNAUTHORIZED -> "Bluetooth permission is off"
-                        DeviceBleScanner.Availability.UNSUPPORTED -> "This phone has no Bluetooth radio"
-                        DeviceBleScanner.Availability.STARTING -> "Starting"
-                    }
-                    DeviceBleScanner.State.Idle -> "Scan is stopped"
-                }
-                Text(status, modifier = Modifier.padding(16.dp))
                 Text(
                     "Android reports the hardware address. iOS does not. A resolvable private address still changes, so the same device can reappear under a new one.",
-                    modifier = Modifier.padding(horizontal = 16.dp),
+                    modifier = Modifier.padding(16.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -443,6 +508,20 @@ fun BluetoothScreen(model: SpectraModel, onOpen: (String) -> Unit) {
                     onClick = { onOpen(device.address) },
                 )
             }
+        }
+    }
+}
+
+private fun bluetoothStatus(state: DeviceBleScanner.State, nearby: Int, total: Int): String {
+    val counts = if (nearby == total) "$nearby nearby" else "$nearby nearby · $total seen"
+    return when (state) {
+        is DeviceBleScanner.State.Scanning -> "Scanning · $counts"
+        DeviceBleScanner.State.Idle -> "Paused · $counts"
+        is DeviceBleScanner.State.Unavailable -> when (state.why) {
+            DeviceBleScanner.Availability.POWERED_OFF -> "Bluetooth is off"
+            DeviceBleScanner.Availability.UNAUTHORIZED -> "Bluetooth permission is off"
+            DeviceBleScanner.Availability.UNSUPPORTED -> "This phone has no Bluetooth radio"
+            DeviceBleScanner.Availability.STARTING -> "Starting"
         }
     }
 }
@@ -554,7 +633,7 @@ fun SensorScreen(model: SpectraModel) {
                 item { SectionTitle("Automatic scan") }
                 items(SensorLink.liveIntervals) { seconds ->
                     ClickRow(
-                        title = if (seconds == 0) "Only when asked" else "Every $seconds s",
+                        title = SensorLink.intervalTitle(seconds),
                         subtitle = if (link.liveInterval == seconds) "Current" else "Tap to use",
                         trailing = if (link.liveInterval == seconds) "On" else "",
                         onClick = { link.setLiveInterval(seconds) },
@@ -563,6 +642,8 @@ fun SensorScreen(model: SpectraModel) {
                 link.info?.let { info ->
                     item { HorizontalDivider() }
                     item { InfoLine("Firmware", info.fw) }
+                    item { InfoLine("Reported interval", SensorLink.intervalTitle(info.interval)) }
+                    item { InfoLine("Updates", if (info.ota) "From the app" else "Not from the app") }
                     link.batteryLevel?.let { level ->
                         item { InfoLine("Battery", if (link.isCharging == true) "$level% charging" else "$level%") }
                     }
@@ -586,5 +667,62 @@ fun SensorScreen(model: SpectraModel) {
                 }
             }
         }
+    }
+}
+
+private fun networkNotes(reading: AccessPointReading, revealed: Boolean): List<String> {
+    val notes = mutableListOf<String>()
+    when (reading.auth.strength) {
+        AuthMode.Strength.NONE -> notes += "Open network: traffic is not encrypted, anyone nearby can read it."
+        AuthMode.Strength.WEAK -> notes += "${reading.auth.name} is obsolete and can be broken in minutes."
+        else -> Unit
+    }
+    if (reading.capabilities and Capabilities.WPS != 0) {
+        notes += "WPS is on. Its PIN method is a known weak point; turn it off if this is your router."
+    }
+    if (reading.groupCipher == Cipher.TKIP || reading.pairwiseCipher == Cipher.TKIP) {
+        notes += "TKIP is enabled for old devices and weakens the whole network."
+    }
+    if (reading.bssid.isLocallyAdministered) {
+        notes += "Randomised address: usually a phone hotspot, a guest network or a mesh node."
+    }
+    if (revealed) {
+        notes += "Hidden SSID revealed from a probe response or association frame — the AP hides its name from beacons."
+    }
+    return notes
+}
+
+private fun widthText(reading: AccessPointReading): String = when (reading.secondaryChannel) {
+    SecondaryChannel.ABOVE -> "${reading.channelWidthMHz} MHz, secondary above"
+    SecondaryChannel.BELOW -> "${reading.channelWidthMHz} MHz, secondary below"
+    else -> "${reading.channelWidthMHz} MHz"
+}
+
+private fun clock(millis: Long): String =
+    java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(millis))
+
+private fun ago(millis: Long): String {
+    val minutes = ((System.currentTimeMillis() - millis) / 60_000).coerceAtLeast(0)
+    return when {
+        minutes < 1 -> "just now"
+        minutes < 60 -> "${minutes}m ago"
+        else -> "${minutes / 60}h ${minutes % 60}m ago"
+    }
+}
+
+private fun lanHost(model: SpectraModel, mac: MacAddress) =
+    model.lan.devices.firstOrNull { it.macAddress == mac }
+
+private fun lanStatus(model: SpectraModel): String {
+    val lan = model.lan
+    if (lan.scanning) {
+        val phase = lan.progress.ifBlank { "Scanning" }
+        return if (phase.startsWith("Scanning")) phase else "Scanning · $phase"
+    }
+    val info = lan.subnet ?: return "Tap Scan to look at this Wi-Fi"
+    return buildString {
+        append(info.localIp)
+        append("/${info.prefixLength}")
+        info.gateway?.let { append(" · $it") }
     }
 }

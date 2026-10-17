@@ -13,6 +13,7 @@ import cattivole.spectra.core.LanIdentity
 import cattivole.spectra.core.LanProfile
 import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.RtspService
+import cattivole.spectra.core.ServiceAdvertisement
 import cattivole.spectra.core.SubnetInfo
 import cattivole.spectra.core.UPnPIdentity
 import cattivole.spectra.core.WindowsHost
@@ -104,7 +105,8 @@ class LanScanner(context: Context) {
                                 Triple(ip, ports, profile)
                             }
                         }.awaitAll()
-                        Assembled(arp, names.await(), ssdp.await(), profiles)
+                        val mdns = names.await()
+                        Assembled(arp, mdns.names, mdns.services, ssdp.await(), profiles)
                     }
                 }
                 apply(info, found)
@@ -133,9 +135,10 @@ class LanScanner(context: Context) {
             val previous = known[ip]
             val mac = found.arp[ip]?.let { MacAddress.parse(it) }
             val names = buildList {
-                found.mdns[ip]?.let { add(it) }
+                found.mdns[ip]?.let { addAll(it) }
                 found.ssdp[ip]?.server?.let { add(it) }
             }
+            val services = found.services[ip].orEmpty().ifEmpty { previous?.services.orEmpty() }
             val described = describedHosts[ip]
             val withUpnp = if (described == null) {
                 profile
@@ -148,6 +151,7 @@ class LanScanner(context: Context) {
                 macAddress = mac ?: previous?.macAddress,
                 hostnames = names.ifEmpty { previous?.hostnames.orEmpty() },
                 openPorts = ports,
+                services = services,
                 portsScanned = true,
                 isGateway = ip == info.gateway,
                 isLocalDevice = ip == info.localIp,
@@ -240,14 +244,18 @@ class LanScanner(context: Context) {
             val head = if (https) exchangeTls(ip, port, LanIdentity.httpRequest(ip, "HEAD"))
             else exchangeTcp(ip, port, LanIdentity.httpRequest(ip, "HEAD"), 2000)
             val body = head ?: return@mapNotNull null
-            val parsed = LanIdentity.parseHttp(body) ?: return@mapNotNull null
-            val full = if (parsed.title == null) {
-                val get = if (https) exchangeTls(ip, port, LanIdentity.httpRequest(ip, "GET"))
-                else exchangeTcp(ip, port, LanIdentity.httpRequest(ip, "GET"), 2000, 65_536)
-                get?.let { LanIdentity.parseHttp(it) } ?: parsed
-            } else {
-                parsed
+            var parsed = LanIdentity.parseHttp(body) ?: return@mapNotNull null
+            for (version in listOf("1.0", "1.1")) {
+                val rejected = LanIdentity.httpMethodRejected(parsed.status)
+                val empty = parsed.server == null && parsed.title == null
+                if (if (version == "1.1") !rejected else !(rejected || empty)) continue
+                val get = if (https) exchangeTls(ip, port, LanIdentity.httpRequest(ip, "GET", version))
+                else exchangeTcp(ip, port, LanIdentity.httpRequest(ip, "GET", version), 2000, 65_536)
+                val richer = get?.let { LanIdentity.parseHttp(it) } ?: continue
+                if (LanIdentity.httpPrefers(richer.status, richer.title, parsed.status, parsed.title)) parsed = richer
+                if (!LanIdentity.httpMethodRejected(parsed.status)) break
             }
+            val full = parsed
             HttpBanner(port, https, full.status, full.server, full.poweredBy, full.title, full.realm)
         }
     }
@@ -358,10 +366,14 @@ class LanScanner(context: Context) {
 
     private val describedHosts = linkedMapOf<String, UPnPIdentity>()
 
-    private suspend fun discoverMdns(): Map<String, String> = withContext(Dispatchers.Main.immediate) {
-        val manager = app.getSystemService(NsdManager::class.java) ?: return@withContext emptyMap()
-        val names = linkedMapOf<String, String>()
-        val types = listOf("_http._tcp", "_googlecast._tcp", "_hap._tcp", "_airplay._tcp", "_ipp._tcp", "_smb._tcp")
+    private suspend fun discoverMdns(): MdnsFound = withContext(Dispatchers.Main.immediate) {
+        val manager = app.getSystemService(NsdManager::class.java) ?: return@withContext MdnsFound()
+        val names = linkedMapOf<String, MutableList<String>>()
+        val services = linkedMapOf<String, MutableList<ServiceAdvertisement>>()
+        val types = listOf(
+            "_device-info._tcp", "_companion-link._tcp", "_apple-mobdev2._tcp", "_airplay._tcp", "_raop._tcp", "_googlecast._tcp",
+            "_http._tcp", "_hap._tcp", "_ipp._tcp", "_smb._tcp",
+        )
         val listeners = mutableListOf<NsdManager.DiscoveryListener>()
         for (type in types) {
             val listener = object : NsdManager.DiscoveryListener {
@@ -376,8 +388,19 @@ class LanScanner(context: Context) {
                             override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = Unit
                             override fun onServiceResolved(resolved: NsdServiceInfo) {
                                 val host = resolved.host?.hostAddress ?: return
-                                val name = LanDevice.usefulHostname(resolved.serviceName, host) ?: return
-                                names[host] = name
+                                val name = LanDevice.usefulHostname(resolved.serviceName, host) ?: resolved.serviceName
+                                fun keep(value: String?) {
+                                    val shown = value?.let { LanDevice.usefulHostname(it, host) } ?: return
+                                    val list = names.getOrPut(host) { mutableListOf() }
+                                    if (shown !in list) list.add(shown)
+                                }
+                                keep(name)
+                                keep(attribute(resolved, "fn"))
+                                val model = attribute(resolved, "model") ?: attribute(resolved, "md")
+                                val list = services.getOrPut(host) { mutableListOf() }
+                                if (list.none { it.type == resolved.serviceType && it.name == name }) {
+                                    list.add(ServiceAdvertisement(resolved.serviceType, name, model))
+                                }
                             }
                         })
                     } catch (_: Exception) {
@@ -397,7 +420,12 @@ class LanScanner(context: Context) {
             } catch (_: Exception) {
             }
         }
-        names
+        MdnsFound(names, services)
+    }
+
+    private fun attribute(info: NsdServiceInfo, key: String): String? {
+        val bytes = info.attributes[key] ?: return null
+        return bytes.toString(Charsets.UTF_8).trim().ifBlank { null }
     }
 
     private fun readArp(): Map<String, String> {
@@ -545,9 +573,15 @@ class LanScanner(context: Context) {
         listeners.toList().forEach { it() }
     }
 
+    private data class MdnsFound(
+        val names: Map<String, List<String>> = emptyMap(),
+        val services: Map<String, List<ServiceAdvertisement>> = emptyMap(),
+    )
+
     private data class Assembled(
         val arp: Map<String, String>,
-        val mdns: Map<String, String>,
+        val mdns: Map<String, List<String>>,
+        val services: Map<String, List<ServiceAdvertisement>>,
         val ssdp: Map<String, LanIdentity.Ssdp>,
         val profiles: List<Triple<String, List<DiscoveredPort>, LanProfile>>,
     )

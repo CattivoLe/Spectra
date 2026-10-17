@@ -36,7 +36,11 @@ struct DeviceDetailView: View {
                                 if let notable = device.notable {
                                     badge(notable == .camera ? "Camera" : "IoT", color: notable == .camera ? .red : .orange)
                                 }
-                                if let mfr = device.manufacturer {
+                                if !device.identity.label.isEmpty {
+                                    Text(device.identity.label)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                } else if let mfr = device.manufacturer {
                                     Text(mfr)
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
@@ -68,6 +72,15 @@ struct DeviceDetailView: View {
                         InfoRow("Address type", value: String(localized: "Maker-assigned (\(mfr))"))
                     }
                 }
+                if let maker = device.identity.manufacturer {
+                    InfoRow("Manufacturer", value: maker)
+                }
+                if let system = device.identity.operatingSystem {
+                    InfoRow("System", value: system)
+                }
+                if let model = device.identity.model {
+                    InfoRow("Model", value: model)
+                }
                 if !device.hostnames.isEmpty {
                     ForEach(device.hostnames, id: \.self) { name in
                         InfoRow("Hostname") {
@@ -86,6 +99,18 @@ struct DeviceDetailView: View {
                         if let maker = upnp.manufacturer { InfoRow("Manufacturer", value: maker) }
                         if let type = upnp.deviceType { InfoRow("Device type", value: type) }
                         if let server = upnp.server { InfoRow("Server", value: server) }
+                    }
+                    if !device.services.isEmpty {
+                        ForEach(Array(device.services.enumerated()), id: \.offset) { _, service in
+                            HStack(spacing: 12) {
+                                Text(service.kind)
+                                    .lineLimit(1)
+                                Spacer(minLength: 12)
+                                Text(serviceDetail(service))
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                        }
                     }
                     if let windows = device.profile.windows {
                         if let name = windows.computerName { InfoRow("Windows name", value: name) }
@@ -165,6 +190,14 @@ struct DeviceDetailView: View {
         }
         .navigationTitle(device.ipAddress)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func serviceDetail(_ service: ServiceAdvertisement) -> String {
+        var parts = [service.name]
+        if let model = service.model, !service.name.localizedCaseInsensitiveContains(model) {
+            parts.append(model)
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func portLine(_ title: LocalizedStringKey, detail: String) -> some View {

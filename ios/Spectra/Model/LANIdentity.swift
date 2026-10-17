@@ -217,8 +217,25 @@ nonisolated enum LANIdentity {
         )
     }
 
-    static func httpRequest(host: String, method: String) -> Data {
-        Data(("\(method) / HTTP/1.0\r\nHost: \(host)\r\nUser-Agent: Spectra\r\nConnection: close\r\n\r\n").utf8)
+    static func httpRequest(host: String, method: String, version: String = "1.0") -> Data {
+        Data(("\(method) / HTTP/\(version)\r\nHost: \(host)\r\nUser-Agent: Spectra\r\nConnection: close\r\n\r\n").utf8)
+    }
+
+    /// Router pages often answer HEAD with 501 and still serve the page for GET.
+    static func httpMethodRejected(_ status: Int?) -> Bool {
+        status == 400 || status == 405 || status == 501 || status == 505
+    }
+
+    /// A later response is worth keeping when it is a real page rather than the HEAD error.
+    static func httpPrefers(status: Int?, title: String?, over otherStatus: Int?, otherTitle: String?) -> Bool {
+        func rank(_ status: Int?) -> Int {
+            guard let status else { return 3 }
+            if (200..<400).contains(status) { return 0 }
+            if status == 401 || status == 403 { return 1 }
+            return 2
+        }
+        if rank(status) != rank(otherStatus) { return rank(status) < rank(otherStatus) }
+        return title != nil && otherTitle == nil
     }
 
     static func parseHTTP(_ data: Data) -> (status: Int?, server: String?, poweredBy: String?, title: String?, realm: String?)? {
@@ -607,6 +624,278 @@ private extension Data {
         appendU32(UInt32(value & 0xFFFF_FFFF))
         appendU32(UInt32(value >> 32))
     }
+}
+
+/// A Bonjour service a host advertised, including the model string from its TXT record.
+nonisolated struct ServiceAdvertisement: Equatable, Sendable {
+    var type: String
+    var name: String
+    var model: String?
+
+    /// A short name for the service type, for the host card.
+    var kind: String {
+        let folded = type.lowercased()
+        if folded.contains("apple-mobdev") { return "iPhone sync" }
+        if folded.contains("companion-link") { return "Continuity" }
+        if folded.contains("device-info") { return "Device info" }
+        if folded.contains("airplay") { return "AirPlay" }
+        if folded.contains("raop") { return "AirPlay audio" }
+        if folded.contains("googlecast") { return "Google Cast" }
+        if folded.contains("hap") { return "HomeKit" }
+        if folded.contains("spotify") { return "Spotify" }
+        if folded.contains("ipp") || folded.contains("printer") { return "Printer" }
+        if folded.contains("smb") { return "SMB" }
+        if folded.contains("ssh") { return "SSH" }
+        if folded.contains("http") { return "Web" }
+        return folded
+    }
+}
+
+/// Maker, operating system and model learned from names, Bonjour and open ports.
+nonisolated struct HostIdentity: Equatable, Sendable {
+    var manufacturer: String?
+    var operatingSystem: String?
+    var model: String?
+
+    var label: String {
+        [manufacturer, operatingSystem, model].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    static func recognize(
+        names: [String],
+        services: [ServiceAdvertisement] = [],
+        ports: [Int] = [],
+        vendor: String? = nil,
+        upnpName: String? = nil,
+        upnpModel: String? = nil,
+        upnpMaker: String? = nil,
+        upnpType: String? = nil
+    ) -> HostIdentity {
+        var found = HostIdentity()
+        let texts = names + services.map(\.name) + services.compactMap(\.model) + [upnpName, upnpModel].compactMap { $0 }
+        for text in texts {
+            if let apple = appleIdentity(in: text) {
+                found.apply(apple, overwrite: true)
+            }
+        }
+        for text in texts {
+            if let named = namedIdentity(in: text) {
+                found.apply(named, overwrite: false)
+            }
+        }
+        if let upnpMaker {
+            found.apply(upnpHint(maker: upnpMaker, type: upnpType, name: upnpName), overwrite: false)
+        }
+        let types = services.map { $0.type.lowercased() }
+        // AirPlay and RAOP are licensed widely (Samsung TVs, Eversolo). Only
+        // Apple's own discovery services identify the maker.
+        if types.contains(where: { $0.contains("device-info") || $0.contains("companion-link") }) {
+            found.apply(HostIdentity(manufacturer: "Apple"), overwrite: false)
+        }
+        if types.contains(where: { $0.contains("apple-mobdev") }) {
+            let ipad = texts.contains { $0.range(of: "ipad", options: .caseInsensitive) != nil }
+            found.apply(
+                HostIdentity(manufacturer: "Apple", operatingSystem: ipad ? "iPadOS" : "iOS", model: ipad ? "iPad" : "iPhone"),
+                overwrite: false
+            )
+        }
+        if ports.contains(62078) {
+            found.apply(HostIdentity(manufacturer: "Apple", operatingSystem: "iOS", model: "iPhone"), overwrite: false)
+        }
+        if ports.contains(548) {
+            found.apply(HostIdentity(manufacturer: "Apple", operatingSystem: "macOS"), overwrite: false)
+        }
+        if ports.contains(3389) || ports.contains(5357) {
+            found.apply(HostIdentity(manufacturer: "Microsoft", operatingSystem: "Windows"), overwrite: false)
+        }
+        if found.manufacturer == nil, let vendor, let short = shortVendor(vendor) {
+            found.manufacturer = short
+        }
+        return found
+    }
+
+    /// The phone running Spectra. Bonjour often never resolves the host back to itself.
+    static func thisDevice() -> HostIdentity {
+        var system = utsname()
+        uname(&system)
+        let machine = withUnsafePointer(to: &system.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) }
+        }
+        if let parsed = appleIdentity(in: machine) { return parsed }
+        return HostIdentity(manufacturer: "Apple", operatingSystem: "iOS", model: "iPhone")
+    }
+
+    func fillingBlanks(from other: HostIdentity) -> HostIdentity {
+        var copy = self
+        copy.apply(other, overwrite: false)
+        return copy
+    }
+
+    private mutating func apply(_ other: HostIdentity, overwrite: Bool) {
+        if let value = other.manufacturer, manufacturer == nil || overwrite { manufacturer = value }
+        if let value = other.operatingSystem, operatingSystem == nil || overwrite { operatingSystem = value }
+        if let value = other.model, model == nil || (overwrite && other.model != nil) { model = value }
+    }
+
+    private static func appleIdentity(in text: String) -> HostIdentity? {
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = appleID.firstMatch(in: text, range: range),
+              let span = Range(match.range(at: 1), in: text) else { return nil }
+        let id = String(text[span])
+        let key = id.lowercased()
+        if key.hasPrefix("iphone") || key.hasPrefix("ipod") {
+            return HostIdentity(manufacturer: "Apple", operatingSystem: "iOS", model: appleModels[id] ?? "iPhone")
+        }
+        if key.hasPrefix("ipad") {
+            return HostIdentity(manufacturer: "Apple", operatingSystem: "iPadOS", model: appleModels[id] ?? "iPad")
+        }
+        if key.hasPrefix("watch") {
+            return HostIdentity(manufacturer: "Apple", operatingSystem: "watchOS", model: "Apple Watch")
+        }
+        if key.hasPrefix("appletv") {
+            return HostIdentity(manufacturer: "Apple", operatingSystem: "tvOS", model: "Apple TV")
+        }
+        if key.hasPrefix("audioaccessory") {
+            return HostIdentity(manufacturer: "Apple", operatingSystem: "audioOS", model: "HomePod")
+        }
+        return HostIdentity(manufacturer: "Apple", operatingSystem: "macOS", model: appleModels[id] ?? "Mac")
+    }
+
+    private static func namedIdentity(in text: String) -> HostIdentity? {
+        let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+        if folded.contains("iphone") || folded.contains("ipod") {
+            return HostIdentity(manufacturer: "Apple", operatingSystem: "iOS", model: "iPhone")
+        }
+        if folded.contains("ipad") {
+            return HostIdentity(manufacturer: "Apple", operatingSystem: "iPadOS", model: "iPad")
+        }
+        if folded.contains("macbook") || folded.contains("imac") || folded.contains("mac mini") || folded.contains("mac studio") {
+            return HostIdentity(manufacturer: "Apple", operatingSystem: "macOS", model: folded.contains("macbook") ? "MacBook" : "Mac")
+        }
+        if folded.contains("apple tv") || folded.contains("appletv") {
+            return HostIdentity(manufacturer: "Apple", operatingSystem: "tvOS", model: "Apple TV")
+        }
+        if let generation = foldGeneration(folded) {
+            let title = productTitle(text)
+            let named = title?.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).contains("fold") == true
+            return HostIdentity(manufacturer: "Samsung", operatingSystem: "Android", model: named ? title : "Galaxy Z Fold\(generation)")
+        }
+        if folded.contains("z fold") || folded.contains("galaxy fold") || folded.contains("samsung fold") {
+            let title = productTitle(text)
+            let named = title?.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).contains("fold") == true
+            return HostIdentity(manufacturer: "Samsung", operatingSystem: "Android", model: named ? title : "Galaxy Z Fold")
+        }
+        if folded.replacingOccurrences(of: " ", with: "").range(of: #"smf7\d{2}"#, options: .regularExpression) != nil
+            || folded.contains("z flip") || folded.contains("galaxy flip") {
+            let title = productTitle(text)
+            let named = title?.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).contains("flip") == true
+            return HostIdentity(manufacturer: "Samsung", operatingSystem: "Android", model: named ? title : "Galaxy Z Flip")
+        }
+        let coded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        if folded.contains("galaxy") || coded.range(of: #"\bsm-[a-z]\d"#, options: .regularExpression) != nil {
+            return HostIdentity(manufacturer: "Samsung", operatingSystem: "Android", model: productTitle(text))
+        }
+        if folded.contains("pixel") {
+            return HostIdentity(manufacturer: "Google", operatingSystem: "Android", model: productTitle(text) ?? "Pixel")
+        }
+        if folded.contains("crystal uhd") || folded.contains("qled") || folded.contains("the frame") || folded.contains("neo qled")
+            || folded.replacingOccurrences(of: " ", with: "").range(of: #"(?:ue|un|qn|qa|qe|ls)\d{2}"#, options: .regularExpression) != nil {
+            return HostIdentity(manufacturer: "Samsung", operatingSystem: "Tizen", model: shortLabel(text))
+        }
+        if folded.contains("eversolo") {
+            return HostIdentity(manufacturer: "Eversolo", model: shortLabel(text, dropping: "eversolo"))
+        }
+        return nil
+    }
+
+    /// Fold2 is SM-F916, Fold4 is SM-F936: the digit after F9 is one less than the generation.
+    private static func foldGeneration(_ folded: String) -> Int? {
+        let compact = folded.replacingOccurrences(of: " ", with: "")
+        if let range = compact.range(of: #"smf9\d\d"#, options: .regularExpression) {
+            let token = compact[range]
+            let digit = token[token.index(token.startIndex, offsetBy: 4)]
+            if let series = Int(String(digit)) { return series + 1 }
+        }
+        if let range = folded.range(of: #"(?:z\s*)?fold\s*\d"#, options: .regularExpression) {
+            let token = folded[range]
+            if let digit = token.last, let generation = Int(String(digit)) { return generation }
+        }
+        return nil
+    }
+
+    private static func upnpHint(maker: String, type: String?, name: String?) -> HostIdentity {
+        let short = shortVendor(maker) ?? maker
+        var hint = HostIdentity(manufacturer: short)
+        let kind = type?.lowercased() ?? ""
+        if short == "Samsung", kind.contains("mediarenderer") || kind.contains("tv") {
+            hint.operatingSystem = "Tizen"
+            hint.model = name.flatMap { shortLabel($0) }
+        }
+        return hint
+    }
+
+    /// A short label, or nil when it is only the brand or too long to be a model name.
+    private static func shortLabel(_ text: String, dropping brand: String? = nil) -> String? {
+        var shown = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if shown.hasSuffix(".local") { shown = String(shown.dropLast(6)) }
+        shown = shown.replacingOccurrences(of: "-", with: " ").replacingOccurrences(of: "_", with: " ")
+        let words = shown.split(separator: " ").map(String.init)
+        guard (1...6).contains(words.count), shown.count <= 40 else { return nil }
+        let joined = words.joined(separator: " ")
+        if let brand, joined.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current) == brand {
+            return nil
+        }
+        return joined
+    }
+
+    /// Keeps a short device name ("Galaxy Z Fold5") and drops a person's label ("Alex's iPhone").
+    private static func productTitle(_ text: String) -> String? {
+        var shown = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if shown.hasSuffix(".local") { shown = String(shown.dropLast(6)) }
+        shown = shown.replacingOccurrences(of: "-", with: " ").replacingOccurrences(of: "_", with: " ")
+        let words = shown.split(separator: " ").map(String.init)
+        guard (1...6).contains(words.count), shown.count <= 40 else { return nil }
+        let folded = shown.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        guard folded.contains("galaxy") || folded.contains("fold") || folded.contains("flip") || folded.contains("pixel") || folded.contains("sm-") else {
+            return nil
+        }
+        return words.joined(separator: " ")
+    }
+
+    private static func shortVendor(_ vendor: String) -> String? {
+        let folded = vendor.lowercased()
+        if folded.contains("apple") { return "Apple" }
+        if folded.contains("samsung") { return "Samsung" }
+        if folded.contains("google") { return "Google" }
+        return vendor
+    }
+
+    private static let appleID = try! NSRegularExpression(
+        pattern: #"(?i)\b((?:MacBookPro|MacBookAir|Macmini|MacPro|iPhone|iPad|iPod|AppleTV|AudioAccessory|iMac|Watch|Mac)\d+,\d+)\b"#
+    )
+
+    private static let appleModels: [String: String] = [
+        "iPhone14,2": "iPhone 13 Pro",
+        "iPhone14,3": "iPhone 13 Pro Max",
+        "iPhone14,4": "iPhone 13 mini",
+        "iPhone14,5": "iPhone 13",
+        "iPhone14,6": "iPhone SE",
+        "iPhone14,7": "iPhone 14",
+        "iPhone14,8": "iPhone 14 Plus",
+        "iPhone15,2": "iPhone 14 Pro",
+        "iPhone15,3": "iPhone 14 Pro Max",
+        "iPhone15,4": "iPhone 15",
+        "iPhone15,5": "iPhone 15 Plus",
+        "iPhone16,1": "iPhone 15 Pro",
+        "iPhone16,2": "iPhone 15 Pro Max",
+        "iPhone17,1": "iPhone 16 Pro",
+        "iPhone17,2": "iPhone 16 Pro Max",
+        "iPhone17,3": "iPhone 16",
+        "iPhone17,4": "iPhone 16 Plus",
+        "iPhone17,5": "iPhone 16e",
+    ]
 }
 
 nonisolated enum HeaderText {

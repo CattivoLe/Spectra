@@ -106,13 +106,23 @@ struct NetworksView: View {
             .searchable(text: $search, prompt: Text("Name or BSSID"))
             .refreshable { link.scanNow() }
             .navigationTitle("Networks")
-            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: BSSID.self) { id in
                 NetworkDetailView(id: id)
             }
             .toolbar {
-                ToolbarItem(placement: .principal) {
+                ToolbarItem(placement: .topBarTrailing) {
                     SensorBar(open: openSensor)
+                }
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+                if store.lastScanFinished != nil || store.isScanning {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        ScanTimer()
+                    }
+                    if #available(iOS 26, *) {
+                        ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -133,8 +143,7 @@ struct NetworksView: View {
     }
 }
 
-/// Connection, battery and scan state, shown in the Networks navigation bar.
-/// Tapping opens the Sensor tab.
+/// Sensor name and status, in its own glass capsule. Tapping opens the Sensor tab.
 struct SensorBar: View {
     var open: () -> Void
 
@@ -143,14 +152,12 @@ struct SensorBar: View {
 
     var body: some View {
         Button(action: open) {
-            HStack(spacing: 8) {
-                Image(systemName: link.isConnected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                    .font(.body)
-                    .foregroundStyle(link.isConnected ? Color.accentColor : .secondary)
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
                     .symbolEffect(.variableColor.iterative, isActive: store.isScanning)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.caption.weight(.semibold))
                         .lineLimit(1)
                     Text(detail)
                         .font(.caption2)
@@ -158,10 +165,15 @@ struct SensorBar: View {
                         .lineLimit(1)
                 }
             }
-            .frame(maxWidth: 220)
+            .frame(maxWidth: 168, alignment: .leading)
         }
-        .buttonStyle(.plain)
         .accessibilityLabel("\(title), \(detail)")
+    }
+
+    private var symbol: String {
+        link.isConnected
+            ? "antenna.radiowaves.left.and.right"
+            : "antenna.radiowaves.left.and.right.slash"
     }
 
     private var title: String {
@@ -184,23 +196,51 @@ struct SensorBar: View {
         }
         if !parts.isEmpty { return parts.joined(separator: " · ") }
         switch link.state {
-        case .connected, .demo:
-            if let date = store.lastScanFinished {
-                let when = Self.relative.localizedString(for: date, relativeTo: .now)
-                return String(localized: "Updated \(when)")
-            }
-            return String(localized: "Connected")
+        case .connected, .demo: return String(localized: "Connected")
         case .connecting: return String(localized: "Connecting…")
         case .searching: return String(localized: "Looking for a Cardputer")
         default: return String(localized: "Tap to connect")
         }
     }
+}
 
-    private static let relative: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return formatter
-    }()
+/// Time since the last finished scan, or through the one in progress.
+/// Its own glass capsule, separate from the status text.
+struct ScanTimer: View {
+    @Environment(NetworkStore.self) private var store
+    @State private var scanStarted: Date?
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let anchor = store.isScanning ? (scanStarted ?? context.date) : store.lastScanFinished
+            if let anchor {
+                Label(Self.clock(context.date.timeIntervalSince(anchor)), systemImage: "timer")
+                    .font(.caption.monospacedDigit())
+                    .labelStyle(.titleAndIcon)
+                    .accessibilityLabel(Self.spoken(since: anchor, at: context.date, scanning: store.isScanning))
+            }
+        }
+        .onChange(of: store.isScanning, initial: true) { _, scanning in
+            scanStarted = scanning ? .now : nil
+        }
+    }
+
+    private static func clock(_ interval: TimeInterval) -> String {
+        let seconds = max(0, Int(interval))
+        if seconds < 3600 {
+            return String(format: "%d:%02d", seconds / 60, seconds % 60)
+        }
+        return String(format: "%dh %02dm", seconds / 3600, (seconds % 3600) / 60)
+    }
+
+    private static func spoken(since date: Date, at now: Date, scanning: Bool) -> String {
+        let span = Duration.seconds(max(0, Int(now.timeIntervalSince(date))))
+            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide))
+        if scanning {
+            return String(localized: "Scanning for \(span)")
+        }
+        return String(localized: "Updated \(span) ago")
+    }
 }
 
 struct NetworkRow: View {
@@ -229,7 +269,7 @@ struct NetworkRow: View {
                         let trafficSuffix = network.traffic.map { " · ↕ \($0.formattedBytes)" } ?? ""
                         Text("Ch \(reading.channel) · \(reading.auth.name) · \(reading.capabilities.generation)\(clientSuffix)\(trafficSuffix)")
                     } else if network.isInRange {
-                        Text("Missed last scan")
+                        Text("Missed \(network.missedScans) \(network.missedScans == 1 ? "scan" : "scans")")
                     } else {
                         Text("Out of range · \(network.lastSeen, style: .relative)")
                     }

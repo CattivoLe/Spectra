@@ -4,6 +4,8 @@ import SwiftUI
 struct ClientRow: View {
     var client: WiFiClient
 
+    @Environment(LANScanner.self) private var scanner
+
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: clientIcon)
@@ -61,6 +63,73 @@ struct ClientRow: View {
     }
 
     private var subtitleText: String {
-        client.mac.description
+        var parts = [client.mac.description]
+        if let host = lanHost, host.displayName != client.displayName {
+            parts.append(String(localized: "on LAN \(host.displayName)"))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var lanHost: LANDevice? {
+        let address = client.mac.description
+        return scanner.devices.values.first { $0.macAddress?.description == address }
+    }
+}
+
+/// What the sensor already knows about one station, including a LAN host with the same address.
+struct ClientDetailView: View {
+    var client: WiFiClient
+
+    @Environment(NetworkStore.self) private var store
+    @Environment(LANScanner.self) private var scanner
+
+    var body: some View {
+        List {
+            Section {
+                InfoRow("MAC address", value: client.mac.description)
+                InfoRow("Signal", value: "\(client.rssi) dBm")
+                if client.mac.isLocallyAdministered {
+                    InfoRow("Address type", value: String(localized: "Randomised"))
+                } else if let maker = client.manufacturer {
+                    InfoRow("Maker", value: maker)
+                }
+                InfoRow("Associated", value: client.isAssociated ? String(localized: "Yes") : String(localized: "Probe only"))
+                if let ap = client.apBSSID, let network = store.networks[ap] {
+                    InfoRow("Network", value: network.revealedSSID ?? network.latest.displayName)
+                }
+            }
+            if let probe = store.probingDevices.first(where: { $0.mac == client.mac }) {
+                Section("Probes") {
+                    InfoRow("Channel", value: "\(probe.channel)")
+                    if probe.ssids.isEmpty {
+                        InfoRow("Looking for", value: String(localized: "Broadcast"))
+                    } else {
+                        InfoRow("Looking for", value: probe.ssids.joined(separator: ", "))
+                    }
+                }
+            }
+            if let host = lanHost {
+                Section("On the LAN") {
+                    NavigationLink {
+                        DeviceDetailView(ip: host.ipAddress)
+                    } label: {
+                        HStack {
+                            Text(host.displayName)
+                            Spacer()
+                            Text(host.ipAddress)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle(client.displayName)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var lanHost: LANDevice? {
+        let address = client.mac.description
+        return scanner.devices.values.first { $0.macAddress?.description == address }
     }
 }

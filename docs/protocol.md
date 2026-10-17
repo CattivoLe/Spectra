@@ -30,7 +30,9 @@ UTF-8 JSON, for example:
 `ota` is true when the Firmware characteristic is present. Firmware that
 predates updates omits the field; treat that as false.
 `bat` is the battery level (0–100); absent when the hardware has no battery
-monitor. `chg` is true when USB power is charging the battery.
+monitor. `chg` is true while the pack is charging. On the Cardputer the
+charger status pin is not connected to the ESP32, so `chg` is true when a USB
+host is attached. A power bank that only supplies 5 V does not announce itself.
 
 ## Control (write)
 

@@ -67,22 +67,17 @@ struct BLEView: View {
     var body: some View {
         NavigationStack {
             List {
-                if !scanner.devices.isEmpty {
+                if !visible.isEmpty {
                     Section {
-                        statusCard
-                    }
-                    if !visible.isEmpty {
-                        Section {
-                            ForEach(visible) { device in
-                                NavigationLink(value: device.id) {
-                                    BLEDeviceRow(device: device, now: scanner.now)
-                                }
+                        ForEach(visible) { device in
+                            NavigationLink(value: device.id) {
+                                BLEDeviceRow(device: device, now: scanner.now)
                             }
-                        } header: {
-                            Text("\(scanner.nearbyCount) nearby")
-                        } footer: {
-                            Text("iOS hears Bluetooth Low Energy advertisements only, and it hides the hardware address.")
                         }
+                    } header: {
+                        Text("\(scanner.nearbyCount) nearby")
+                    } footer: {
+                        Text("iOS hears Bluetooth Low Energy advertisements only, and it hides the hardware address.")
                     }
                 }
             }
@@ -109,6 +104,12 @@ struct BLEView: View {
                 BLEDeviceDetailView(id: id)
             }
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    BLEStatusBar()
+                }
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Picker("Sort by", selection: $sort) {
@@ -208,60 +209,68 @@ struct BLEView: View {
         case .unsupported: String(localized: "This device has no Bluetooth Low Energy.")
         }
     }
+}
 
-    @ViewBuilder private var statusCard: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "wave.3.right")
-                .font(.title2)
-                .foregroundStyle(scanner.isScanning ? Color.accentColor : .secondary)
-                .symbolEffect(.variableColor.iterative, isActive: scanner.isScanning)
-                .frame(width: 36)
+/// Scan state in the Bluetooth navigation bar, the same glass capsule as the
+/// sensor status on Networks. Tapping starts or stops the scan.
+struct BLEStatusBar: View {
+    @Environment(BLEScanner.self) private var scanner
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(statusTitle).font(.headline)
-                Text(statusSubtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            Spacer(minLength: 0)
-
-            if scanner.isScanning {
-                Button(action: scanner.stop) {
-                    Image(systemName: "stop.fill")
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 6) {
+                Image(systemName: "wave.3.right")
+                    .symbolEffect(.variableColor.iterative, isActive: scanner.isScanning)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.circle)
-                .accessibilityLabel("Stop")
-            } else if !scannerUnavailable {
-                Button(action: scanner.start) {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.circle)
-                .accessibilityLabel("Scan")
             }
+            .frame(maxWidth: 168, alignment: .leading)
         }
-        .padding(.vertical, 4)
+        .disabled(unavailable)
+        .accessibilityLabel("\(title), \(detail)")
     }
 
-    private var statusTitle: String {
+    private func toggle() {
+        if scanner.isScanning {
+            scanner.stop()
+        } else if !unavailable {
+            scanner.start()
+        }
+    }
+
+    private var unavailable: Bool {
+        if case .unavailable = scanner.state { return true }
+        return false
+    }
+
+    private var title: String {
         switch scanner.state {
-        case .scanning: return String(localized: "Scanning…")
-        case .idle: return String(localized: "Paused")
+        case .scanning: String(localized: "Scanning…")
+        case .idle: String(localized: "Paused")
         case .unavailable(let reason):
             switch reason {
-            case .starting: return String(localized: "Starting Bluetooth…")
-            case .poweredOff: return String(localized: "Bluetooth is off")
-            case .unauthorized, .unsupported: return String(localized: "Bluetooth")
+            case .starting: String(localized: "Starting Bluetooth…")
+            case .poweredOff: String(localized: "Bluetooth is off")
+            case .unauthorized, .unsupported: String(localized: "Bluetooth")
             }
         }
     }
 
-    private var statusSubtitle: String {
+    private var detail: String {
         if case .unavailable(let reason) = scanner.state, reason != .starting {
-            return unavailableText(reason)
+            switch reason {
+            case .poweredOff: return String(localized: "Turn it on")
+            case .unauthorized: return String(localized: "Permission is off")
+            case .unsupported: return String(localized: "No radio")
+            case .starting: break
+            }
         }
         let nearby = scanner.nearbyCount
         let total = scanner.devices.count

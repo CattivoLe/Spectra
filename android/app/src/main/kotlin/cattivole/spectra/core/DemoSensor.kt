@@ -12,7 +12,7 @@ class DemoSensor(
     private val cancelSchedule: () -> Unit,
     private val random: Random = Random.Default,
 ) {
-    var intervalSeconds: Int = 5
+    var intervalSeconds: Int = 30
         set(value) {
             field = value
             scheduleNext()

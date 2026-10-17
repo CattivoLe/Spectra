@@ -12,14 +12,23 @@ struct LANView: View {
                 || device.displayName.localizedStandardContains(query)
                 || (device.macAddress?.description ?? "").localizedStandardContains(query)
                 || (device.manufacturer ?? "").localizedStandardContains(query)
+                || device.identity.label.localizedStandardContains(query)
         }
     }
 
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    networkInfoCard
+                if case .scanning(let progress, let phase) = scanner.state {
+                    Section {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ProgressView(value: progress)
+                                .tint(.teal)
+                            Text(phase)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 if !visible.isEmpty {
@@ -64,6 +73,12 @@ struct LANView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
+                    LANStatusBar()
+                }
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("Scan now", systemImage: "arrow.clockwise", action: scanner.scan)
                             .disabled(scanner.isScanning)
@@ -88,83 +103,59 @@ struct LANView: View {
         }
     }
 
-    // MARK: - Network info card
+}
 
-    @ViewBuilder private var networkInfoCard: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "network")
-                .font(.title2)
-                .foregroundStyle(scanner.subnetInfo != nil ? .teal : .secondary)
-                .frame(width: 36)
+/// Subnet and scan state, in its own glass capsule. Tapping starts or stops the scan.
+struct LANStatusBar: View {
+    @Environment(LANScanner.self) private var scanner
 
-            VStack(alignment: .leading, spacing: 2) {
-                if let info = scanner.subnetInfo {
-                    Text(info.localIP)
-                        .font(.headline)
-                        .monospacedDigit()
-                    if let gw = info.gateway {
-                        Text("gateway \(gw)")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                            .lineLimit(1)
-                    }
-                    Text(subnetSummary(info))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 6) {
+                Image(systemName: "network")
+                    .symbolEffect(.variableColor.iterative, isActive: scanner.isScanning)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title)
+                        .font(.caption.weight(.semibold))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                } else if case .noNetwork = scanner.state {
-                    Text("Not connected")
-                        .font(.headline)
-                    Text("Join a Wi-Fi network first")
-                        .font(.subheadline)
+                    Text(detail)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
-                } else {
-                    Text("Local network")
-                        .font(.headline)
-                    Text("Tap Scan to find devices")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
-
-            Spacer(minLength: 0)
-
-            if scanner.isScanning {
-                ProgressView()
-            } else {
-                Button {
-                    scanner.scan()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.circle)
-                .accessibilityLabel("Scan")
-            }
+            .frame(maxWidth: 168, alignment: .leading)
         }
-        .padding(.vertical, 4)
+        .accessibilityLabel("\(title), \(detail)")
+    }
 
-        if case .scanning(let progress, let phase) = scanner.state {
-            VStack(alignment: .leading, spacing: 4) {
-                ProgressView(value: progress)
-                    .tint(.teal)
-                Text(phase)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+    private func toggle() {
+        if scanner.isScanning {
+            scanner.stop()
+        } else {
+            scanner.scan()
         }
     }
 
-    private func subnetSummary(_ info: SubnetInfo) -> String {
-        var parts: [String] = ["/\(info.cidr)"]
-        parts.append(String(localized: "\(info.hostCount) hosts"))
-        if let date = scanner.lastScanDate {
-            parts.append(date.formatted(.relative(presentation: .named)))
+    private var title: String {
+        if scanner.isScanning { return String(localized: "Scanning…") }
+        if case .noNetwork = scanner.state { return String(localized: "No Wi-Fi") }
+        if let ip = scanner.subnetInfo?.localIP { return ip }
+        return String(localized: "LAN")
+    }
+
+    private var detail: String {
+        if case .scanning(_, let phase) = scanner.state { return phase }
+        if case .noNetwork = scanner.state { return String(localized: "Join a network") }
+        if let info = scanner.subnetInfo {
+            var parts = ["/\(info.cidr)"]
+            if let gateway = info.gateway { parts.append(gateway) }
+            if let date = scanner.lastScanDate {
+                parts.append(date.formatted(.relative(presentation: .named)))
+            }
+            return parts.joined(separator: " · ")
         }
-        return parts.joined(separator: " · ")
+        return String(localized: "Tap to scan")
     }
 }
 
@@ -237,7 +228,12 @@ struct DeviceRow: View {
         if let mac = device.macAddress {
             parts.append(mac.description)
         }
-        if let mfr = device.manufacturer, device.displayName != mfr {
+        for fact in [device.identity.manufacturer, device.identity.operatingSystem, device.identity.model] {
+            guard let fact, !device.displayName.localizedStandardContains(fact),
+                  !parts.contains(where: { $0.localizedStandardContains(fact) }) else { continue }
+            parts.append(fact)
+        }
+        if let mfr = device.manufacturer, device.identity.manufacturer == nil, device.displayName != mfr {
             parts.append(mfr)
         }
         if !device.openPorts.isEmpty {

@@ -56,6 +56,8 @@ final class LANDevice: Identifiable {
         didSet { refreshPinnedName() }
     }
     var openPorts: [DiscoveredPort]
+    /// Bonjour services this host advertised, with the model string when the TXT record had one.
+    var services: [ServiceAdvertisement]
     var portsScanned: Bool
     var isGateway: Bool
     var isLocalDevice: Bool
@@ -75,7 +77,8 @@ final class LANDevice: Identifiable {
 
     var displayName: String {
         if let pinnedName { return pinnedName }
-        if let mfr = macAddress?.manufacturer { return mfr }
+        if let model = identity.model { return model }
+        if let maker = identity.manufacturer ?? manufacturer { return maker }
         return ipAddress
     }
 
@@ -132,13 +135,40 @@ final class LANDevice: Identifiable {
     }
 
     var manufacturer: String? {
-        guard let mac = macAddress else { return nil }
+        guard let mac = macAddress, !mac.isRandomized else { return nil }
         return mac.manufacturer ?? SuspiciousOUI.names[mac.oui.uppercased()]
+    }
+
+    var identity: HostIdentity {
+        let upnp = profile.upnp
+        let found = HostIdentity.recognize(
+            names: hostnames,
+            services: services,
+            ports: openPorts.map(\.number),
+            vendor: manufacturer,
+            upnpName: upnp?.friendlyName,
+            upnpModel: upnp?.model,
+            upnpMaker: upnp?.manufacturer,
+            upnpType: upnp?.deviceType
+        )
+        guard isLocalDevice else { return found }
+        return found.fillingBlanks(from: HostIdentity.thisDevice())
     }
 
     var deviceIcon: String {
         if isGateway { return "wifi.router" }
         if isLocalDevice { return "iphone" }
+        switch identity.operatingSystem {
+        case "iOS": return "iphone"
+        case "iPadOS": return "ipad"
+        case "macOS": return "laptopcomputer"
+        case "tvOS": return "tv"
+        case "watchOS": return "applewatch"
+        case "Android": return "smartphone"
+        case "Tizen": return "tv"
+        case "Windows": return "desktopcomputer"
+        default: break
+        }
         switch notable {
         case .camera: return "video"
         case .iot: return "sensor"
@@ -150,7 +180,7 @@ final class LANDevice: Identifiable {
         if name.contains("ipad") { return "ipad" }
         if name.contains("apple") || name.contains("homepod") { return "homepod" }
         if name.contains("tv") || name.contains("roku") || name.contains("chromecast") { return "tv" }
-        if name.contains("echo") || name.contains("alexa") || name.contains("sonos") { return "hifispeaker" }
+        if name.contains("echo") || name.contains("alexa") || name.contains("sonos") || name.contains("eversolo") { return "hifispeaker" }
         if name.contains("print") || name.contains("canon") || name.contains("epson") || name.contains("brother") { return "printer" }
         if name.contains("pi") || name.contains("esp") { return "cpu" }
         if name.contains("xbox") || name.contains("playstation") || name.contains("ps5") || name.contains("nintendo") { return "gamecontroller" }
@@ -174,6 +204,7 @@ final class LANDevice: Identifiable {
         macAddress: MACAddress? = nil,
         hostnames: [String] = [],
         openPorts: [DiscoveredPort] = [],
+        services: [ServiceAdvertisement] = [],
         portsScanned: Bool = false,
         isGateway: Bool = false,
         isLocalDevice: Bool = false,
@@ -185,6 +216,7 @@ final class LANDevice: Identifiable {
         self.macAddress = macAddress
         self.hostnames = hostnames
         self.openPorts = openPorts
+        self.services = services
         self.portsScanned = portsScanned
         self.isGateway = isGateway
         self.isLocalDevice = isLocalDevice

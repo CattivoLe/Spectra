@@ -5,7 +5,7 @@ import Foundation
 /// developed without the hardware (and in the simulator, which has no
 /// Bluetooth).
 final class DemoSensor {
-    var interval = 5 {
+    var interval = 30 {
         didSet { schedule() }
     }
 

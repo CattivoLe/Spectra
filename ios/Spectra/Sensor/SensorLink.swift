@@ -73,12 +73,20 @@ final class SensorLink: NSObject {
         static let liveInterval = "liveInterval"
     }
 
-    static let liveIntervals = [0, 3, 5, 10, 30]
+    static let liveIntervals = [0, 10, 30, 60, 120, 180, 240]
+
+    static func intervalLabel(_ seconds: Int) -> String {
+        if seconds <= 0 { return String(localized: "Off") }
+        if seconds.isMultiple(of: 60) {
+            return String(localized: "Every \(seconds / 60) min")
+        }
+        return String(localized: "Every \(seconds) s")
+    }
 
     init(store: NetworkStore) {
         self.store = store
         let saved = UserDefaults.standard.object(forKey: Keys.liveInterval) as? Int
-        liveInterval = saved ?? 5
+        liveInterval = saved.flatMap { Self.liveIntervals.contains($0) ? $0 : nil } ?? 30
         super.init()
         central = CBCentralManager(delegate: self, queue: nil)
     }

@@ -82,6 +82,9 @@ struct NetworkDetailView: View {
                         ? String(localized: "Randomised")
                         : String(localized: "Maker-assigned (OUI \(reading.bssid.oui))")
                 )
+                if !reading.bssid.isLocallyAdministered, let maker = OUIDatabase.lookup(reading.bssid.oui) {
+                    InfoRow("Maker", value: maker)
+                }
                 if let country = reading.countryCode {
                     InfoRow("Country", value: Locale.current.localizedString(forRegionCode: country) ?? country)
                 }
@@ -103,6 +106,9 @@ struct NetworkDetailView: View {
                 if reading.capabilities.contains(.ftmResponder) {
                     InfoRow("Fine Timing Measurement", value: String(localized: "Supported"))
                 }
+                if reading.capabilities.contains(.longRange) {
+                    InfoRow("Long range", value: String(localized: "802.11 LR"))
+                }
             }
 
             Section("Security") {
@@ -116,7 +122,11 @@ struct NetworkDetailView: View {
             if !network.clients.isEmpty {
                 Section {
                     ForEach(network.clients) { client in
-                        ClientRow(client: client)
+                        NavigationLink {
+                            ClientDetailView(client: client)
+                        } label: {
+                            ClientRow(client: client)
+                        }
                     }
                 } header: {
                     Text("\(network.clients.count) clients")
@@ -144,6 +154,9 @@ struct NetworkDetailView: View {
                 InfoRow("First seen") { Text(network.firstSeen, style: .time) }
                 InfoRow("Last seen") { Text(network.lastSeen, style: .relative) }
                 InfoRow("Readings", value: "\(network.samples.count)")
+                if network.missedScans > 0 {
+                    InfoRow("Missed scans", value: "\(network.missedScans)")
+                }
             }
         }
         .navigationTitle(network.revealedSSID ?? reading.displayName)

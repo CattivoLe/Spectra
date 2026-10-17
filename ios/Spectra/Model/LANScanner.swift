@@ -330,7 +330,7 @@ nonisolated private func resolveHostname(_ ip: String) -> String? {
 /// smart-home gear often drop every probe but still advertise these. Keep in
 /// sync with NSBonjourServices in Config/Spectra-Info.plist.
 nonisolated private let bonjourServiceTypes = [
-    "_device-info._tcp", "_companion-link._tcp", "_airplay._tcp", "_raop._tcp",
+    "_device-info._tcp", "_companion-link._tcp", "_apple-mobdev2._tcp", "_airplay._tcp", "_raop._tcp",
     "_googlecast._tcp", "_hap._tcp", "_spotify-connect._tcp", "_ipp._tcp",
     "_printer._tcp", "_smb._tcp", "_ssh._tcp", "_http._tcp",
 ]
@@ -344,20 +344,28 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
     private var connections: [NWConnection] = []
     private var resolving: Set<NWEndpoint> = []
     private var namesByIP: [String: [(rank: Int, name: String)]] = [:]
-    private var completion: (@Sendable ([String: [String]]) -> Void)?
+    private var servicesByIP: [String: [ServiceAdvertisement]] = [:]
+    private var ipByEndpoint: [NWEndpoint: String] = [:]
+    private var modelByEndpoint: [NWEndpoint: String] = [:]
+    private var completion: (@Sendable (BonjourFindings) -> Void)?
     private var finished = false
 
-    func start(timeout: TimeInterval, completion: @escaping @Sendable ([String: [String]]) -> Void) {
+    func start(timeout: TimeInterval, completion: @escaping @Sendable (BonjourFindings) -> Void) {
         queue.async { [self] in
-            guard !finished else { return completion([:]) }
+            guard !finished else { return completion(BonjourFindings()) }
             self.completion = completion
             let params = NWParameters()
             params.requiredInterfaceType = .wifi
             for (rank, type) in bonjourServiceTypes.enumerated() {
-                let browser = NWBrowser(for: .bonjour(type: type, domain: "local."), using: params)
+                let browser = NWBrowser(for: .bonjourWithTXTRecord(type: type, domain: "local."), using: params)
                 browser.browseResultsChangedHandler = { [weak self] _, changes in
-                    for case .added(let result) in changes {
-                        self?.resolve(result.endpoint, rank: rank)
+                    for change in changes {
+                        switch change {
+                        case .added(let result), .changed(_, let result, _):
+                            self?.note(result, rank: rank, service: type)
+                        default:
+                            break
+                        }
                     }
                 }
                 browser.start(queue: queue)
@@ -371,11 +379,30 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
         queue.async { [self] in finish() }
     }
 
+    private func note(_ result: NWBrowser.Result, rank: Int, service: String) {
+        guard !finished, case .service(let name, _, _, _) = result.endpoint else { return }
+        if let model = bonjourValue(result, key: "model") ?? bonjourValue(result, key: "md") {
+            modelByEndpoint[result.endpoint] = model
+        }
+        let model = modelByEndpoint[result.endpoint]
+        let friendly = bonjourValue(result, key: "fn")
+        if let ip = ipByEndpoint[result.endpoint] {
+            record(name, rank: rank, ip: ip, service: service, model: model, friendly: friendly)
+            return
+        }
+        resolve(result.endpoint, name: name, rank: rank, service: service, model: model, friendly: friendly)
+    }
+
+    private func bonjourValue(_ result: NWBrowser.Result, key: String) -> String? {
+        guard case .bonjour(let record) = result.metadata else { return nil }
+        let value = record[key]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value?.isEmpty == false ? value : nil
+    }
+
     /// Network.framework has no bare resolve call, so a TCP connection to the
     /// service does it; the address it reaches is the one we want.
-    private func resolve(_ endpoint: NWEndpoint, rank: Int) {
-        guard !finished, case .service(let name, _, _, _) = endpoint,
-              resolving.insert(endpoint).inserted else { return }
+    private func resolve(_ endpoint: NWEndpoint, name: String, rank: Int, service: String, model: String?, friendly: String?) {
+        guard !finished, resolving.insert(endpoint).inserted else { return }
 
         let tcp = NWProtocolTCP.Options()
         tcp.connectionTimeout = 3
@@ -391,7 +418,9 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
             switch state {
             case .ready:
                 if case .hostPort(host: .ipv4(let address), port: _) = connection.currentPath?.remoteEndpoint {
-                    record(name, rank: rank, ip: address.rawValue.map(String.init).joined(separator: "."))
+                    let ip = address.rawValue.map(String.init).joined(separator: ".")
+                    ipByEndpoint[endpoint] = ip
+                    record(name, rank: rank, ip: ip, service: service, model: modelByEndpoint[endpoint] ?? model, friendly: friendly)
                 }
                 connection.cancel()
             case .waiting, .failed:
@@ -404,7 +433,7 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
         connections.append(connection)
     }
 
-    private func record(_ name: String, rank: Int, ip: String) {
+    private func record(_ name: String, rank: Int, ip: String, service: String, model: String?, friendly: String?) {
         // AirPlay audio names its instances "<MAC>@<device name>".
         var clean = name
         if let at = name.firstIndex(of: "@"),
@@ -413,6 +442,16 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
         }
         guard !clean.isEmpty else { return }
         namesByIP[ip, default: []].append((rank, clean))
+        if let friendly, !friendly.isEmpty, friendly.caseInsensitiveCompare(clean) != .orderedSame {
+            namesByIP[ip, default: []].append((rank, friendly))
+        }
+        var ads = servicesByIP[ip] ?? []
+        if let index = ads.firstIndex(where: { $0.type == service && $0.name == clean }) {
+            if ads[index].model == nil { ads[index].model = model }
+        } else {
+            ads.append(ServiceAdvertisement(type: service, name: clean, model: model))
+        }
+        servicesByIP[ip] = ads
     }
 
     private func finish() {
@@ -423,19 +462,24 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
         browsers = []
         connections = []
 
-        let result = namesByIP.mapValues { entries in
+        let names = namesByIP.mapValues { entries in
             var seen: Set<String> = []
             return entries.sorted { $0.rank < $1.rank }
                 .map(\.name)
                 .filter { seen.insert($0).inserted }
         }
-        completion?(result)
+        completion?(BonjourFindings(names: names, services: servicesByIP))
         completion = nil
     }
 }
 
+nonisolated private struct BonjourFindings: Sendable {
+    var names: [String: [String]] = [:]
+    var services: [String: [ServiceAdvertisement]] = [:]
+}
+
 /// Bonjour instance names by IPv4 address, gathered for `timeout` seconds.
-nonisolated private func discoverBonjourHosts(timeout: TimeInterval) async -> [String: [String]] {
+nonisolated private func discoverBonjourHosts(timeout: TimeInterval) async -> BonjourFindings {
     let discovery = BonjourDiscovery()
     return await withTaskCancellationHandler {
         await withCheckedContinuation { continuation in
@@ -669,12 +713,15 @@ final class LANScanner {
         let discovery = await probeTCP(discoveryTargets, timeout: .milliseconds(1500)) { fraction in
             self.state = .scanning(progress: 0.2 + 0.4 * fraction, phase: String(localized: "Discovering devices…"))
         }
-        let bonjourNames = await bonjourResult.filter { hostSet.contains($0.key) }
+        let bonjour = await bonjourResult
+        let bonjourNames = bonjour.names.filter { hostSet.contains($0.key) }
+        let bonjourServices = bonjour.services.filter { hostSet.contains($0.key) }
         if Task.isCancelled { return }
         for (target, outcome) in zip(discoveryTargets, discovery) where outcome != .silent {
             aliveIPs.insert(target.ip)
         }
         aliveIPs.formUnion(bonjourNames.keys)
+        aliveIPs.formUnion(bonjourServices.keys)
 
         // Phase 4: Re-read ARP after TCP probes — a host that drops every
         // connection still had to answer ARP for them to be sent.
@@ -691,6 +738,7 @@ final class LANScanner {
                 macAddress: arpByIP[ip] ?? existing?.macAddress,
                 hostnames: keptNames.isEmpty ? (bonjourNames[ip] ?? []) : keptNames,
                 openPorts: existing?.openPorts ?? [],
+                services: bonjourServices[ip] ?? existing?.services ?? [],
                 portsScanned: existing?.portsScanned ?? false,
                 isGateway: ip == info.gateway,
                 isLocalDevice: ip == info.localIP,
@@ -740,6 +788,11 @@ final class LANScanner {
         for (ip, names) in bonjourNames {
             if let device = newDevices[ip], !device.hostnames.contains(where: { LANDevice.usefulHostname($0, ip: ip) != nil }) {
                 device.hostnames = names
+            }
+        }
+        for (ip, services) in bonjourServices {
+            if let device = newDevices[ip], device.services.isEmpty {
+                device.services = services
             }
         }
 

@@ -58,11 +58,7 @@ struct SensorView: View {
                     Section("Scanning") {
                         Picker("Automatic scan", selection: $link.liveInterval) {
                             ForEach(SensorLink.liveIntervals, id: \.self) { seconds in
-                                if seconds == 0 {
-                                    Text("Off").tag(seconds)
-                                } else {
-                                    Text("Every \(seconds) s").tag(seconds)
-                                }
+                                Text(SensorLink.intervalLabel(seconds)).tag(seconds)
                             }
                         }
                         if let duration = store.lastScanDuration {
@@ -74,6 +70,8 @@ struct SensorView: View {
                     if let info = link.info {
                         Section {
                             InfoRow("Firmware", value: info.fw)
+                            InfoRow("Reported interval", value: SensorLink.intervalLabel(info.interval))
+                            InfoRow("Updates", value: info.ota ? String(localized: "From the app") : String(localized: "Not from the app"))
                             if let level = link.batteryLevel {
                                 InfoRow("Battery", value: batteryText(level, charging: link.isCharging == true))
                             }

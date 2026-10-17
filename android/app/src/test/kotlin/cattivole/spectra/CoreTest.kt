@@ -19,7 +19,9 @@ import cattivole.spectra.core.ProbeRequest
 import cattivole.spectra.core.RadioSource
 import cattivole.spectra.core.SecondaryChannel
 import cattivole.spectra.core.SensorInfo
+import cattivole.spectra.core.HostIdentity
 import cattivole.spectra.core.SensorProtocol
+import cattivole.spectra.core.ServiceAdvertisement
 import cattivole.spectra.core.UPnPIdentity
 import cattivole.spectra.core.WifiClient
 import org.junit.Assert.assertArrayEquals
@@ -230,6 +232,59 @@ class CoreTest {
 
         val known = LanProfile(upnp = UPnPIdentity("55\" Crystal UHD", "Samsung", "UE55", "MediaRenderer", "Samsung"))
         assertEquals(known, LanProfile().filled(known))
+
+        assertTrue(LanIdentity.httpMethodRejected(501))
+        assertTrue(LanIdentity.httpPrefers(200, "Keenetic", 501, null))
+        assertFalse(LanIdentity.httpPrefers(501, null, 200, "Keenetic"))
+
+        val phone = HostIdentity.recognize(
+            names = listOf("Phone"),
+            services = listOf(ServiceAdvertisement("_device-info._tcp", "Phone", "iPhone16,1")),
+        )
+        assertEquals("Apple", phone.manufacturer)
+        assertEquals("iOS", phone.operatingSystem)
+        assertEquals("iPhone 15 Pro", phone.model)
+        val fold = HostIdentity.recognize(names = listOf("Galaxy Z Fold5"))
+        assertEquals("Samsung", fold.manufacturer)
+        assertEquals("Android", fold.operatingSystem)
+        assertEquals("Galaxy Z Fold5", HostIdentity.recognize(names = listOf("SM-F946B")).model)
+        val fold4 = HostIdentity.recognize(names = listOf("SM-F936B"))
+        assertEquals("Samsung", fold4.manufacturer)
+        assertEquals("Android", fold4.operatingSystem)
+        assertEquals("Galaxy Z Fold4", fold4.model)
+        val hyphenated = HostIdentity.recognize(names = listOf("Galaxy-Z-Fold4"))
+        assertEquals("Samsung", hyphenated.manufacturer)
+        assertEquals("Android", hyphenated.operatingSystem)
+        assertEquals("Galaxy Z Fold4", hyphenated.model)
+        val streamer = HostIdentity.recognize(
+            names = listOf("Eversolo DMP-A6"),
+            services = listOf(ServiceAdvertisement("_airplay._tcp", "Eversolo DMP-A6")),
+        )
+        assertEquals("Eversolo", streamer.manufacturer)
+        assertNull(streamer.operatingSystem)
+        val television = HostIdentity.recognize(
+            names = listOf("Living Room"),
+            services = listOf(ServiceAdvertisement("_raop._tcp", "Living Room")),
+            upnpName = "55\" Crystal UHD",
+            upnpMaker = "Samsung Electronics",
+            upnpType = "MediaRenderer",
+        )
+        assertEquals("Samsung", television.manufacturer)
+        assertEquals("Tizen", television.operatingSystem)
+        assertEquals("55\" Crystal UHD", television.model)
+        assertNull(
+            HostIdentity.recognize(
+                names = listOf("Living Room"),
+                services = listOf(ServiceAdvertisement("_airplay._tcp", "Living Room")),
+            ).manufacturer,
+        )
+        val synced = HostIdentity.recognize(
+            names = listOf("Alex"),
+            services = listOf(ServiceAdvertisement("_apple-mobdev2._tcp", "Alex")),
+        )
+        assertEquals("Apple", synced.manufacturer)
+        assertEquals("iOS", synced.operatingSystem)
+        assertEquals("iPhone", synced.model)
 
         val named = LanDevice("192.168.1.20", hostnames = listOf(""), profile = LanProfile(upnp = UPnPIdentity(friendlyName = "55\" Crystal UHD")))
         assertEquals("55\" Crystal UHD", named.displayName)

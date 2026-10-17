@@ -5,6 +5,7 @@
 // docs/protocol.md.
 
 #include <M5Cardputer.h>
+#include <HWCDC.h>
 #include <NimBLEDevice.h>
 #include <Update.h>
 #include <WiFi.h>
@@ -500,10 +501,14 @@ static int readBatteryPercent() {
   return std::min(level, 100);
 }
 
-// isCharging() also returns "unknown", which is not zero, so it must not be
-// used as a boolean.
+// The Cardputer charger status pins are not wired to the ESP32, so
+// isCharging() stays "unknown" and must not be used as a boolean. A USB host
+// still announces itself with SOF packets; a bare power bank does not.
 static bool readBatteryCharging() {
-  return M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging;
+  if (M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging) {
+    return true;
+  }
+  return HWCDC::isPlugged();
 }
 
 static void updateInfo() {
@@ -690,6 +695,37 @@ static void sendVendorIE(const VendorIEEntry &v) {
   msg[10 + dnLen] = mfLen;
   memcpy(msg + 11 + dnLen, v.manufacturer, mfLen);
   sendMessage(msg, 11 + dnLen + mfLen);
+}
+
+static void sendBattery();
+
+// Push a fresh level when USB is plugged or the percent moves, without waiting
+// for the next Wi-Fi scan. The status strip is the only thing that changes.
+static void watchBattery() {
+  static uint32_t lastCheck = 0;
+  static int lastLevel = -2;
+  static bool lastCharging = false;
+  if (otaActive || millis() - lastCheck < 1000) {
+    return;
+  }
+  lastCheck = millis();
+  const int level = readBatteryPercent();
+  const bool charging = readBatteryCharging();
+  const bool jumped = lastLevel < 0 || (level >= 0 && (level > lastLevel + 4 || level + 4 < lastLevel));
+  if (level == lastLevel && charging == lastCharging) {
+    return;
+  }
+  const bool announce = charging != lastCharging || jumped || lastLevel < 0;
+  lastLevel = level;
+  lastCharging = charging;
+  if (!announce) {
+    return;
+  }
+  updateInfo();
+  if (isConnected()) {
+    sendBattery();
+  }
+  uiDirty = true;
 }
 
 static void sendBattery() {
@@ -953,6 +989,17 @@ static void drawStatus(const char *line) {
   d.setTextColor(TFT_WHITE, 0x10A2);
   d.setCursor(6, 5);
   d.print(line);
+
+  const int bat = readBatteryPercent();
+  if (bat < 0) {
+    return;
+  }
+  const bool charging = readBatteryCharging();
+  char cell[12];
+  snprintf(cell, sizeof(cell), "%s%d%%", charging ? "+" : "", bat);
+  d.setTextColor(charging ? TFT_GREEN : TFT_WHITE, 0x10A2);
+  d.setCursor(d.width() - static_cast<int>(strlen(cell)) * 6 - 4, 5);
+  d.print(cell);
 }
 
 static void drawUpdating() {
@@ -979,17 +1026,11 @@ static void drawUi() {
   d.setTextSize(1);
   d.fillScreen(TFT_BLACK);
 
-  const int bat = readBatteryPercent();
-  char batStr[12] = "";
-  if (bat >= 0) {
-    snprintf(batStr, sizeof(batStr), " %d%%%s", bat, readBatteryCharging() ? "+" : "");
-  }
-
-  char header[64];
+  char header[48];
   if (isConnected()) {
-    snprintf(header, sizeof(header), "%s  linked  %us%s", deviceName, scanIntervalSec, batStr);
+    snprintf(header, sizeof(header), "%s  linked  %us", deviceName, scanIntervalSec);
   } else {
-    snprintf(header, sizeof(header), "%s  waiting%s", deviceName, batStr);
+    snprintf(header, sizeof(header), "%s  waiting", deviceName);
   }
   drawStatus(header);
 
@@ -1225,6 +1266,7 @@ void loop() {
     linkChanged = false;
     uiDirty = true;
   }
+  watchBattery();
 
   const bool due = scanIntervalSec > 0 && isConnected() && !otaActive &&
                    millis() - lastScanMs >= static_cast<uint32_t>(scanIntervalSec) * 1000;

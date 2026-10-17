@@ -1,5 +1,7 @@
 package cattivole.spectra.core
 
+import android.os.Build
+
 import java.net.URI
 import java.nio.charset.Charset
 
@@ -78,6 +80,209 @@ data class LanProfile(
             banners = banners.ifEmpty { previous.banners },
             rtsp = rtsp.ifEmpty { previous.rtsp },
             windows = windows?.filled(previous.windows) ?: previous.windows,
+        )
+    }
+}
+
+data class ServiceAdvertisement(val type: String, val name: String, val model: String? = null) {
+    val kind: String
+        get() {
+            val folded = type.lowercase()
+            return when {
+                "apple-mobdev" in folded -> "iPhone sync"
+                "companion-link" in folded -> "Continuity"
+                "device-info" in folded -> "Device info"
+                "airplay" in folded -> "AirPlay"
+                "raop" in folded -> "AirPlay audio"
+                "googlecast" in folded -> "Google Cast"
+                "hap" in folded -> "HomeKit"
+                "spotify" in folded -> "Spotify"
+                "ipp" in folded || "printer" in folded -> "Printer"
+                "smb" in folded -> "SMB"
+                "ssh" in folded -> "SSH"
+                "http" in folded -> "Web"
+                else -> folded
+            }
+        }
+}
+
+data class HostIdentity(
+    val manufacturer: String? = null,
+    val operatingSystem: String? = null,
+    val model: String? = null,
+) {
+    val label: String
+        get() = listOfNotNull(manufacturer, operatingSystem, model).joinToString(" · ")
+
+    companion object {
+        fun recognize(
+            names: List<String>,
+            services: List<ServiceAdvertisement> = emptyList(),
+            ports: List<Int> = emptyList(),
+            vendor: String? = null,
+            upnpName: String? = null,
+            upnpModel: String? = null,
+            upnpMaker: String? = null,
+            upnpType: String? = null,
+        ): HostIdentity {
+            var found = HostIdentity()
+            val texts = names + services.map { it.name } + services.mapNotNull { it.model } + listOfNotNull(upnpName, upnpModel)
+            for (text in texts) appleIdentity(text)?.let { found = found.apply(it, overwrite = true) }
+            for (text in texts) namedIdentity(text)?.let { found = found.apply(it, overwrite = false) }
+            if (upnpMaker != null) found = found.apply(upnpHint(upnpMaker, upnpType, upnpName), overwrite = false)
+            val types = services.map { it.type.lowercase() }
+            if (types.any { "device-info" in it || "companion-link" in it }) {
+                found = found.apply(HostIdentity(manufacturer = "Apple"), overwrite = false)
+            }
+            if (types.any { "apple-mobdev" in it }) {
+                val ipad = texts.any { "ipad" in it.lowercase() }
+                found = found.apply(
+                    HostIdentity("Apple", if (ipad) "iPadOS" else "iOS", if (ipad) "iPad" else "iPhone"),
+                    overwrite = false,
+                )
+            }
+            if (62078 in ports) found = found.apply(HostIdentity("Apple", "iOS", "iPhone"), overwrite = false)
+            if (548 in ports) found = found.apply(HostIdentity("Apple", "macOS"), overwrite = false)
+            if (3389 in ports || 5357 in ports) found = found.apply(HostIdentity("Microsoft", "Windows"), overwrite = false)
+            if (found.manufacturer == null) shortVendor(vendor)?.let { found = found.copy(manufacturer = it) }
+            return found
+        }
+
+        /** The phone running Spectra. Its own mDNS name often never comes back. */
+        fun thisDevice(): HostIdentity {
+            val model = Build.MODEL?.takeIf { it.isNotBlank() && !it.equals("unknown", ignoreCase = true) }
+            val maker = Build.MANUFACTURER?.takeIf { it.isNotBlank() }
+            val recognized = if (model != null) recognize(names = listOf(model)) else HostIdentity()
+            return recognized.copy(
+                manufacturer = recognized.manufacturer ?: shortVendor(maker) ?: maker?.replaceFirstChar { it.uppercase() },
+                operatingSystem = recognized.operatingSystem ?: "Android",
+                model = recognized.model ?: model,
+            )
+        }
+
+        fun mergeBlanks(base: HostIdentity, extra: HostIdentity): HostIdentity = base.apply(extra, overwrite = false)
+
+        private fun HostIdentity.apply(other: HostIdentity, overwrite: Boolean): HostIdentity = copy(
+            manufacturer = other.manufacturer?.takeIf { manufacturer == null || overwrite } ?: manufacturer,
+            operatingSystem = other.operatingSystem?.takeIf { operatingSystem == null || overwrite } ?: operatingSystem,
+            model = other.model?.takeIf { model == null || overwrite } ?: model,
+        )
+
+        private fun appleIdentity(text: String): HostIdentity? {
+            val match = appleId.find(text) ?: return null
+            val id = match.groupValues[1]
+            val key = id.lowercase()
+            return when {
+                key.startsWith("iphone") || key.startsWith("ipod") ->
+                    HostIdentity("Apple", "iOS", appleModels[id] ?: "iPhone")
+                key.startsWith("ipad") -> HostIdentity("Apple", "iPadOS", appleModels[id] ?: "iPad")
+                key.startsWith("watch") -> HostIdentity("Apple", "watchOS", "Apple Watch")
+                key.startsWith("appletv") -> HostIdentity("Apple", "tvOS", "Apple TV")
+                key.startsWith("audioaccessory") -> HostIdentity("Apple", "audioOS", "HomePod")
+                else -> HostIdentity("Apple", "macOS", appleModels[id] ?: "Mac")
+            }
+        }
+
+        private fun namedIdentity(text: String): HostIdentity? {
+            val folded = text.lowercase().replace('-', ' ').replace('_', ' ')
+            val compact = folded.replace(" ", "")
+            val coded = text.lowercase()
+            foldGeneration(folded, compact)?.let { generation ->
+                return HostIdentity("Samsung", "Android", titled(text, "fold") ?: "Galaxy Z Fold$generation")
+            }
+            return when {
+                "iphone" in folded || "ipod" in folded -> HostIdentity("Apple", "iOS", "iPhone")
+                "ipad" in folded -> HostIdentity("Apple", "iPadOS", "iPad")
+                "macbook" in folded || "imac" in folded || "mac mini" in folded || "mac studio" in folded ->
+                    HostIdentity("Apple", "macOS", if ("macbook" in folded) "MacBook" else "Mac")
+                "apple tv" in folded || "appletv" in folded -> HostIdentity("Apple", "tvOS", "Apple TV")
+                "z fold" in folded || "galaxy fold" in folded || "samsung fold" in folded ->
+                    HostIdentity("Samsung", "Android", titled(text, "fold") ?: "Galaxy Z Fold")
+                flipCode.containsMatchIn(compact) || "z flip" in folded || "galaxy flip" in folded ->
+                    HostIdentity("Samsung", "Android", titled(text, "flip") ?: "Galaxy Z Flip")
+                "galaxy" in folded || samsungCode.containsMatchIn(coded) ->
+                    HostIdentity("Samsung", "Android", titled(text, "galaxy") ?: titled(text, "sm-"))
+                "pixel" in folded -> HostIdentity("Google", "Android", titled(text, "pixel") ?: "Pixel")
+                "crystal uhd" in folded || "qled" in folded || "the frame" in folded || "neo qled" in folded ||
+                    tvCode.containsMatchIn(compact) ->
+                    HostIdentity("Samsung", "Tizen", shortLabel(text))
+                "eversolo" in folded -> HostIdentity("Eversolo", null, shortLabel(text, "eversolo"))
+                else -> null
+            }
+        }
+
+        /** Fold2 is SM-F916, Fold4 is SM-F936: the digit after F9 is one less than the generation. */
+        private fun foldGeneration(folded: String, compact: String): Int? {
+            foldCode.find(compact)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it + 1 }
+            foldWord.find(folded)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
+            return null
+        }
+
+        private fun upnpHint(maker: String, type: String?, name: String?): HostIdentity {
+            val short = shortVendor(maker) ?: maker
+            val kind = type?.lowercase().orEmpty()
+            val television = short == "Samsung" && ("mediarenderer" in kind || "tv" in kind)
+            return HostIdentity(
+                manufacturer = short,
+                operatingSystem = if (television) "Tizen" else null,
+                model = if (television) name?.let { shortLabel(it) } else null,
+            )
+        }
+
+        private fun shortLabel(text: String, brand: String? = null): String? {
+            val shown = text.trim().removeSuffix(".local").replace('-', ' ').replace('_', ' ')
+                .split(' ').filter { it.isNotBlank() }.joinToString(" ")
+            if (shown.length !in 1..40) return null
+            if (brand != null && shown.equals(brand, ignoreCase = true)) return null
+            return shown
+        }
+
+        private fun titled(text: String, needle: String): String? {
+            var shown = text.trim().removeSuffix(".local")
+            shown = shown.replace('-', ' ').replace('_', ' ')
+            val words = shown.split(' ').filter { it.isNotBlank() }
+            if (words.size !in 1..6 || shown.length > 40) return null
+            if (needle !in shown.lowercase()) return null
+            return words.joinToString(" ")
+        }
+
+        private fun shortVendor(vendor: String?): String? {
+            val folded = vendor?.lowercase() ?: return null
+            return when {
+                "apple" in folded -> "Apple"
+                "samsung" in folded -> "Samsung"
+                "google" in folded -> "Google"
+                else -> vendor
+            }
+        }
+
+        private val appleId = Regex(
+            """(?i)\b((?:MacBookPro|MacBookAir|Macmini|MacPro|iPhone|iPad|iPod|AppleTV|AudioAccessory|iMac|Watch|Mac)\d+,\d+)\b""",
+        )
+        private val foldCode = Regex("""smf9(\d)\d""")
+        private val foldWord = Regex("""(?:z\s*)?fold\s*(\d)""")
+        private val flipCode = Regex("""smf7\d{2}""")
+        private val tvCode = Regex("""(?:ue|un|qn|qa|qe|ls)\d{2}""")
+        private val samsungCode = Regex("""\bsm-[a-z]\d""")
+        private val appleModels = mapOf(
+            "iPhone14,2" to "iPhone 13 Pro",
+            "iPhone14,3" to "iPhone 13 Pro Max",
+            "iPhone14,4" to "iPhone 13 mini",
+            "iPhone14,5" to "iPhone 13",
+            "iPhone14,6" to "iPhone SE",
+            "iPhone14,7" to "iPhone 14",
+            "iPhone14,8" to "iPhone 14 Plus",
+            "iPhone15,2" to "iPhone 14 Pro",
+            "iPhone15,3" to "iPhone 14 Pro Max",
+            "iPhone15,4" to "iPhone 15",
+            "iPhone15,5" to "iPhone 15 Plus",
+            "iPhone16,1" to "iPhone 15 Pro",
+            "iPhone16,2" to "iPhone 15 Pro Max",
+            "iPhone17,1" to "iPhone 16 Pro",
+            "iPhone17,2" to "iPhone 16 Pro Max",
+            "iPhone17,3" to "iPhone 16",
+            "iPhone17,4" to "iPhone 16 Plus",
+            "iPhone17,5" to "iPhone 16e",
         )
     }
 }
@@ -166,8 +371,23 @@ object LanIdentity {
         )
     }
 
-    fun httpRequest(host: String, method: String): ByteArray =
-        "$method / HTTP/1.0\r\nHost: $host\r\nUser-Agent: Spectra\r\nConnection: close\r\n\r\n".encodeToByteArray()
+    fun httpRequest(host: String, method: String, version: String = "1.0"): ByteArray =
+        "$method / HTTP/$version\r\nHost: $host\r\nUser-Agent: Spectra\r\nConnection: close\r\n\r\n".encodeToByteArray()
+
+    /** Router pages often answer HEAD with 501 and still serve the page for GET. */
+    fun httpMethodRejected(status: Int?): Boolean = status == 400 || status == 405 || status == 501 || status == 505
+
+    /** A later response is worth keeping when it is a real page rather than the HEAD error. */
+    fun httpPrefers(status: Int?, title: String?, otherStatus: Int?, otherTitle: String?): Boolean {
+        fun rank(code: Int?) = when (code) {
+            in 200..399 -> 0
+            401, 403 -> 1
+            null -> 3
+            else -> 2
+        }
+        if (rank(status) != rank(otherStatus)) return rank(status) < rank(otherStatus)
+        return title != null && otherTitle == null
+    }
 
     data class HttpFields(
         val status: Int?,

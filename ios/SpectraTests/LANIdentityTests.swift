@@ -76,6 +76,78 @@ struct LANIdentityTests {
         #expect(merged.upnp?.deviceType == "MediaRenderer")
     }
 
+    @Test func aHeadRejectionLosesToThePage() {
+        #expect(LANIdentity.httpMethodRejected(501))
+        #expect(LANIdentity.httpPrefers(status: 200, title: "Keenetic", over: 501, otherTitle: nil))
+        #expect(!LANIdentity.httpPrefers(status: 501, title: nil, over: 200, otherTitle: "Keenetic"))
+    }
+
+    @Test func anAppleModelIdNamesThePhone() {
+        let service = ServiceAdvertisement(type: "_device-info._tcp", name: "Phone", model: "iPhone16,1")
+        let identity = HostIdentity.recognize(names: ["Phone"], services: [service])
+        #expect(identity.manufacturer == "Apple")
+        #expect(identity.operatingSystem == "iOS")
+        #expect(identity.model == "iPhone 15 Pro")
+    }
+
+    @Test func aFoldNameNamesSamsungAndroid() {
+        let identity = HostIdentity.recognize(names: ["Galaxy Z Fold5"])
+        #expect(identity.manufacturer == "Samsung")
+        #expect(identity.operatingSystem == "Android")
+        #expect(identity.model == "Galaxy Z Fold5")
+
+        let coded = HostIdentity.recognize(names: ["SM-F946B"])
+        #expect(coded.manufacturer == "Samsung")
+        #expect(coded.operatingSystem == "Android")
+        #expect(coded.model == "Galaxy Z Fold5")
+
+        let fold4 = HostIdentity.recognize(names: ["SM-F936B"])
+        #expect(fold4.manufacturer == "Samsung")
+        #expect(fold4.operatingSystem == "Android")
+        #expect(fold4.model == "Galaxy Z Fold4")
+
+        let hyphenated = HostIdentity.recognize(names: ["Galaxy-Z-Fold4"])
+        #expect(hyphenated.manufacturer == "Samsung")
+        #expect(hyphenated.operatingSystem == "Android")
+        #expect(hyphenated.model == "Galaxy Z Fold4")
+    }
+
+    @Test func airPlayDoesNotMakeASamsungTvOrEversoloIntoApple() {
+        let streamer = HostIdentity.recognize(
+            names: ["Eversolo DMP-A6"],
+            services: [ServiceAdvertisement(type: "_airplay._tcp", name: "Eversolo DMP-A6")]
+        )
+        #expect(streamer.manufacturer == "Eversolo")
+        #expect(streamer.operatingSystem == nil)
+
+        let television = HostIdentity.recognize(
+            names: ["Living Room"],
+            services: [ServiceAdvertisement(type: "_raop._tcp", name: "Living Room")],
+            upnpName: "55\" Crystal UHD",
+            upnpMaker: "Samsung Electronics",
+            upnpType: "MediaRenderer"
+        )
+        #expect(television.manufacturer == "Samsung")
+        #expect(television.operatingSystem == "Tizen")
+        #expect(television.model == "55\" Crystal UHD")
+
+        let onlyAirPlay = HostIdentity.recognize(
+            names: ["Living Room"],
+            services: [ServiceAdvertisement(type: "_airplay._tcp", name: "Living Room")]
+        )
+        #expect(onlyAirPlay.manufacturer == nil)
+    }
+
+    @Test func anAppleSyncServiceNamesIos() {
+        let phone = HostIdentity.recognize(
+            names: ["Alex"],
+            services: [ServiceAdvertisement(type: "_apple-mobdev2._tcp", name: "Alex")]
+        )
+        #expect(phone.manufacturer == "Apple")
+        #expect(phone.operatingSystem == "iOS")
+        #expect(phone.model == "iPhone")
+    }
+
     @Test func aBlankHostnameDoesNotEraseTheTitle() {
         let blank = LANDevice(ipAddress: "192.168.1.20", hostnames: ["", " ", "."])
         #expect(blank.displayName == "192.168.1.20")

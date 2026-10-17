@@ -55,12 +55,19 @@ nonisolated enum LANProbes {
                 ? exchangeTLS(ip: ip, port: port, payload: payload)
                 : exchangeTCP(ip: ip, port: UInt16(port), payload: payload, timeout: .seconds(2))
             guard var parsed = data.flatMap(LANIdentity.parseHTTP) else { continue }
-            if parsed.status == 405 || parsed.status == 400 || parsed.server == nil && parsed.title == nil {
-                let get = LANIdentity.httpRequest(host: ip, method: "GET")
+            for version in ["1.0", "1.1"] {
+                let rejected = LANIdentity.httpMethodRejected(parsed.status)
+                let empty = parsed.server == nil && parsed.title == nil
+                if version == "1.1" ? !rejected : !(rejected || empty) { continue }
+                let get = LANIdentity.httpRequest(host: ip, method: "GET", version: version)
                 let body = secure
                     ? exchangeTLS(ip: ip, port: port, payload: get)
                     : exchangeTCP(ip: ip, port: UInt16(port), payload: get, timeout: .seconds(2))
-                if let richer = body.flatMap(LANIdentity.parseHTTP) { parsed = richer }
+                if let richer = body.flatMap(LANIdentity.parseHTTP),
+                   LANIdentity.httpPrefers(status: richer.status, title: richer.title, over: parsed.status, otherTitle: parsed.title) {
+                    parsed = richer
+                }
+                if !LANIdentity.httpMethodRejected(parsed.status) { break }
             }
             banners.append(HTTPBanner(
                 port: port, secure: secure, status: parsed.status, server: parsed.server,

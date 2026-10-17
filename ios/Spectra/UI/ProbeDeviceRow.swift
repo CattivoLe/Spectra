@@ -3,6 +3,8 @@ import SwiftUI
 struct ProbeDeviceRow: View {
     var device: ProbingDevice
 
+    @Environment(LANScanner.self) private var scanner
+
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: deviceIcon)
@@ -25,13 +27,10 @@ struct ProbeDeviceRow: View {
                             .fixedSize()
                     }
                 }
-                if device.ssids.isEmpty {
-                    Text("Broadcast probe · Ch \(device.channel)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    FlowText(ssids: device.ssids)
-                }
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
 
             Spacer(minLength: 0)
@@ -52,6 +51,24 @@ struct ProbeDeviceRow: View {
         }
     }
 
+    private var subtitle: String {
+        var parts = ["Ch \(device.channel)"]
+        if device.ssids.isEmpty {
+            parts.append(String(localized: "broadcast"))
+        } else {
+            parts.append(device.ssids.joined(separator: ", "))
+        }
+        if let host = lanHost, host.displayName != device.displayName {
+            parts.append(String(localized: "on LAN \(host.displayName)"))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var lanHost: LANDevice? {
+        let address = device.mac.description
+        return scanner.devices.values.first { $0.macAddress?.description == address }
+    }
+
     private var deviceIcon: String {
         let name = device.displayName.lowercased()
         if name.contains("apple") || name.contains("iphone") { return "iphone" }
@@ -63,22 +80,5 @@ struct ProbeDeviceRow: View {
         if name.contains("raspberry") || name.contains("espressif") { return "cpu" }
         if device.mac.isLocallyAdministered { return "questionmark.circle" }
         return "antenna.radiowaves.left.and.right"
-    }
-}
-
-/// Shows SSIDs as inline comma-separated text with an icon.
-private struct FlowText: View {
-    var ssids: [String]
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "magnifyingglass.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.orange.opacity(0.7))
-            Text(ssids.joined(separator: ", "))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-        }
     }
 }

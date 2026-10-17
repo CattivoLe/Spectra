@@ -87,6 +87,7 @@ fun SpectraApp(model: SpectraModel) {
                 NetworksScreen(
                     model,
                     onOpen = { nav.navigate("network/${it.routeId()}") },
+                    onOpenHost = { nav.navigate("host/${Uri.encode(it)}") },
                     onSensor = { openTab(nav, Tab.Sensor.route) },
                 )
             }
@@ -94,7 +95,11 @@ fun SpectraApp(model: SpectraModel) {
                 "network/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.StringType }),
             ) { entry ->
-                NetworkDetail(model, MacAddress.parse(entry.arguments?.getString("id").orEmpty().replace('-', ':')))
+                NetworkDetail(
+                    model,
+                    MacAddress.parse(entry.arguments?.getString("id").orEmpty().replace('-', ':')),
+                    onOpenHost = { nav.navigate("host/${Uri.encode(it)}") },
+                )
             }
             composable(Tab.Channels.route) { ChannelsScreen(model) }
             composable(Tab.Lan.route) { LanScreen(model, onOpen = { nav.navigate("host/${Uri.encode(it)}") }) }

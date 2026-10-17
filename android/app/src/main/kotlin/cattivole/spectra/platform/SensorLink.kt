@@ -65,7 +65,7 @@ class SensorLink(
         private set
     var firmwareUpdate: FirmwareUpdateProgress? = null
         private set
-    var liveInterval: Int = 5
+    var liveInterval: Int = 30
         private set
 
     val isConnected: Boolean get() = state is State.Connected || state is State.Demo
@@ -101,7 +101,8 @@ class SensorLink(
     }
 
     init {
-        liveInterval = prefs.getInt(KEY_INTERVAL, 5)
+        val saved = prefs.getInt(KEY_INTERVAL, 30)
+        liveInterval = if (saved in liveIntervals) saved else 30
         radio.addListener { result -> onScan(result) }
         refreshAvailability(connectSaved = true)
     }
@@ -514,7 +515,13 @@ class SensorLink(
     }
 
     companion object {
-        val liveIntervals = listOf(0, 3, 5, 10, 30)
+        val liveIntervals = listOf(0, 10, 30, 60, 120, 180, 240)
+
+        fun intervalTitle(seconds: Int): String = when {
+            seconds <= 0 -> "Only when asked"
+            seconds % 60 == 0 -> "Every ${seconds / 60} min"
+            else -> "Every $seconds s"
+        }
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         private const val KEY_SENSOR = "lastSensor"
         private const val KEY_INTERVAL = "liveInterval"
