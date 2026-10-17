@@ -11,9 +11,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -29,6 +32,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -53,7 +57,13 @@ import cattivole.spectra.platform.PhoneWifiScanner
 import cattivole.spectra.platform.SensorLink
 
 @Composable
-fun NetworksScreen(model: SpectraModel, onOpen: (MacAddress) -> Unit, onOpenHost: (String) -> Unit, onSensor: () -> Unit) {
+fun NetworksScreen(
+    model: SpectraModel,
+    onOpen: (MacAddress) -> Unit,
+    onOpenHost: (String) -> Unit,
+    onSensor: () -> Unit,
+    onChannels: () -> Unit,
+) {
     model.generation
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf("signal") }
@@ -79,9 +89,9 @@ fun NetworksScreen(model: SpectraModel, onOpen: (MacAddress) -> Unit, onOpenHost
         MaterialTheme.colorScheme.onSurfaceVariant
     }
     ScreenColumn(
-        title = "Networks",
+        title = "Wi‑Fi",
         subtitle = "${sensorHeadline(model)} · ${sensorDetail(model)}",
-        onTitleClick = onSensor,
+        onTitleClick = onChannels,
         navigationIcon = {
             IconButton(onClick = onSensor) {
                 if (model.store.isScanning) {
@@ -92,6 +102,10 @@ fun NetworksScreen(model: SpectraModel, onOpen: (MacAddress) -> Unit, onOpenHost
             }
         },
         actions = {
+            IconButton(
+                onClick = { model.history.saveNetworks(model.store, "This phone") },
+                enabled = model.store.networks().values.any { it.isInRange },
+            ) { Icon(Icons.Default.Save, contentDescription = "Save") }
             IconButton(onClick = {
                 model.link.scanNow()
                 model.phone.refresh()
@@ -299,7 +313,7 @@ fun NetworkDetail(model: SpectraModel, id: MacAddress?, onOpenHost: (String) -> 
 }
 
 @Composable
-fun ChannelsScreen(model: SpectraModel) {
+fun ChannelsScreen(model: SpectraModel, onBack: () -> Unit) {
     model.generation
     val readings = model.store.networks().values
         .filter { it.isInRange && it.latest.band == Band.TWO_FOUR }
@@ -307,7 +321,12 @@ fun ChannelsScreen(model: SpectraModel) {
         .sortedByDescending { it.rssi }
     val five = model.store.networks().values.filter { it.isInRange && it.latest.band != Band.TWO_FOUR }
     val best = ChannelAdvisor.recommendation(readings)
-    ScreenColumn("Channels") {
+    ScreenColumn(
+        "Channels",
+        navigationIcon = {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+        },
+    ) {
         SimpleList {
             if (readings.isEmpty()) {
                 item {
@@ -353,6 +372,10 @@ fun LanScreen(model: SpectraModel, onOpen: (String) -> Unit) {
         "LAN",
         subtitle = lanStatus(model),
         actions = {
+            IconButton(
+                onClick = { model.history.saveLan(model.lan.devices, "This phone") },
+                enabled = model.lan.devices.isNotEmpty(),
+            ) { Icon(Icons.Default.Save, contentDescription = "Save") }
             TextButton(onClick = { if (model.lan.scanning) model.lan.stop() else model.lan.scan() }) {
                 Text(if (model.lan.scanning) "Stop" else "Scan")
             }
@@ -472,6 +495,10 @@ fun BluetoothScreen(model: SpectraModel, onOpen: (String) -> Unit) {
         "Bluetooth",
         subtitle = bluetoothStatus(model.ble.state, nearby, heard.size),
         actions = {
+            IconButton(
+                onClick = { model.history.saveBluetooth(model.ble.devices.values, "This phone") },
+                enabled = model.ble.devices.isNotEmpty(),
+            ) { Icon(Icons.Default.Save, contentDescription = "Save") }
             TextButton(onClick = { if (model.ble.state is DeviceBleScanner.State.Scanning) model.ble.stop() else model.ble.start() }) {
                 Text(if (model.ble.state is DeviceBleScanner.State.Scanning) "Stop" else "Scan")
             }
@@ -696,6 +723,95 @@ private fun widthText(reading: AccessPointReading): String = when (reading.secon
     SecondaryChannel.ABOVE -> "${reading.channelWidthMHz} MHz, secondary above"
     SecondaryChannel.BELOW -> "${reading.channelWidthMHz} MHz, secondary below"
     else -> "${reading.channelWidthMHz} MHz"
+}
+
+@Composable
+fun HistoryScreen(model: SpectraModel, onOpen: (String) -> Unit) {
+    model.generation
+    var confirmClear by remember { mutableStateOf(false) }
+    ScreenColumn(
+        "History",
+        actions = {
+            if (model.history.entries.isNotEmpty()) {
+                TextButton(onClick = { confirmClear = true }) { Text("Clear") }
+            }
+        },
+    ) {
+        if (confirmClear) {
+            AlertDialog(
+                onDismissRequest = { confirmClear = false },
+                title = { Text("Clear history?") },
+                text = { Text("Saved scans from this phone and the Cardputer are removed.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        model.history.clear()
+                        confirmClear = false
+                    }) { Text("Clear history") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
+                },
+            )
+        }
+        SimpleList {
+            if (model.history.entries.isEmpty()) {
+                item {
+                    EmptyText(
+                        "Nothing saved",
+                        "Save what Wi‑Fi, LAN or Bluetooth just found. The Cardputer's side button saves its own scan, and it arrives here when the phone connects.",
+                    )
+                }
+            }
+            for (kind in listOf("networks", "lan", "bluetooth")) {
+                val rows = model.history.entries.filter { it.kind == kind }
+                if (rows.isEmpty()) continue
+                item { SectionTitle(rows.first().kindTitle) }
+                items(rows, key = { it.id }) { entry ->
+                    ClickRow(
+                        title = "${entry.lines.size} · ${entry.source}",
+                        subtitle = ago(entry.savedAt),
+                        trailing = "",
+                        onClick = { onOpen(entry.id) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HistoryDetail(model: SpectraModel, id: String, onBack: () -> Unit) {
+    model.generation
+    val entry = model.history.entry(id)
+    ScreenColumn(
+        entry?.kindTitle ?: "History",
+        subtitle = entry?.let { "${it.source} · ${ago(it.savedAt)}" },
+        navigationIcon = {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+        },
+        actions = {
+            if (entry != null) {
+                TextButton(onClick = {
+                    model.history.delete(id)
+                    onBack()
+                }) { Text("Delete") }
+            }
+        },
+    ) {
+        SimpleList {
+            if (entry == null) {
+                item { EmptyText("Gone", "This saved scan is no longer here.") }
+            } else {
+                items(entry.lines) { line ->
+                    ListItem(
+                        headlineContent = { Text(line.title) },
+                        supportingContent = { if (line.detail.isNotEmpty()) Text(line.detail) },
+                        trailingContent = { if (line.trailing.isNotEmpty()) Text(line.trailing) },
+                    )
+                }
+            }
+        }
+    }
 }
 
 private fun clock(millis: Long): String =

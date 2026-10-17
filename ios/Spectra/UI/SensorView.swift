@@ -82,7 +82,12 @@ struct SensorView: View {
                                     .symbolRenderingMode(.multicolor)
                             }
                             if case .connected = link.state, info.ota, link.firmwareUpdate?.isRunning != true {
-                                Button("Update firmware", systemImage: "arrow.down.circle") {
+                                if let image = BundledFirmware.image {
+                                    Button("Install included firmware", systemImage: "arrow.down.circle") {
+                                        pendingFirmware = PendingFirmware(name: "firmware.bin", data: image)
+                                    }
+                                }
+                                Button("Choose a firmware file…", systemImage: "folder") {
                                     pickingFirmware = true
                                 }
                             }
@@ -91,6 +96,8 @@ struct SensorView: View {
                         } footer: {
                             if case .connected = link.state, !info.ota {
                                 Text("This firmware cannot take updates from the app. Flash 0.6.0 or newer once over USB or the launcher; after that, updates install from here.")
+                            } else if case .connected = link.state, info.ota, BundledFirmware.image != nil {
+                                Text("Included firmware is the firmware.bin from the last app build. Rebuild the iOS app after pio run and it is picked up on its own.")
                             }
                         }
                     }
@@ -141,6 +148,17 @@ struct SensorView: View {
             } message: { pending in
                 Text(installMessage(pending))
             }
+        }
+    }
+
+    private enum BundledFirmware {
+        /// Copied into the app by the Xcode build, from pio's firmware.bin.
+        static var image: Data? {
+            guard let url = Bundle.main.url(forResource: "firmware", withExtension: "bin"),
+                  let data = try? Data(contentsOf: url),
+                  (try? FirmwareUpdate.validate(data)) != nil
+            else { return nil }
+            return data
         }
     }
 

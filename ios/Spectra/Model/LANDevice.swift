@@ -1,6 +1,6 @@
 import Foundation
 
-struct MACAddress: Hashable, Sendable, CustomStringConvertible {
+struct MACAddress: Hashable, Codable, Sendable, CustomStringConvertible {
     var bytes: [UInt8]
 
     var description: String {
@@ -16,7 +16,7 @@ struct MACAddress: Hashable, Sendable, CustomStringConvertible {
     var manufacturer: String? { OUIDatabase.lookup(oui) }
 }
 
-struct DiscoveredPort: Identifiable, Equatable, Sendable {
+struct DiscoveredPort: Identifiable, Equatable, Codable, Sendable {
     var number: Int
     var service: String
     var id: Int { number }
@@ -76,9 +76,11 @@ final class LANDevice: Identifiable {
     var id: String { ipAddress }
 
     var displayName: String {
-        if let pinnedName { return pinnedName }
+        if let pinnedName, !Self.isWeakHostname(pinnedName) { return pinnedName }
         if let model = identity.model { return model }
         if let maker = identity.manufacturer ?? manufacturer { return maker }
+        if let pinnedName { return pinnedName }
+        if identity.operatingSystem == "Android" { return "Android" }
         return ipAddress
     }
 
@@ -107,10 +109,18 @@ final class LANDevice: Identifiable {
     private func consider(_ raw: String?, rank: Int) {
         guard let raw, let shown = Self.presentable(raw) else { return }
         guard shown.caseInsensitiveCompare(ipAddress) != .orderedSame else { return }
-        let quality = rank
+        let quality = Self.isWeakHostname(shown) ? rank - 1 : rank
         guard quality > pinnedRank || (quality == pinnedRank && quality >= 2 && shown != pinnedName) else { return }
         pinnedName = shown
         pinnedRank = quality
+    }
+
+    /// "Android" and "android-1a2b…" are real DHCP names, but a worse title than a model.
+    nonisolated static func isWeakHostname(_ name: String) -> Bool {
+        let folded = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+        return folded == "android" || folded == "windows" || folded.hasPrefix("android ")
     }
 
     /// Strips a trailing `.local` and rejects blanks, placeholders and addresses.

@@ -3,7 +3,7 @@ import Foundation
 /// A deauthentication or disassociation frame captured by the sensor.
 /// A burst of these, especially to a broadcast address, indicates a deauth
 /// attack — someone is kicking devices off the network.
-nonisolated struct DeauthEvent: Identifiable, Equatable, Sendable {
+nonisolated struct DeauthEvent: Identifiable, Equatable, Codable, Sendable {
     var source: BSSID
     var target: BSSID
     var bssid: BSSID

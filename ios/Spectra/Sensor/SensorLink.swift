@@ -52,6 +52,7 @@ final class SensorLink: NSObject {
     }
 
     private let store: NetworkStore
+    private let history: HistoryStore
     private var central: CBCentralManager!
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var sensor: CBPeripheral?
@@ -83,8 +84,9 @@ final class SensorLink: NSObject {
         return String(localized: "Every \(seconds) s")
     }
 
-    init(store: NetworkStore) {
+    init(store: NetworkStore, history: HistoryStore) {
         self.store = store
+        self.history = history
         let saved = UserDefaults.standard.object(forKey: Keys.liveInterval) as? Int
         liveInterval = saved.flatMap { Self.liveIntervals.contains($0) ? $0 : nil } ?? 30
         super.init()
@@ -209,12 +211,23 @@ final class SensorLink: NSObject {
             return
         }
         if let message = SensorProtocol.decode(data) {
+            if case .saved(let record) = message {
+                if history.ingest(record, source: sensorSource) {
+                    send(.ackSaved(captureID: record.captureID))
+                }
+                return
+            }
             if case .battery(_, let level, let charging) = message {
                 batteryLevel = level
                 isCharging = charging
             }
             store.handle(message)
         }
+    }
+
+    private var sensorSource: String {
+        if case .connected(let name) = state { return name }
+        return "Cardputer"
     }
 
     private func name(of peripheral: CBPeripheral) -> String {
@@ -309,12 +322,19 @@ final class SensorLink: NSObject {
                 try await writeFirmware(current)
                 switch upload.phase {
                 case .waitReady, .waitDone:
-                    let status = try await waitForStatus(timeout: .seconds(20))
+                    // Erasing the inactive slot, and checking it at the end,
+                    // both outlast a normal command. The write itself returns
+                    // immediately; Ready and Done arrive when the flash is done.
+                    let status = try await waitForStatus(timeout: .seconds(120))
                     packet = upload.handle(status)
                     if upload.phase == .sending {
                         firmwareUpdate = FirmwareUpdateProgress(stage: .uploading(sent: 0, total: image.count))
                     }
                 case .sending:
+                    if let failure = consumeFailure() {
+                        packet = upload.handle(FirmwareUpdate.Status(phase: .failed, bytesAccepted: 0, failure: failure))
+                        break
+                    }
                     let acknowledged = upload.offset
                     packet = upload.onWriteCompleted()
                     if upload.phase == .waitDone {
@@ -368,6 +388,17 @@ final class SensorLink: NSObject {
             try await Task.sleep(for: .milliseconds(40))
         }
         throw FirmwareUpdate.TransferError.timedOut
+    }
+
+    /// A failure that arrived while chunks were still going out.
+    private func consumeFailure() -> FirmwareUpdate.Status.Failure? {
+        while !pendingStatuses.isEmpty {
+            let next = pendingStatuses.removeFirst()
+            if next.phase == .failed {
+                return next.failure == .none ? .finalizeFailed : next.failure
+            }
+        }
+        return nil
     }
 
     private func popStatus() -> FirmwareUpdate.Status? {

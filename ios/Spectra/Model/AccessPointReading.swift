@@ -1,7 +1,7 @@
 import Foundation
 
 /// One sighting of an access point, exactly as the sensor reported it.
-nonisolated struct AccessPointReading: Equatable, Sendable {
+nonisolated struct AccessPointReading: Equatable, Codable, Sendable {
     var bssid: BSSID
     var rssi: Int
     var channel: Int
@@ -45,7 +45,7 @@ nonisolated struct AccessPointReading: Equatable, Sendable {
     }
 }
 
-nonisolated struct BSSID: Hashable, Sendable, CustomStringConvertible {
+nonisolated struct BSSID: Hashable, Codable, Sendable, CustomStringConvertible {
     var bytes: [UInt8]
 
     var description: String {
@@ -67,14 +67,14 @@ nonisolated enum Band: String, Sendable {
     var gigahertz: Double { self == .fiveGHz ? 5 : 2.4 }
 }
 
-nonisolated enum SecondaryChannel: UInt8, Sendable {
+nonisolated enum SecondaryChannel: UInt8, Codable, Sendable {
     case none = 0
     case above = 1
     case below = 2
 }
 
 /// ESP-IDF `wifi_auth_mode_t`.
-nonisolated struct AuthMode: RawRepresentable, Hashable, Sendable {
+nonisolated struct AuthMode: RawRepresentable, Hashable, Codable, Sendable {
     var rawValue: UInt8
 
     static let open = AuthMode(rawValue: 0)
@@ -127,7 +127,7 @@ nonisolated struct AuthMode: RawRepresentable, Hashable, Sendable {
 }
 
 /// ESP-IDF `wifi_cipher_type_t`.
-nonisolated struct Cipher: RawRepresentable, Hashable, Sendable {
+nonisolated struct Cipher: RawRepresentable, Hashable, Codable, Sendable {
     var rawValue: UInt8
 
     static let none = Cipher(rawValue: 0)
@@ -154,7 +154,7 @@ nonisolated struct Cipher: RawRepresentable, Hashable, Sendable {
     }
 }
 
-nonisolated struct Capabilities: OptionSet, Hashable, Sendable {
+nonisolated struct Capabilities: OptionSet, Hashable, Codable, Sendable {
     var rawValue: UInt8
 
     static let b = Capabilities(rawValue: 1 << 0)

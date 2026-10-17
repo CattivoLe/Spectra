@@ -237,6 +237,16 @@ class CoreTest {
         assertTrue(LanIdentity.httpPrefers(200, "Keenetic", 501, null))
         assertFalse(LanIdentity.httpPrefers(501, null, 200, "Keenetic"))
 
+        val mac = HostIdentity.recognize(names = listOf("Alexander's Mac"))
+        assertEquals("Apple", mac.manufacturer)
+        assertEquals("macOS", mac.operatingSystem)
+        assertEquals("Mac", mac.model)
+        val office = HostIdentity.recognize(
+            names = listOf("Office"),
+            services = listOf(ServiceAdvertisement("_companion-link._tcp", "Office")),
+        )
+        assertEquals("Apple", office.manufacturer)
+        assertEquals("macOS", office.operatingSystem)
         val phone = HostIdentity.recognize(
             names = listOf("Phone"),
             services = listOf(ServiceAdvertisement("_device-info._tcp", "Phone", "iPhone16,1")),
@@ -252,6 +262,15 @@ class CoreTest {
         assertEquals("Samsung", fold4.manufacturer)
         assertEquals("Android", fold4.operatingSystem)
         assertEquals("Galaxy Z Fold4", fold4.model)
+        val plain = HostIdentity.recognize(names = listOf("Android"))
+        assertEquals("Android", plain.operatingSystem)
+        assertNull(plain.manufacturer)
+        val hashed = HostIdentity.recognize(names = listOf("android-a1b2c3d4e5f67890"))
+        assertEquals("Android", hashed.operatingSystem)
+        assertNull(hashed.manufacturer)
+        val tvShaped = HostIdentity.recognize(names = listOf("android-ls12abcd"))
+        assertEquals("Android", tvShaped.operatingSystem)
+        assertNull(tvShaped.manufacturer)
         val hyphenated = HostIdentity.recognize(names = listOf("Galaxy-Z-Fold4"))
         assertEquals("Samsung", hyphenated.manufacturer)
         assertEquals("Android", hyphenated.operatingSystem)

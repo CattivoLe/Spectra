@@ -1,12 +1,22 @@
 import SwiftUI
 
 struct DeviceDetailView: View {
-    var ip: String
+    private var lookup: String?
+    private var snapshot: LANDevice?
+
+    init(ip: String) {
+        lookup = ip
+    }
+
+    /// A saved host, shown with the same card as a live one.
+    init(device: LANDevice) {
+        snapshot = device
+    }
 
     @Environment(LANScanner.self) private var scanner
 
     var body: some View {
-        if let device = scanner.devices[ip] {
+        if let device = snapshot ?? lookup.flatMap({ scanner.devices[$0] }) {
             content(device)
         } else {
             ContentUnavailableView("Device cleared", systemImage: "desktopcomputer.trianglebadge.exclamationmark")
@@ -132,7 +142,7 @@ struct DeviceDetailView: View {
                 }
             }
 
-            // Ports
+            if snapshot == nil || device.portsScanned {
             Section {
                 if device.portsScanned {
                     if device.openPorts.isEmpty {
@@ -158,28 +168,33 @@ struct DeviceDetailView: View {
                     }
                 }
 
-                if let fraction = device.portScanFraction {
-                    ProgressView(value: fraction) {
-                        Text("Scanning ports…")
+                if snapshot == nil, let ip = lookup {
+                    if let fraction = device.portScanFraction {
+                        ProgressView(value: fraction) {
+                            Text("Scanning ports…")
+                        }
+                    } else {
+                        Button {
+                            scanner.scanPorts(for: ip)
+                        } label: {
+                            Label(device.portsScanned ? "Rescan ports" : "Scan ports", systemImage: "magnifyingglass")
+                        }
+                        .disabled(scanner.isScanning)
+                        Button {
+                            scanner.scanPorts(for: ip, scope: .all)
+                        } label: {
+                            Label("Scan all ports", systemImage: "checklist")
+                        }
+                        .disabled(scanner.isScanning)
                     }
-                } else {
-                    Button {
-                        scanner.scanPorts(for: ip)
-                    } label: {
-                        Label(device.portsScanned ? "Rescan ports" : "Scan ports", systemImage: "magnifyingglass")
-                    }
-                    .disabled(scanner.isScanning)
-                    Button {
-                        scanner.scanPorts(for: ip, scope: .all)
-                    } label: {
-                        Label("Scan all ports", systemImage: "checklist")
-                    }
-                    .disabled(scanner.isScanning)
                 }
             } header: {
                 Text("Ports")
             } footer: {
-                Text("Checks \(DiscoveredPort.commonPorts.count) common TCP ports, or every TCP port from 1 to 65535.")
+                if snapshot == nil {
+                    Text("Checks \(DiscoveredPort.commonPorts.count) common TCP ports, or every TCP port from 1 to 65535.")
+                }
+            }
             }
 
             // Timestamps

@@ -3,7 +3,7 @@ import Foundation
 /// A Wi-Fi client (station) seen through promiscuous-mode frame capture on the
 /// Cardputer. A client is either associated with a specific AP (identified by
 /// its BSSID) or just sending probe requests looking for networks.
-nonisolated struct WiFiClient: Identifiable, Equatable, Sendable {
+nonisolated struct WiFiClient: Identifiable, Equatable, Codable, Sendable {
     /// The client device's MAC address.
     var mac: BSSID
     /// The BSSID of the AP this client is associated with, or nil when the

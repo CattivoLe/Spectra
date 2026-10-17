@@ -79,6 +79,8 @@ struct ClientRow: View {
 /// What the sensor already knows about one station, including a LAN host with the same address.
 struct ClientDetailView: View {
     var client: WiFiClient
+    /// Probe list captured with a saved scan, when the live store no longer has it.
+    var savedProbe: ProbingDevice?
 
     @Environment(NetworkStore.self) private var store
     @Environment(LANScanner.self) private var scanner
@@ -98,7 +100,7 @@ struct ClientDetailView: View {
                     InfoRow("Network", value: network.revealedSSID ?? network.latest.displayName)
                 }
             }
-            if let probe = store.probingDevices.first(where: { $0.mac == client.mac }) {
+            if let probe = savedProbe ?? store.probingDevices.first(where: { $0.mac == client.mac }) {
                 Section("Probes") {
                     InfoRow("Channel", value: "\(probe.channel)")
                     if probe.ssids.isEmpty {

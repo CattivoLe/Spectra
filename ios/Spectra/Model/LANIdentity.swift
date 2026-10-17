@@ -1,7 +1,7 @@
 import Foundation
 
 /// What a host volunteered beyond an open port: UPnP, a web banner, RTSP, or Windows.
-nonisolated struct LANProfile: Equatable, Sendable {
+nonisolated struct LANProfile: Equatable, Codable, Sendable {
     var upnp: UPnPIdentity?
     var banners: [HTTPBanner] = []
     var rtsp: [RTSPService] = []
@@ -23,7 +23,7 @@ nonisolated struct LANProfile: Equatable, Sendable {
     }
 }
 
-nonisolated struct UPnPIdentity: Equatable, Sendable {
+nonisolated struct UPnPIdentity: Equatable, Codable, Sendable {
     var friendlyName: String?
     var manufacturer: String?
     var model: String?
@@ -42,7 +42,7 @@ nonisolated struct UPnPIdentity: Equatable, Sendable {
     }
 }
 
-nonisolated struct HTTPBanner: Equatable, Sendable, Identifiable {
+nonisolated struct HTTPBanner: Equatable, Codable, Sendable, Identifiable {
     var port: Int
     var secure: Bool
     var status: Int?
@@ -63,7 +63,7 @@ nonisolated struct HTTPBanner: Equatable, Sendable, Identifiable {
     }
 }
 
-nonisolated struct RTSPService: Equatable, Sendable, Identifiable {
+nonisolated struct RTSPService: Equatable, Codable, Sendable, Identifiable {
     var port: Int
     var server: String?
     var methods: String?
@@ -75,7 +75,7 @@ nonisolated struct RTSPService: Equatable, Sendable, Identifiable {
     }
 }
 
-nonisolated struct WindowsHost: Equatable, Sendable {
+nonisolated struct WindowsHost: Equatable, Codable, Sendable {
     var computerName: String?
     var domain: String?
     /// Shares that accepted a guest tree-connect. Empty when the host named
@@ -498,7 +498,7 @@ nonisolated enum LANIdentity {
     }
 
     private static let genericNames: Set<String> = [
-        "unknown", "unnamed", "device", "localhost", "android", "windows",
+        "unknown", "unnamed", "device", "localhost", "windows",
         "mediarenderer", "mediaserver", "basic", "internetgatewaydevice",
         "wandevice", "wanconnectiondevice",
     ]
@@ -627,7 +627,7 @@ private extension Data {
 }
 
 /// A Bonjour service a host advertised, including the model string from its TXT record.
-nonisolated struct ServiceAdvertisement: Equatable, Sendable {
+nonisolated struct ServiceAdvertisement: Equatable, Codable, Sendable {
     var type: String
     var name: String
     var model: String?
@@ -691,6 +691,18 @@ nonisolated struct HostIdentity: Equatable, Sendable {
         // Apple's own discovery services identify the maker.
         if types.contains(where: { $0.contains("device-info") || $0.contains("companion-link") }) {
             found.apply(HostIdentity(manufacturer: "Apple"), overwrite: false)
+        }
+        // A Mac advertises Continuity and device-info, and its name is often
+        // just "Mac" or a person's name. iPhone and iPad already have an OS
+        // from their model id or the sync service.
+        let handheld = texts.contains { text in
+            let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            return folded.contains("iphone") || folded.contains("ipad") || folded.contains("ipod")
+        }
+        if found.operatingSystem == nil, !handheld,
+           types.contains(where: { $0.contains("device-info") || $0.contains("companion-link") }),
+           !types.contains(where: { $0.contains("apple-mobdev") }) {
+            found.apply(HostIdentity(manufacturer: "Apple", operatingSystem: "macOS", model: "Mac"), overwrite: false)
         }
         if types.contains(where: { $0.contains("apple-mobdev") }) {
             let ipad = texts.contains { $0.range(of: "ipad", options: .caseInsensitive) != nil }
@@ -771,8 +783,24 @@ nonisolated struct HostIdentity: Equatable, Sendable {
         if folded.contains("ipad") {
             return HostIdentity(manufacturer: "Apple", operatingSystem: "iPadOS", model: "iPad")
         }
-        if folded.contains("macbook") || folded.contains("imac") || folded.contains("mac mini") || folded.contains("mac studio") {
-            return HostIdentity(manufacturer: "Apple", operatingSystem: "macOS", model: folded.contains("macbook") ? "MacBook" : "Mac")
+        if folded.contains("macbook") || folded.contains("imac") || folded.contains("mac mini")
+            || folded.contains("mac studio") || folded.contains("mac pro")
+            || folded == "mac" || folded.hasSuffix(" mac") {
+            let model: String
+            if folded.contains("macbook") {
+                model = "MacBook"
+            } else if folded.contains("imac") {
+                model = "iMac"
+            } else if folded.contains("mac mini") {
+                model = "Mac mini"
+            } else if folded.contains("mac studio") {
+                model = "Mac Studio"
+            } else if folded.contains("mac pro") {
+                model = "Mac Pro"
+            } else {
+                model = "Mac"
+            }
+            return HostIdentity(manufacturer: "Apple", operatingSystem: "macOS", model: model)
         }
         if folded.contains("apple tv") || folded.contains("appletv") {
             return HostIdentity(manufacturer: "Apple", operatingSystem: "tvOS", model: "Apple TV")
@@ -800,8 +828,14 @@ nonisolated struct HostIdentity: Equatable, Sendable {
         if folded.contains("pixel") {
             return HostIdentity(manufacturer: "Google", operatingSystem: "Android", model: productTitle(text) ?? "Pixel")
         }
+        // DHCP often publishes nothing but "Android" or "android-<hex>". Hyphens are
+        // already spaces here, and that hex must not be read as a TV model code.
+        if folded == "android" || folded.hasPrefix("android ") {
+            return HostIdentity(operatingSystem: "Android")
+        }
+        let compact = folded.replacingOccurrences(of: " ", with: "")
         if folded.contains("crystal uhd") || folded.contains("qled") || folded.contains("the frame") || folded.contains("neo qled")
-            || folded.replacingOccurrences(of: " ", with: "").range(of: #"(?:ue|un|qn|qa|qe|ls)\d{2}"#, options: .regularExpression) != nil {
+            || (!compact.hasPrefix("android") && compact.range(of: #"(?:ue|un|qn|qa|qe|ls)\d{2}"#, options: .regularExpression) != nil) {
             return HostIdentity(manufacturer: "Samsung", operatingSystem: "Tizen", model: shortLabel(text))
         }
         if folded.contains("eversolo") {

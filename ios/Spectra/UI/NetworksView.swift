@@ -5,7 +5,9 @@ struct NetworksView: View {
 
     @Environment(NetworkStore.self) private var store
     @Environment(SensorLink.self) private var link
+    @Environment(HistoryStore.self) private var history
     @State private var search = ""
+    @State private var showChannels = false
     @AppStorage("networkSort") private var sort: Sort = .signal
     @AppStorage("showOutOfRange") private var showOutOfRange = true
 
@@ -105,13 +107,16 @@ struct NetworksView: View {
             }
             .searchable(text: $search, prompt: Text("Name or BSSID"))
             .refreshable { link.scanNow() }
-            .navigationTitle("Networks")
+            .navigationTitle("Wi‑Fi")
             .navigationDestination(for: BSSID.self) { id in
                 NetworkDetailView(id: id)
             }
+            .navigationDestination(isPresented: $showChannels) {
+                ChannelsView()
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    SensorBar(open: openSensor)
+                    SensorBar(open: { showChannels = true })
                 }
                 if #available(iOS 26, *) {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)
@@ -125,7 +130,21 @@ struct NetworksView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save", systemImage: "square.and.arrow.down") {
+                        history.saveNetworks(store, source: "This iPhone")
+                    }
+                    .disabled(store.networks.isEmpty && store.probingDevices.isEmpty && store.deauthEvents.isEmpty)
+                }
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        Button("Scan now", systemImage: "arrow.clockwise") {
+                            link.scanNow()
+                        }
+                        .disabled(!link.isConnected)
+                        Divider()
                         Picker("Sort by", selection: $sort) {
                             ForEach(Sort.allCases) { Text($0.label).tag($0) }
                         }
@@ -143,7 +162,7 @@ struct NetworksView: View {
     }
 }
 
-/// Sensor name and status, in its own glass capsule. Tapping opens the Sensor tab.
+/// Sensor name and status, in its own glass capsule. Tapping opens the channel chart.
 struct SensorBar: View {
     var open: () -> Void
 
@@ -205,21 +224,29 @@ struct SensorBar: View {
 }
 
 /// Time since the last finished scan, or through the one in progress.
-/// Its own glass capsule, separate from the status text.
+/// Its own glass capsule. Tapping starts a scan.
 struct ScanTimer: View {
     @Environment(NetworkStore.self) private var store
+    @Environment(SensorLink.self) private var link
     @State private var scanStarted: Date?
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let anchor = store.isScanning ? (scanStarted ?? context.date) : store.lastScanFinished
-            if let anchor {
-                Label(Self.clock(context.date.timeIntervalSince(anchor)), systemImage: "timer")
-                    .font(.caption.monospacedDigit())
-                    .labelStyle(.titleAndIcon)
-                    .accessibilityLabel(Self.spoken(since: anchor, at: context.date, scanning: store.isScanning))
+        Button(action: link.scanNow) {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let anchor = store.isScanning ? (scanStarted ?? context.date) : store.lastScanFinished
+                if let anchor {
+                    Label(Self.clock(context.date.timeIntervalSince(anchor)), systemImage: "timer")
+                        .font(.caption.monospacedDigit())
+                        .labelStyle(.titleAndIcon)
+                } else {
+                    Label("Scan", systemImage: "timer")
+                        .font(.caption.monospacedDigit())
+                        .labelStyle(.titleAndIcon)
+                }
             }
         }
+        .disabled(!link.isConnected)
+        .accessibilityLabel(scanLabel)
         .onChange(of: store.isScanning, initial: true) { _, scanning in
             scanStarted = scanning ? .now : nil
         }
@@ -231,6 +258,13 @@ struct ScanTimer: View {
             return String(format: "%d:%02d", seconds / 60, seconds % 60)
         }
         return String(format: "%dh %02dm", seconds / 3600, (seconds % 3600) / 60)
+    }
+
+    private var scanLabel: String {
+        guard let anchor = store.isScanning ? scanStarted : store.lastScanFinished else {
+            return String(localized: "Scan now")
+        }
+        return Self.spoken(since: anchor, at: .now, scanning: store.isScanning)
     }
 
     private static func spoken(since date: Date, at now: Date, scanning: Bool) -> String {

@@ -2,12 +2,22 @@ import Charts
 import SwiftUI
 
 struct NetworkDetailView: View {
-    var id: BSSID
+    private var lookup: BSSID?
+    private var snapshot: TrackedNetwork?
+
+    init(id: BSSID) {
+        lookup = id
+    }
+
+    /// A saved network, shown with the same card as a live one.
+    init(network: TrackedNetwork) {
+        snapshot = network
+    }
 
     @Environment(NetworkStore.self) private var store
 
     var body: some View {
-        if let network = store.networks[id] {
+        if let network = snapshot ?? lookup.flatMap({ store.networks[$0] }) {
             content(network)
         } else {
             ContentUnavailableView("Network cleared", systemImage: "wifi.slash")
@@ -139,7 +149,8 @@ struct NetworkDetailView: View {
                 Section {
                     InfoRow("Volume", value: traffic.formattedBytes)
                     InfoRow("Packets", value: "\(traffic.packets)")
-                    if let duration = store.lastScanDuration,
+                    if snapshot == nil,
+                       let duration = store.lastScanDuration,
                        let bitrate = traffic.estimatedBitrate(scanDuration: duration) {
                         InfoRow("Est. bitrate", value: bitrate)
                     }

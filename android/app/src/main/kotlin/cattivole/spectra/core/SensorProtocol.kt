@@ -18,11 +18,19 @@ object SensorProtocol {
     sealed class Command {
         data object ScanOnce : Command()
         data class SetInterval(val seconds: Int) : Command()
+        data class AckSaved(val captureId: Long) : Command()
 
         val data: ByteArray
             get() = when (this) {
                 ScanOnce -> byteArrayOf(0x01)
                 is SetInterval -> byteArrayOf(0x02, seconds.coerceIn(0, 255).toByte())
+                is AckSaved -> byteArrayOf(
+                    0x03,
+                    captureId.toByte(),
+                    (captureId shr 8).toByte(),
+                    (captureId shr 16).toByte(),
+                    (captureId shr 24).toByte(),
+                )
             }
     }
 
@@ -43,6 +51,16 @@ object SensorProtocol {
         data class Traffic(val scanId: Int, val bssid: MacAddress, val bytes: Long, val packets: Int) : Message()
         data class VendorIe(val scanId: Int, val bssid: MacAddress, val deviceName: String, val manufacturer: String) : Message()
         data class Battery(val scanId: Int, val level: Int, val isCharging: Boolean) : Message()
+        data class Saved(
+            val kind: Int,
+            val captureId: Long,
+            val unix: Long,
+            val index: Int,
+            val total: Int,
+            val title: String,
+            val detail: String,
+            val trailing: String,
+        ) : Message()
     }
 
     private enum class MessageType(val raw: Int) {
@@ -56,6 +74,9 @@ object SensorProtocol {
         TRAFFIC(0x17),
         VENDOR_IE(0x18),
         BATTERY(0x19),
+        SAVED_WIFI(0x1A),
+        SAVED_BLE(0x1B),
+        SAVED_LAN(0x1C),
         ;
 
         companion object {
@@ -64,6 +85,8 @@ object SensorProtocol {
     }
 
     fun decode(data: ByteArray): Message? {
+        if (data.isEmpty()) return null
+        if (data.u8(0) == 0x1A || data.u8(0) == 0x1B || data.u8(0) == 0x1C) return decodeSaved(data)
         if (data.size < 3) return null
         val type = MessageType.from(data.u8(0)) ?: return null
         val scanId = data.u16le(1)
@@ -86,7 +109,57 @@ object SensorProtocol {
                 if (data.size < 5) return null
                 Message.Battery(scanId, minOf(data.u8(3), 100), data.u8(4) and 0x01 != 0)
             }
+            MessageType.SAVED_WIFI, MessageType.SAVED_BLE, MessageType.SAVED_LAN -> decodeSaved(data)
         }
+    }
+
+    private fun decodeSaved(data: ByteArray): Message.Saved? {
+        if (data.size < 13) return null
+        val kind = when (data.u8(0)) {
+            0x1A -> 1
+            0x1C -> 2
+            0x1B -> 3
+            else -> return null
+        }
+        val captureId = data.u32le(1)
+        val unix = data.u32le(5)
+        val index = data.u16le(9)
+        val total = data.u16le(11)
+        if (total <= 0 || index >= total) return null
+        val title: String
+        val detail: String
+        val trailing: String
+        when (data.u8(0)) {
+            0x1A -> {
+                if (data.size < 23) return null
+                val ssidLen = data.u8(22)
+                if (ssidLen > 32 || data.size < 23 + ssidLen) return null
+                val ssid = if (ssidLen > 0) String(data, 23, ssidLen, Charsets.UTF_8) else ""
+                title = ssid.ifEmpty { "Hidden network" }
+                detail = "${MacAddress(data.copyOfRange(13, 19)).text} · ch ${data.u8(20)} · ${AuthMode(data.u8(21)).name}"
+                trailing = data.i8(19).toString()
+            }
+            0x1B -> {
+                if (data.size < 22) return null
+                val nameLen = data.u8(21)
+                if (nameLen > 20 || data.size < 22 + nameLen) return null
+                val name = if (nameLen > 0) String(data, 22, nameLen, Charsets.UTF_8) else ""
+                title = name.ifEmpty { "Unknown device" }
+                detail = MacAddress(data.copyOfRange(13, 19)).text
+                trailing = data.i8(20).toString()
+            }
+            else -> {
+                if (data.size < 18) return null
+                val nameLen = data.u8(17)
+                if (nameLen > 24 || data.size < 18 + nameLen) return null
+                val ip = "${data.u8(13)}.${data.u8(14)}.${data.u8(15)}.${data.u8(16)}"
+                val name = if (nameLen > 0) String(data, 18, nameLen, Charsets.UTF_8) else ""
+                title = name.ifEmpty { ip }
+                detail = ip
+                trailing = ""
+            }
+        }
+        return Message.Saved(kind, captureId, unix, index, total, title, detail, trailing)
     }
 
     fun encode(message: Message): ByteArray {
@@ -167,6 +240,7 @@ object SensorProtocol {
                 out.u8(message.level)
                 out.u8(if (message.isCharging) 1 else 0)
             }
+            is Message.Saved -> Unit
         }
         return out.toByteArray()
     }

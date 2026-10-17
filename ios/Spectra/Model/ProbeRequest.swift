@@ -22,7 +22,7 @@ nonisolated struct ProbeRequest: Identifiable, Equatable, Sendable {
 }
 
 /// Probe requests grouped by the device that sent them.
-struct ProbingDevice: Identifiable {
+struct ProbingDevice: Identifiable, Equatable, Codable {
     var mac: BSSID
     var rssi: Int
     /// SSIDs the device is looking for (empty strings filtered out).

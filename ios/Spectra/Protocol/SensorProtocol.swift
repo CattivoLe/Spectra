@@ -15,6 +15,7 @@ nonisolated enum SensorProtocol {
     enum Command {
         case scanOnce
         case setInterval(seconds: Int)
+        case ackSaved(captureID: UInt32)
 
         var data: Data {
             switch self {
@@ -22,8 +23,34 @@ nonisolated enum SensorProtocol {
                 Data([0x01])
             case .setInterval(let seconds):
                 Data([0x02, UInt8(clamping: seconds)])
+            case .ackSaved(let captureID):
+                Data([
+                    0x03,
+                    UInt8(captureID & 0xFF),
+                    UInt8((captureID >> 8) & 0xFF),
+                    UInt8((captureID >> 16) & 0xFF),
+                    UInt8((captureID >> 24) & 0xFF),
+                ])
             }
         }
+    }
+
+    /// One row of a capture the Cardputer stored and is uploading.
+    struct SavedRecord: Equatable {
+        enum Kind: UInt8 {
+            case networks = 1
+            case lan = 2
+            case bluetooth = 3
+        }
+
+        var kind: Kind
+        var captureID: UInt32
+        var unix: UInt32
+        var index: Int
+        var total: Int
+        var title: String
+        var detail: String
+        var trailing: String
     }
 
     enum Message: Equatable {
@@ -37,6 +64,7 @@ nonisolated enum SensorProtocol {
         case traffic(scanID: UInt16, bssid: BSSID, bytes: UInt32, packets: Int)
         case vendorIE(scanID: UInt16, bssid: BSSID, deviceName: String, manufacturer: String)
         case battery(scanID: UInt16, level: Int, isCharging: Bool)
+        case saved(SavedRecord)
     }
 
     enum MessageType: UInt8 {
@@ -50,13 +78,22 @@ nonisolated enum SensorProtocol {
         case traffic = 0x17
         case vendorIE = 0x18
         case battery = 0x19
+        case savedWifi = 0x1A
+        case savedBle = 0x1B
+        case savedLan = 0x1C
     }
 
     /// Decodes one Results notification, or returns nil for anything malformed
     /// or from a newer protocol the app does not know.
     static func decode(_ data: Data) -> Message? {
         let bytes = [UInt8](data)
-        guard let first = bytes.first, let type = MessageType(rawValue: first), bytes.count >= 3 else {
+        guard let first = bytes.first else { return nil }
+        if first == MessageType.savedWifi.rawValue
+            || first == MessageType.savedBle.rawValue
+            || first == MessageType.savedLan.rawValue {
+            return decodeSaved(bytes)
+        }
+        guard let type = MessageType(rawValue: first), bytes.count >= 3 else {
             return nil
         }
         let scanID = u16(bytes, 1)
@@ -184,6 +221,9 @@ nonisolated enum SensorProtocol {
             let level = Int(bytes[3])
             let charging = (bytes[4] & 0x01) != 0
             return .battery(scanID: scanID, level: min(level, 100), isCharging: charging)
+
+        case .savedWifi, .savedBle, .savedLan:
+            return decodeSaved(bytes)
         }
     }
 
@@ -289,12 +329,79 @@ nonisolated enum SensorProtocol {
             put16(scanID)
             bytes.append(UInt8(clamping: level))
             bytes.append(isCharging ? 0x01 : 0x00)
+
+        case .saved:
+            // The phone never sends a stored capture. The arm exists so the
+            // switch stays exhaustive.
+            break
         }
         return Data(bytes)
     }
 
+    private static func decodeSaved(_ bytes: [UInt8]) -> Message? {
+        guard bytes.count >= 13, let kind = SavedRecord.Kind(rawValue: kindOf(bytes[0])) else { return nil }
+        let captureID = u32(bytes, 1)
+        let unix = u32(bytes, 5)
+        let index = Int(u16(bytes, 9))
+        let total = Int(u16(bytes, 11))
+        guard total > 0, index < total else { return nil }
+        let title: String
+        let detail: String
+        let trailing: String
+        switch bytes[0] {
+        case MessageType.savedWifi.rawValue:
+            guard bytes.count >= 23 else { return nil }
+            let ssidLen = Int(bytes[22])
+            guard ssidLen <= 32, bytes.count >= 23 + ssidLen else { return nil }
+            let ssid = ssidLen > 0 ? String(bytes: bytes[23..<(23 + ssidLen)], encoding: .utf8) ?? "" : ""
+            title = ssid.isEmpty ? "Hidden network" : ssid
+            let mac = BSSID(bytes: Array(bytes[13..<19]))
+            detail = "\(mac.description) · ch \(bytes[20]) · \(AuthMode(rawValue: bytes[21]).name)"
+            trailing = "\(Int(Int8(bitPattern: bytes[19])))"
+        case MessageType.savedBle.rawValue:
+            guard bytes.count >= 22 else { return nil }
+            let nameLen = Int(bytes[21])
+            guard nameLen <= 20, bytes.count >= 22 + nameLen else { return nil }
+            let name = nameLen > 0 ? String(bytes: bytes[22..<(22 + nameLen)], encoding: .utf8) ?? "" : ""
+            title = name.isEmpty ? "Unknown device" : name
+            detail = BSSID(bytes: Array(bytes[13..<19])).description
+            trailing = "\(Int(Int8(bitPattern: bytes[20])))"
+        case MessageType.savedLan.rawValue:
+            guard bytes.count >= 18 else { return nil }
+            let nameLen = Int(bytes[17])
+            guard nameLen <= 24, bytes.count >= 18 + nameLen else { return nil }
+            let ip = "\(bytes[13]).\(bytes[14]).\(bytes[15]).\(bytes[16])"
+            let name = nameLen > 0 ? String(bytes: bytes[18..<(18 + nameLen)], encoding: .utf8) ?? "" : ""
+            title = name.isEmpty ? ip : name
+            detail = ip
+            trailing = ""
+        default:
+            return nil
+        }
+        return .saved(SavedRecord(
+            kind: kind, captureID: captureID, unix: unix, index: index, total: total,
+            title: title, detail: detail, trailing: trailing
+        ))
+    }
+
+    private static func kindOf(_ type: UInt8) -> UInt8 {
+        switch type {
+        case MessageType.savedWifi.rawValue: 1
+        case MessageType.savedLan.rawValue: 2
+        case MessageType.savedBle.rawValue: 3
+        default: 0
+        }
+    }
+
     private static func u16(_ bytes: [UInt8], _ offset: Int) -> UInt16 {
         UInt16(bytes[offset]) | UInt16(bytes[offset + 1]) << 8
+    }
+
+    private static func u32(_ bytes: [UInt8], _ offset: Int) -> UInt32 {
+        UInt32(bytes[offset])
+            | UInt32(bytes[offset + 1]) << 8
+            | UInt32(bytes[offset + 2]) << 16
+            | UInt32(bytes[offset + 3]) << 24
     }
 }
 

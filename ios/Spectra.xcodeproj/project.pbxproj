@@ -90,6 +90,7 @@
 				AA0000000000000000000008 /* Sources */,
 				AA0000000000000000000009 /* Frameworks */,
 				AA000000000000000000000A /* Resources */,
+				AA0000000000000000000030 /* Embed firmware */,
 			);
 			buildRules = (
 			);
@@ -184,6 +185,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		AA0000000000000000000030 /* Embed firmware */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/../firmware/.pio/build/m5stack-cardputer-adv/firmware.bin",
+			);
+			name = "Embed firmware";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/firmware.bin",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "BIN=\"${SRCROOT}/../firmware/.pio/build/m5stack-cardputer-adv/firmware.bin\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nif [ -f \"$BIN\" ]; then\n  mkdir -p \"$DEST\"\n  cp \"$BIN\" \"$DEST/firmware.bin\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		AA0000000000000000000008 /* Sources */ = {

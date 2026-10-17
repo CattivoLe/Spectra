@@ -82,6 +82,25 @@ struct LANIdentityTests {
         #expect(!LANIdentity.httpPrefers(status: 501, title: nil, over: 200, otherTitle: "Keenetic"))
     }
 
+    @Test func aMacNameOrContinuityNamesMacOS() {
+        let named = HostIdentity.recognize(names: ["Alexander's Mac"])
+        #expect(named.manufacturer == "Apple")
+        #expect(named.operatingSystem == "macOS")
+        #expect(named.model == "Mac")
+
+        let pro = HostIdentity.recognize(names: ["Mac Pro"])
+        #expect(pro.manufacturer == "Apple")
+        #expect(pro.operatingSystem == "macOS")
+        #expect(pro.model == "Mac Pro")
+
+        let office = HostIdentity.recognize(
+            names: ["Office"],
+            services: [ServiceAdvertisement(type: "_companion-link._tcp", name: "Office", model: nil)]
+        )
+        #expect(office.manufacturer == "Apple")
+        #expect(office.operatingSystem == "macOS")
+    }
+
     @Test func anAppleModelIdNamesThePhone() {
         let service = ServiceAdvertisement(type: "_device-info._tcp", name: "Phone", model: "iPhone16,1")
         let identity = HostIdentity.recognize(names: ["Phone"], services: [service])
@@ -105,6 +124,18 @@ struct LANIdentityTests {
         #expect(fold4.manufacturer == "Samsung")
         #expect(fold4.operatingSystem == "Android")
         #expect(fold4.model == "Galaxy Z Fold4")
+
+        let phone = HostIdentity.recognize(names: ["Android"])
+        #expect(phone.operatingSystem == "Android")
+        #expect(phone.manufacturer == nil)
+
+        let hashed = HostIdentity.recognize(names: ["android-a1b2c3d4e5f67890"])
+        #expect(hashed.operatingSystem == "Android")
+        #expect(hashed.manufacturer == nil)
+
+        let tvShaped = HostIdentity.recognize(names: ["android-ls12abcd"])
+        #expect(tvShaped.operatingSystem == "Android")
+        #expect(tvShaped.manufacturer == nil)
 
         let hyphenated = HostIdentity.recognize(names: ["Galaxy-Z-Fold4"])
         #expect(hyphenated.manufacturer == "Samsung")

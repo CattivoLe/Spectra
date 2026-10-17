@@ -10,12 +10,14 @@ import cattivole.spectra.platform.DeviceBleScanner
 import cattivole.spectra.platform.LanScanner
 import cattivole.spectra.platform.PhoneWifiScanner
 import cattivole.spectra.platform.SensorLink
+import cattivole.spectra.core.HistoryStore
 import cattivole.spectra.core.NetworkStore
 
 class SpectraModel(app: Application) : AndroidViewModel(app) {
     val store = NetworkStore()
+    val history = HistoryStore(app)
     val radio = BleRadio(app)
-    val link = SensorLink(app, store, radio)
+    val link = SensorLink(app, store, radio, history)
     val phone = PhoneWifiScanner(app, store)
     val ble = DeviceBleScanner(app, radio, link)
     val lan = LanScanner(app)
@@ -26,6 +28,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     init {
         val bump = { generation += 1 }
         store.observe(bump)
+        history.observe(bump)
         link.observe(bump)
         phone.observe(bump)
         ble.observe(bump)

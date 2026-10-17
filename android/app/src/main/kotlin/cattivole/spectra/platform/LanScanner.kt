@@ -25,6 +25,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -95,7 +97,12 @@ class LanScanner(context: Context) {
                         val names = async { discoverMdns() }
                         poked.await()
                         val arp = readArp()
-                        val alive = (poked.await().keys + arp.keys).distinct()
+                        val mdns = names.await()
+                        val announced = ssdp.await()
+                        val alive = (
+                            poked.await().keys + arp.keys + mdns.names.keys + mdns.services.keys +
+                                announced.keys + info.localIp
+                            ).distinct()
                         progress = "Checking ${alive.size} hosts"
                         publishOnMain()
                         val profiles = alive.map { ip ->
@@ -105,8 +112,7 @@ class LanScanner(context: Context) {
                                 Triple(ip, ports, profile)
                             }
                         }.awaitAll()
-                        val mdns = names.await()
-                        Assembled(arp, mdns.names, mdns.services, ssdp.await(), profiles)
+                        Assembled(arp, mdns.names, mdns.services, announced, profiles)
                     }
                 }
                 apply(info, found)
@@ -366,61 +372,120 @@ class LanScanner(context: Context) {
 
     private val describedHosts = linkedMapOf<String, UPnPIdentity>()
 
+    /**
+     * One type at a time, then one resolve at a time. Samsung's NsdManager
+     * drops every discovery when several run together, so a phone that only
+     * answers mDNS never appeared.
+     */
     private suspend fun discoverMdns(): MdnsFound = withContext(Dispatchers.Main.immediate) {
         val manager = app.getSystemService(NsdManager::class.java) ?: return@withContext MdnsFound()
         val names = linkedMapOf<String, MutableList<String>>()
         val services = linkedMapOf<String, MutableList<ServiceAdvertisement>>()
         val types = listOf(
-            "_device-info._tcp", "_companion-link._tcp", "_apple-mobdev2._tcp", "_airplay._tcp", "_raop._tcp", "_googlecast._tcp",
-            "_http._tcp", "_hap._tcp", "_ipp._tcp", "_smb._tcp",
+            "_googlecast._tcp", "_device-info._tcp", "_companion-link._tcp", "_apple-mobdev2._tcp",
+            "_airplay._tcp", "_raop._tcp", "_http._tcp", "_hap._tcp", "_ipp._tcp", "_smb._tcp",
         )
-        val listeners = mutableListOf<NsdManager.DiscoveryListener>()
+        var resolved = 0
         for (type in types) {
-            val listener = object : NsdManager.DiscoveryListener {
-                override fun onDiscoveryStarted(serviceType: String) = Unit
-                override fun onDiscoveryStopped(serviceType: String) = Unit
-                override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
-                override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
-                override fun onServiceLost(serviceInfo: NsdServiceInfo) = Unit
-                override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                    try {
-                        manager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-                            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = Unit
-                            override fun onServiceResolved(resolved: NsdServiceInfo) {
-                                val host = resolved.host?.hostAddress ?: return
-                                val name = LanDevice.usefulHostname(resolved.serviceName, host) ?: resolved.serviceName
-                                fun keep(value: String?) {
-                                    val shown = value?.let { LanDevice.usefulHostname(it, host) } ?: return
-                                    val list = names.getOrPut(host) { mutableListOf() }
-                                    if (shown !in list) list.add(shown)
-                                }
-                                keep(name)
-                                keep(attribute(resolved, "fn"))
-                                val model = attribute(resolved, "model") ?: attribute(resolved, "md")
-                                val list = services.getOrPut(host) { mutableListOf() }
-                                if (list.none { it.type == resolved.serviceType && it.name == name }) {
-                                    list.add(ServiceAdvertisement(resolved.serviceType, name, model))
-                                }
-                            }
-                        })
-                    } catch (_: Exception) {
-                    }
-                }
-            }
-            listeners.add(listener)
-            try {
-                manager.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, listener)
-            } catch (_: Exception) {
-            }
-        }
-        kotlinx.coroutines.delay(1500)
-        for (listener in listeners) {
-            try {
-                manager.stopServiceDiscovery(listener)
-            } catch (_: Exception) {
+            if (resolved >= 24) break
+            for (info in discoverType(manager, type)) {
+                if (resolved >= 24) break
+                val found = resolveOne(manager, info) ?: continue
+                resolved += 1
+                rememberResolved(found, names, services)
             }
         }
         MdnsFound(names, services)
+    }
+
+    private suspend fun discoverType(manager: NsdManager, type: String): List<NsdServiceInfo> =
+        suspendCancellableCoroutine { cont ->
+            val found = mutableListOf<NsdServiceInfo>()
+            var resumed = false
+            fun finish(rows: List<NsdServiceInfo>) {
+                if (resumed || !cont.isActive) return
+                resumed = true
+                cont.resume(rows)
+            }
+            val listener = object : NsdManager.DiscoveryListener {
+                override fun onDiscoveryStarted(serviceType: String) = Unit
+                override fun onServiceLost(serviceInfo: NsdServiceInfo) = Unit
+                override fun onDiscoveryStopped(serviceType: String) = finish(found.toList())
+                override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) = finish(emptyList())
+                override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = finish(found.toList())
+                override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                    found.add(serviceInfo)
+                }
+            }
+            try {
+                manager.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, listener)
+            } catch (_: Exception) {
+                finish(emptyList())
+                return@suspendCancellableCoroutine
+            }
+            val stop = Runnable {
+                try {
+                    manager.stopServiceDiscovery(listener)
+                } catch (_: Exception) {
+                    finish(found.toList())
+                }
+            }
+            val handler = android.os.Handler(android.os.Looper.getMainLooper())
+            handler.postDelayed(stop, 600)
+            handler.postDelayed({ finish(found.toList()) }, 1000)
+            cont.invokeOnCancellation {
+                handler.removeCallbacks(stop)
+                try {
+                    manager.stopServiceDiscovery(listener)
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+    private suspend fun resolveOne(manager: NsdManager, info: NsdServiceInfo): NsdServiceInfo? =
+        suspendCancellableCoroutine { cont ->
+            var resumed = false
+            fun finish(resolved: NsdServiceInfo?) {
+                if (resumed || !cont.isActive) return
+                resumed = true
+                cont.resume(resolved)
+            }
+            val listener = object : NsdManager.ResolveListener {
+                override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = finish(null)
+                override fun onServiceResolved(resolved: NsdServiceInfo) = finish(resolved)
+            }
+            try {
+                manager.resolveService(info, listener)
+            } catch (_: Exception) {
+                finish(null)
+                return@suspendCancellableCoroutine
+            }
+            val handler = android.os.Handler(android.os.Looper.getMainLooper())
+            val giveUp = Runnable { finish(null) }
+            handler.postDelayed(giveUp, 1000)
+            cont.invokeOnCancellation { handler.removeCallbacks(giveUp) }
+        }
+
+    private fun rememberResolved(
+        resolved: NsdServiceInfo,
+        names: MutableMap<String, MutableList<String>>,
+        services: MutableMap<String, MutableList<ServiceAdvertisement>>,
+    ) {
+        val host = resolved.host?.hostAddress ?: return
+        val name = LanDevice.usefulHostname(resolved.serviceName, host) ?: resolved.serviceName
+        fun keep(value: String?) {
+            val shown = value?.let { LanDevice.usefulHostname(it, host) } ?: return
+            val list = names.getOrPut(host) { mutableListOf() }
+            if (shown !in list) list.add(shown)
+        }
+        keep(name)
+        keep(attribute(resolved, "fn"))
+        val model = attribute(resolved, "model") ?: attribute(resolved, "md")
+        model?.let { keep(it) }
+        val list = services.getOrPut(host) { mutableListOf() }
+        if (list.none { it.type == resolved.serviceType && it.name == name }) {
+            list.add(ServiceAdvertisement(resolved.serviceType, name, model))
+        }
     }
 
     private fun attribute(info: NsdServiceInfo, key: String): String? {

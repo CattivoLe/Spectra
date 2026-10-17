@@ -23,7 +23,7 @@ The device advertises the service UUID and the name `Spectra-XXXX`, where
 UTF-8 JSON, for example:
 
 ```json
-{"proto":6,"fw":"0.7.0","chip":"ESP32-S3","bands":["2.4"],"interval":5,"ota":true,"bat":85,"chg":false}
+{"proto":6,"fw":"0.8.0","chip":"ESP32-S3","bands":["2.4"],"interval":5,"ota":true,"bat":85,"chg":false}
 ```
 
 `interval` is the current automatic scan interval in seconds, 0 when off.
@@ -42,6 +42,7 @@ First byte is the command.
 |---|---|---|
 | `0x01` | Scan once | — |
 | `0x02` | Set interval | `u8` seconds between scans, 0 stops |
+| `0x03` | Ack saved | `u32` capture id. The sensor deletes that stored capture |
 
 A scan that is already running is not restarted; the request is ignored.
 Both commands are ignored while a firmware update is in progress.
@@ -215,6 +216,36 @@ before `scanFinished`. Absent when the hardware has no battery monitor.
 | 1 | 2 | scan id |
 | 3 | 1 | battery level, 0–100 % |
 | 4 | 1 | flags: bit 0 = charging |
+
+### `0x1A` `0x1B` `0x1C` Stored capture
+
+A capture the Cardputer kept in flash after the side button. `0x1A` is a
+Wi-Fi network, `0x1B` a Bluetooth advertisement, `0x1C` a LAN host. The
+sensor sends every stored row when a phone connects. The phone answers
+with control `0x03` and the capture id once it has the whole capture
+(`index + 1 == total`). Until that ack, the sensor sends the capture again
+on the next connection.
+
+`unix` is seconds since 1970, or 0 when the Cardputer clock has not been set.
+The phone then stamps the capture with the time it arrived.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type |
+| 1 | 4 | capture id (`u32`) |
+| 5 | 4 | unix time (`u32`) |
+| 9 | 2 | index of this row (`u16`) |
+| 11 | 2 | number of rows in the capture (`u16`) |
+| 13 | | the row, below |
+
+Wi-Fi row: BSSID (6), RSSI (`i8`), channel, auth mode, SSID length, SSID.
+Bluetooth row: address (6), address type, RSSI (`i8`), name length, name
+(at most 20 bytes). An empty name is an unnamed device.
+LAN row: IPv4 (4 octets), name length, name (at most 24 bytes).
+
+On the Cardputer the LAN scan only sees hosts advertising mDNS, and only
+after the radio has joined that Wi-Fi. A power-on scan that has not joined
+stores nothing.
 
 ### `0x30` Update status
 

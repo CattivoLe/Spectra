@@ -5,17 +5,20 @@
 // docs/protocol.md.
 
 #include <M5Cardputer.h>
+#include <ESPmDNS.h>
 #include <HWCDC.h>
 #include <NimBLEDevice.h>
+#include <Preferences.h>
 #include <Update.h>
 #include <WiFi.h>
+#include <time.h>
 #include <esp_mac.h>
 #include <esp_wifi.h>
 #include <algorithm>
 #include <cstring>
 #include <vector>
 
-static constexpr char kFirmwareVersion[] = "0.7.0";
+static constexpr char kFirmwareVersion[] = "0.8.2";
 static constexpr uint8_t kProtocolVersion = 6;
 
 static constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
@@ -26,6 +29,7 @@ static constexpr char kFirmwareUuid[] = "53500005-8F2D-4B6A-9C1E-737065637472";
 
 static constexpr uint8_t kCmdScanOnce = 0x01;
 static constexpr uint8_t kCmdSetInterval = 0x02;
+static constexpr uint8_t kCmdAckSaved = 0x03;
 
 static constexpr uint8_t kMsgScanStarted = 0x10;
 static constexpr uint8_t kMsgAccessPoint = 0x11;
@@ -37,6 +41,9 @@ static constexpr uint8_t kMsgSSIDReveal = 0x16;
 static constexpr uint8_t kMsgTraffic = 0x17;
 static constexpr uint8_t kMsgVendorIE = 0x18;
 static constexpr uint8_t kMsgBattery = 0x19;
+static constexpr uint8_t kMsgSavedWifi = 0x1A;
+static constexpr uint8_t kMsgSavedBle = 0x1B;
+static constexpr uint8_t kMsgSavedLan = 0x1C;
 static constexpr uint8_t kMsgUpdate = 0x30;
 
 static constexpr uint8_t kOtaBegin = 0x01;
@@ -140,6 +147,48 @@ static uint16_t scanId = 0;
 static uint32_t lastScanMs = 0;
 static uint32_t lastScanDurationMs = 0;
 static std::vector<ApSummary> lastResults;
+
+struct KeptWifi {
+  uint8_t bssid[6];
+  int8_t rssi;
+  uint8_t channel;
+  uint8_t auth;
+  char ssid[33];
+};
+struct KeptBle {
+  uint8_t addr[6];
+  uint8_t addrType;
+  int8_t rssi;
+  char name[21];
+};
+struct KeptLan {
+  uint8_t ip[4];
+  char name[25];
+};
+struct StoredCapture {
+  char key[4];
+  uint32_t id;
+  bool queued;
+  std::vector<uint8_t> blob;
+};
+
+static std::vector<KeptWifi> keptWifi;
+static std::vector<KeptBle> keptBle;
+static std::vector<KeptLan> keptLan;
+static char lanNote[16] = "";
+static int menuIndex = 0;
+static int listOffset = 0;
+static volatile uint8_t requestedKind = 0;
+static char banner[24] = "";
+static uint32_t bannerUntil = 0;
+static std::vector<StoredCapture> stored;
+static std::vector<std::vector<uint8_t>> outbox;
+static uint32_t lastOutMs = 0;
+static portMUX_TYPE ackMux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t ackIds[8];
+static uint8_t ackCount = 0;
+static const char *kMenuNames[] = {"Networks", "LAN", "Bluetooth"};
+
 static uint16_t lastStationCount = 0;
 static uint16_t lastProbeCount = 0;
 static bool uiDirty = true;
@@ -158,6 +207,14 @@ static uint32_t otaCrcExpected = 0;
 static uint32_t otaCrc = 0;
 static uint32_t otaProgressMark = 0;
 static uint32_t otaRebootAt = 0;
+// Begin erases the inactive slot before any byte is stored. That takes
+// longer than a phone will wait on a GATT write, and doing it inside the
+// NimBLE callback stalls the radio. The callback only queues the job.
+static TaskHandle_t otaTask = nullptr;
+static volatile uint8_t otaJob = 0;
+static volatile bool otaJobBusy = false;
+static uint32_t otaJobSize = 0;
+static uint32_t otaJobCrc = 0;
 static uint32_t crc32Table[256];
 static bool crc32Ready = false;
 
@@ -555,15 +612,34 @@ class ControlCallbacks : public NimBLECharacteristicCallbacks {
     }
     switch (value[0]) {
       case kCmdScanOnce:
+        taskENTER_CRITICAL(&radioMux);
+        requestedKind = 0;
         scanRequested = true;
+        taskEXIT_CRITICAL(&radioMux);
         break;
       case kCmdSetInterval:
         if (value.size() >= 2) {
           scanIntervalSec = value[1];
           intervalChanged = true;
           if (scanIntervalSec > 0) {
+            taskENTER_CRITICAL(&radioMux);
+            requestedKind = 0;
             scanRequested = true;
+            taskEXIT_CRITICAL(&radioMux);
           }
+        }
+        break;
+      case kCmdAckSaved:
+        if (value.size() >= 5) {
+          const uint32_t id = static_cast<uint32_t>(value[1]) |
+                              (static_cast<uint32_t>(value[2]) << 8) |
+                              (static_cast<uint32_t>(value[3]) << 16) |
+                              (static_cast<uint32_t>(value[4]) << 24);
+          taskENTER_CRITICAL(&ackMux);
+          if (ackCount < 8) {
+            ackIds[ackCount++] = id;
+          }
+          taskEXIT_CRITICAL(&ackMux);
         }
         break;
       default:
@@ -588,6 +664,10 @@ static void sendMessage(const uint8_t *data, size_t length) {
 static void putU16(uint8_t *p, uint16_t v) {
   p[0] = v & 0xFF;
   p[1] = v >> 8;
+}
+
+static uint16_t readU16(const uint8_t *p) {
+  return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
 }
 
 static void sendScanStarted() {
@@ -851,6 +931,8 @@ static bool otaTryClaim() {
   return claimed;
 }
 
+static void otaFinish();
+
 static void otaBegin(uint32_t size, uint32_t crc) {
   if (!otaCrcOk) {
     notifyOta(kOtaFailed, kOtaErrBegin);
@@ -872,6 +954,8 @@ static void otaBegin(uint32_t size, uint32_t crc) {
   // by otaActive; an idle STA interface does not get in the way.
   esp_wifi_set_promiscuous(false);
   esp_wifi_scan_stop();
+  otaPercent = 0;
+  uiDirty = true;
   if (!Update.begin(size)) {
     otaCleanup(true);
     notifyOta(kOtaFailed, kOtaErrBegin);
@@ -884,10 +968,56 @@ static void otaBegin(uint32_t size, uint32_t crc) {
   otaProgressMark = 0;
   otaPercent = 0;
   uiDirty = true;
+  // The phone sends the first chunk as soon as it sees Ready. Drop the
+  // busy flag first, under the same lock the queue uses, so that chunk
+  // is accepted instead of rejected as busy.
+  taskENTER_CRITICAL(&radioMux);
+  otaJobBusy = false;
+  taskEXIT_CRITICAL(&radioMux);
   notifyOta(kOtaReady, kOtaErrNone);
 }
 
+static void otaTaskMain(void *) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    const uint8_t job = otaJob;
+    if (job == kOtaBegin) {
+      otaBegin(otaJobSize, otaJobCrc);
+    } else if (job == kOtaFinish) {
+      otaFinish();
+    }
+    taskENTER_CRITICAL(&radioMux);
+    if (otaJob == job) {
+      otaJob = 0;
+      otaJobBusy = false;
+    }
+    taskEXIT_CRITICAL(&radioMux);
+  }
+}
+
+// Copies the command and returns. False when a begin or finish is already running.
+static bool otaEnqueue(uint8_t job, uint32_t size, uint32_t crc) {
+  bool accepted = false;
+  taskENTER_CRITICAL(&radioMux);
+  if (otaTask != nullptr && !otaJobBusy && otaJob == 0) {
+    otaJobSize = size;
+    otaJobCrc = crc;
+    otaJob = job;
+    otaJobBusy = true;
+    accepted = true;
+  }
+  taskEXIT_CRITICAL(&radioMux);
+  if (accepted) {
+    xTaskNotifyGive(otaTask);
+  }
+  return accepted;
+}
+
 static void otaData(const uint8_t *data, size_t length, uint32_t offset) {
+  if (otaJobBusy) {
+    notifyOta(kOtaFailed, kOtaErrBusy);
+    return;
+  }
   if (!otaActive || !Update.isRunning()) {
     notifyOta(kOtaFailed, kOtaErrOffset);
     return;
@@ -955,7 +1085,9 @@ class FirmwareCallbacks : public NimBLECharacteristicCallbacks {
     switch (bytes[0]) {
       case kOtaBegin:
         if (length >= 9) {
-          otaBegin(getU32(bytes + 1), getU32(bytes + 5));
+          if (!otaEnqueue(kOtaBegin, getU32(bytes + 1), getU32(bytes + 5))) {
+            notifyOta(kOtaFailed, kOtaErrBusy);
+          }
         } else {
           notifyOta(kOtaFailed, kOtaErrBegin);
         }
@@ -968,7 +1100,9 @@ class FirmwareCallbacks : public NimBLECharacteristicCallbacks {
         }
         break;
       case kOtaFinish:
-        otaFinish();
+        if (!otaEnqueue(kOtaFinish, 0, 0)) {
+          notifyOta(kOtaFailed, kOtaErrBusy);
+        }
         break;
       case kOtaAbort:
         otaAbortCommand();
@@ -978,6 +1112,352 @@ class FirmwareCallbacks : public NimBLECharacteristicCallbacks {
     }
   }
 };
+
+// ---------------------------------------------------------------------------
+// Standalone scans and the captures the side button stores
+// ---------------------------------------------------------------------------
+
+static void drawStatus(const char *line);
+
+static uint32_t unixNow() {
+  const auto dt = M5.Rtc.getDateTime();
+  if (dt.date.year < 2024) {
+    return 0;
+  }
+  tm clock = dt.get_tm();
+  const time_t seconds = mktime(&clock);
+  if (seconds < 1700000000) {
+    return 0;
+  }
+  return static_cast<uint32_t>(seconds);
+}
+
+static void showBanner(const char *text) {
+  snprintf(banner, sizeof(banner), "%s", text);
+  bannerUntil = millis() + 2000;
+  uiDirty = true;
+}
+
+static void enqueueCapture(StoredCapture &cap) {
+  if (cap.queued || cap.blob.size() < 11) {
+    return;
+  }
+  const uint8_t *blob = cap.blob.data();
+  const uint8_t kind = blob[0];
+  const uint32_t id = getU32(blob + 1);
+  const uint32_t when = getU32(blob + 5);
+  const uint16_t count = readU16(blob + 9);
+  const size_t record = kind == 1 ? 41 : 29;
+  if (count == 0 || 11 + static_cast<size_t>(count) * record > cap.blob.size()) {
+    return;
+  }
+  for (uint16_t i = 0; i < count; ++i) {
+    const uint8_t *row = blob + 11 + static_cast<size_t>(i) * record;
+    uint8_t msg[64];
+    size_t len = 0;
+    if (kind == 1) {
+      const uint8_t ssidLen = static_cast<uint8_t>(strnlen(reinterpret_cast<const char *>(row + 9), 32));
+      msg[0] = kMsgSavedWifi;
+      putU32(msg + 1, id);
+      putU32(msg + 5, when);
+      putU16(msg + 9, i);
+      putU16(msg + 11, count);
+      memcpy(msg + 13, row, 6);
+      msg[19] = row[6];
+      msg[20] = row[7];
+      msg[21] = row[8];
+      msg[22] = ssidLen;
+      memcpy(msg + 23, row + 9, ssidLen);
+      len = 23 + ssidLen;
+    } else if (kind == 3) {
+      const uint8_t nameLen = static_cast<uint8_t>(strnlen(reinterpret_cast<const char *>(row + 8), 20));
+      msg[0] = kMsgSavedBle;
+      putU32(msg + 1, id);
+      putU32(msg + 5, when);
+      putU16(msg + 9, i);
+      putU16(msg + 11, count);
+      memcpy(msg + 13, row, 6);
+      msg[19] = row[6];
+      msg[20] = row[7];
+      msg[21] = nameLen;
+      memcpy(msg + 22, row + 8, nameLen);
+      len = 22 + nameLen;
+    } else if (kind == 2) {
+      const uint8_t nameLen = static_cast<uint8_t>(strnlen(reinterpret_cast<const char *>(row + 4), 24));
+      msg[0] = kMsgSavedLan;
+      putU32(msg + 1, id);
+      putU32(msg + 5, when);
+      putU16(msg + 9, i);
+      putU16(msg + 11, count);
+      memcpy(msg + 13, row, 4);
+      msg[17] = nameLen;
+      memcpy(msg + 18, row + 4, nameLen);
+      len = 18 + nameLen;
+    } else {
+      return;
+    }
+    outbox.emplace_back(msg, msg + len);
+  }
+  cap.queued = true;
+}
+
+static void queueUnsent() {
+  for (StoredCapture &cap : stored) {
+    enqueueCapture(cap);
+  }
+}
+
+static void forgetCapture(uint32_t id) {
+  Preferences prefs;
+  prefs.begin("spectra", false);
+  for (auto it = stored.begin(); it != stored.end();) {
+    if (it->id == id) {
+      prefs.remove(it->key);
+      it = stored.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  prefs.end();
+}
+
+static void loadStored() {
+  stored.clear();
+  Preferences prefs;
+  prefs.begin("spectra", true);
+  for (int slot = 0; slot < 6; ++slot) {
+    char key[4];
+    snprintf(key, sizeof(key), "c%d", slot);
+    const size_t size = prefs.getBytesLength(key);
+    if (size < 11) {
+      continue;
+    }
+    StoredCapture cap;
+    snprintf(cap.key, sizeof(cap.key), "c%d", slot);
+    cap.blob.resize(size);
+    prefs.getBytes(key, cap.blob.data(), size);
+    cap.id = getU32(cap.blob.data() + 1);
+    cap.queued = false;
+    stored.push_back(std::move(cap));
+  }
+  prefs.end();
+}
+
+static bool storeBlob(uint8_t kind, const uint8_t *body, size_t bodyLen, uint16_t count) {
+  if (count == 0 || bodyLen == 0) {
+    return false;
+  }
+  Preferences prefs;
+  prefs.begin("spectra", false);
+  const uint32_t id = prefs.getUInt("seq", 1);
+  prefs.putUInt("seq", id + 1);
+
+  int slot = -1;
+  for (int i = 0; i < 6; ++i) {
+    char key[4];
+    snprintf(key, sizeof(key), "c%d", i);
+    if (prefs.getBytesLength(key) == 0) {
+      slot = i;
+      break;
+    }
+  }
+  if (slot < 0) {
+    uint32_t oldest = UINT32_MAX;
+    for (const StoredCapture &cap : stored) {
+      if (cap.id < oldest) {
+        oldest = cap.id;
+      }
+    }
+    for (auto it = stored.begin(); it != stored.end(); ++it) {
+      if (it->id == oldest) {
+        slot = it->key[1] - '0';
+        prefs.remove(it->key);
+        stored.erase(it);
+        break;
+      }
+    }
+  }
+  if (slot < 0 || slot > 5) {
+    prefs.end();
+    return false;
+  }
+
+  std::vector<uint8_t> blob(11 + bodyLen);
+  blob[0] = kind;
+  putU32(blob.data() + 1, id);
+  putU32(blob.data() + 5, unixNow());
+  putU16(blob.data() + 9, count);
+  memcpy(blob.data() + 11, body, bodyLen);
+
+  char key[4];
+  snprintf(key, sizeof(key), "c%d", slot);
+  prefs.putBytes(key, blob.data(), blob.size());
+  prefs.end();
+
+  StoredCapture cap;
+  snprintf(cap.key, sizeof(cap.key), "c%d", slot);
+  cap.id = id;
+  cap.queued = false;
+  cap.blob = std::move(blob);
+  stored.push_back(std::move(cap));
+  return true;
+}
+
+static bool saveWifi() {
+  if (keptWifi.empty()) {
+    return false;
+  }
+  const uint16_t count = static_cast<uint16_t>(std::min<size_t>(keptWifi.size(), 40));
+  std::vector<uint8_t> body(static_cast<size_t>(count) * 41);
+  for (uint16_t i = 0; i < count; ++i) {
+    uint8_t *row = body.data() + static_cast<size_t>(i) * 41;
+    memcpy(row, keptWifi[i].bssid, 6);
+    row[6] = static_cast<uint8_t>(keptWifi[i].rssi);
+    row[7] = keptWifi[i].channel;
+    row[8] = keptWifi[i].auth;
+    memcpy(row + 9, keptWifi[i].ssid, 32);
+  }
+  return storeBlob(1, body.data(), body.size(), count);
+}
+
+static bool saveBle() {
+  if (keptBle.empty()) {
+    return false;
+  }
+  const uint16_t count = static_cast<uint16_t>(std::min<size_t>(keptBle.size(), 50));
+  std::vector<uint8_t> body(static_cast<size_t>(count) * 29);
+  for (uint16_t i = 0; i < count; ++i) {
+    uint8_t *row = body.data() + static_cast<size_t>(i) * 29;
+    memcpy(row, keptBle[i].addr, 6);
+    row[6] = keptBle[i].addrType;
+    row[7] = static_cast<uint8_t>(keptBle[i].rssi);
+    memcpy(row + 8, keptBle[i].name, 20);
+  }
+  return storeBlob(3, body.data(), body.size(), count);
+}
+
+static bool saveLan() {
+  if (keptLan.empty()) {
+    return false;
+  }
+  const uint16_t count = static_cast<uint16_t>(std::min<size_t>(keptLan.size(), 40));
+  std::vector<uint8_t> body(static_cast<size_t>(count) * 29);
+  for (uint16_t i = 0; i < count; ++i) {
+    uint8_t *row = body.data() + static_cast<size_t>(i) * 29;
+    memcpy(row, keptLan[i].ip, 4);
+    memcpy(row + 4, keptLan[i].name, 24);
+  }
+  return storeBlob(2, body.data(), body.size(), count);
+}
+
+static void rememberLan(const IPAddress &ip, const String &name) {
+  if (ip[0] == 0 || keptLan.size() >= 40) {
+    return;
+  }
+  for (const KeptLan &have : keptLan) {
+    if (have.ip[0] == ip[0] && have.ip[1] == ip[1] && have.ip[2] == ip[2] && have.ip[3] == ip[3]) {
+      return;
+    }
+  }
+  KeptLan row{};
+  row.ip[0] = ip[0];
+  row.ip[1] = ip[1];
+  row.ip[2] = ip[2];
+  row.ip[3] = ip[3];
+  const size_t n = std::min<size_t>(name.length(), 24);
+  memcpy(row.name, name.c_str(), n);
+  keptLan.push_back(row);
+}
+
+static void runLanScan() {
+  keptLan.clear();
+  lanNote[0] = '\0';
+  if (WiFi.status() != WL_CONNECTED) {
+    snprintf(lanNote, sizeof(lanNote), "no Wi-Fi");
+    uiDirty = true;
+    return;
+  }
+  drawStatus("Scanning LAN...");
+  if (!MDNS.begin("spectra")) {
+    snprintf(lanNote, sizeof(lanNote), "mDNS failed");
+    uiDirty = true;
+    return;
+  }
+  static const char *types[] = {"http", "googlecast", "airplay", "smb", "ipp", "ssh"};
+  for (const char *type : types) {
+    const int found = MDNS.queryService(type, "tcp");
+    for (int i = 0; i < found; ++i) {
+      String name = MDNS.hostname(i);
+      if (name.length() == 0) {
+        name = type;
+      }
+      rememberLan(MDNS.address(i), name);
+    }
+  }
+  MDNS.end();
+  if (keptLan.empty()) {
+    snprintf(lanNote, sizeof(lanNote), "none");
+  }
+  uiDirty = true;
+}
+
+static void runBluetoothScan() {
+  drawStatus("Scanning Bluetooth...");
+  keptBle.clear();
+  NimBLEScan *scan = NimBLEDevice::getScan();
+  scan->setActiveScan(true);
+  scan->setInterval(100);
+  scan->setWindow(90);
+  scan->setMaxResults(50);
+  scan->clearResults();
+  scan->start(6, false);
+  const NimBLEScanResults results = scan->getResults();
+  for (int i = 0; i < results.getCount() && keptBle.size() < 50; ++i) {
+    const NimBLEAdvertisedDevice *dev = results.getDevice(static_cast<uint32_t>(i));
+    if (dev == nullptr) {
+      continue;
+    }
+    KeptBle row{};
+    const uint8_t *addr = dev->getAddress().getVal();
+    if (addr != nullptr) {
+      memcpy(row.addr, addr, 6);
+    }
+    row.addrType = dev->getAddressType();
+    row.rssi = dev->getRSSI();
+    const std::string name = dev->getName();
+    const size_t n = std::min<size_t>(name.size(), 20);
+    memcpy(row.name, name.data(), n);
+    keptBle.push_back(row);
+  }
+  scan->clearResults();
+  uiDirty = true;
+}
+
+static void pumpOutbox() {
+  if (outbox.empty() || !isConnected() || otaActive || scanInProgress) {
+    return;
+  }
+  if (millis() - lastOutMs < 40) {
+    return;
+  }
+  const std::vector<uint8_t> &msg = outbox.front();
+  sendMessage(msg.data(), msg.size());
+  outbox.erase(outbox.begin());
+  lastOutMs = millis();
+}
+
+static void drainAcks() {
+  while (ackCount > 0) {
+    taskENTER_CRITICAL(&ackMux);
+    const uint32_t id = ackIds[0];
+    for (uint8_t i = 1; i < ackCount; ++i) {
+      ackIds[i - 1] = ackIds[i];
+    }
+    --ackCount;
+    taskEXIT_CRITICAL(&ackMux);
+    forgetCapture(id);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Display
@@ -1017,6 +1497,25 @@ static void drawUpdating() {
   d.print("Keep powered, stay close");
 }
 
+static int listCount() {
+  if (menuIndex == 0) {
+    return static_cast<int>(keptWifi.size());
+  }
+  if (menuIndex == 1) {
+    return static_cast<int>(keptLan.size());
+  }
+  return static_cast<int>(keptBle.size());
+}
+
+static int listRows() {
+  int rows = 0;
+  const int limit = M5Cardputer.Display.height() - 8;
+  for (int y = 72; y <= limit; y += 10) {
+    ++rows;
+  }
+  return rows;
+}
+
 static void drawUi() {
   if (otaPercent >= 0) {
     drawUpdating();
@@ -1027,43 +1526,105 @@ static void drawUi() {
   d.fillScreen(TFT_BLACK);
 
   char header[48];
-  if (isConnected()) {
-    snprintf(header, sizeof(header), "%s  linked  %us", deviceName, scanIntervalSec);
+  if (banner[0] != '\0' && static_cast<int32_t>(millis() - bannerUntil) < 0) {
+    snprintf(header, sizeof(header), "%s", banner);
+  } else if (isConnected()) {
+    snprintf(header, sizeof(header), "%s  linked", deviceName);
   } else {
     snprintf(header, sizeof(header), "%s  waiting", deviceName);
   }
   drawStatus(header);
 
-  d.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  d.setCursor(6, 24);
-  if (lastScanMs == 0) {
-    d.print("S or Enter: scan");
-  } else {
-    d.printf("%u AP %u STA %u PRB", static_cast<unsigned>(lastResults.size()),
-             static_cast<unsigned>(lastStationCount),
-             static_cast<unsigned>(lastProbeCount));
+  for (int i = 0; i < 3; ++i) {
+    const int y = 22 + i * 12;
+    const bool on = i == menuIndex;
+    d.fillRect(0, y - 1, d.width(), 12, on ? TFT_WHITE : TFT_BLACK);
+    d.setTextColor(on ? TFT_BLACK : TFT_WHITE, on ? TFT_WHITE : TFT_BLACK);
+    d.setCursor(4, y);
+    d.printf("%c %s", on ? '>' : ' ', kMenuNames[i]);
+    d.setCursor(118, y);
+    if (i == 0) {
+      d.printf("%u", static_cast<unsigned>(keptWifi.size()));
+    } else if (i == 1) {
+      if (keptLan.empty() && lanNote[0] != '\0') {
+        d.print(lanNote);
+      } else {
+        d.printf("%u", static_cast<unsigned>(keptLan.size()));
+      }
+    } else {
+      d.printf("%u", static_cast<unsigned>(keptBle.size()));
+    }
   }
 
-  int y = 38;
-  for (const ApSummary &ap : lastResults) {
-    if (y > d.height() - 10) {
-      break;
+  d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  d.setCursor(4, 58);
+  d.print("; . scroll   , / mode   Enter");
+
+  const int maxOffset = std::max(0, listCount() - listRows());
+  if (listOffset > maxOffset) {
+    listOffset = maxOffset;
+  }
+  if (listOffset < 0) {
+    listOffset = 0;
+  }
+
+  int y = 72;
+  int skip = listOffset;
+  if (menuIndex == 0) {
+    for (const KeptWifi &ap : keptWifi) {
+      if (skip > 0) {
+        --skip;
+        continue;
+      }
+      if (y > d.height() - 8) {
+        break;
+      }
+      const uint16_t color = ap.rssi >= -60 ? TFT_GREEN : ap.rssi >= -75 ? TFT_YELLOW : TFT_ORANGE;
+      d.setTextColor(color, TFT_BLACK);
+      d.setCursor(4, y);
+      d.printf("%4d", ap.rssi);
+      d.setTextColor(TFT_WHITE, TFT_BLACK);
+      d.setCursor(34, y);
+      const char *name = ap.ssid[0] != '\0' ? ap.ssid : "(hidden)";
+      char shown[22];
+      snprintf(shown, sizeof(shown), "%s", name);
+      d.print(shown);
+      y += 10;
     }
-    const uint16_t color = ap.rssi >= -60 ? TFT_GREEN : ap.rssi >= -75 ? TFT_YELLOW : TFT_ORANGE;
-    d.setTextColor(color, TFT_BLACK);
-    d.setCursor(6, y);
-    d.printf("%4d", ap.rssi);
-    d.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    d.setCursor(36, y);
-    d.printf("%2u", ap.channel);
-    d.setTextColor(ap.auth == WIFI_AUTH_OPEN ? TFT_CYAN : TFT_WHITE, TFT_BLACK);
-    d.setCursor(54, y);
-    String name = ap.ssid.length() > 0 ? ap.ssid : String("(hidden)");
-    if (name.length() > 30) {
-      name = name.substring(0, 29) + "~";
+  } else if (menuIndex == 1) {
+    for (const KeptLan &host : keptLan) {
+      if (skip > 0) {
+        --skip;
+        continue;
+      }
+      if (y > d.height() - 8) {
+        break;
+      }
+      d.setTextColor(TFT_WHITE, TFT_BLACK);
+      d.setCursor(4, y);
+      d.printf("%u.%u.%u.%u", host.ip[0], host.ip[1], host.ip[2], host.ip[3]);
+      d.setCursor(96, y);
+      d.print(host.name);
+      y += 10;
     }
-    d.print(name);
-    y += 12;
+  } else {
+    for (const KeptBle &dev : keptBle) {
+      if (skip > 0) {
+        --skip;
+        continue;
+      }
+      if (y > d.height() - 8) {
+        break;
+      }
+      const uint16_t color = dev.rssi >= -60 ? TFT_GREEN : dev.rssi >= -75 ? TFT_YELLOW : TFT_ORANGE;
+      d.setTextColor(color, TFT_BLACK);
+      d.setCursor(4, y);
+      d.printf("%4d", dev.rssi);
+      d.setTextColor(TFT_WHITE, TFT_BLACK);
+      d.setCursor(34, y);
+      d.print(dev.name[0] != '\0' ? dev.name : "(unnamed)");
+      y += 10;
+    }
   }
 }
 
@@ -1111,6 +1672,7 @@ static void runScan() {
   const int16_t found = WiFi.scanNetworks(false, true, false, kMsPerChannel);
 
   lastResults.clear();
+  keptWifi.clear();
   uint16_t apSent = 0;
   for (int16_t i = 0; i < found; ++i) {
     const auto *ap = static_cast<const wifi_ap_record_t *>(WiFi.getScanInfoByIndex(i));
@@ -1121,6 +1683,16 @@ static void runScan() {
     ++apSent;
     lastResults.push_back({String(reinterpret_cast<const char *>(ap->ssid)), ap->rssi, ap->primary,
                            ap->authmode});
+    if (keptWifi.size() < 40) {
+      KeptWifi row{};
+      memcpy(row.bssid, ap->bssid, 6);
+      row.rssi = ap->rssi;
+      row.channel = ap->primary;
+      row.auth = static_cast<uint8_t>(ap->authmode);
+      const size_t name = strnlen(reinterpret_cast<const char *>(ap->ssid), 32);
+      memcpy(row.ssid, ap->ssid, name);
+      keptWifi.push_back(row);
+    }
   }
 
   // Build hidden-AP list before promiscuous sniffing so the callback can
@@ -1138,6 +1710,8 @@ static void runScan() {
 
   std::sort(lastResults.begin(), lastResults.end(),
             [](const ApSummary &a, const ApSummary &b) { return a.rssi > b.rssi; });
+  std::sort(keptWifi.begin(), keptWifi.end(),
+            [](const KeptWifi &a, const KeptWifi &b) { return a.rssi > b.rssi; });
 
   // Phase 2: promiscuous-mode station sniffing.
   drawStatus("Sniffing clients...");
@@ -1219,17 +1793,106 @@ static void setupBle() {
   updateInfo();
 }
 
+static bool wordHas(const Keyboard_Class::KeysState &keys, char c) {
+  for (const char w : keys.word) {
+    if (w == c) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void moveMode(int direction) {
+  menuIndex = (menuIndex + (direction < 0 ? 2 : 1)) % 3;
+  listOffset = 0;
+  uiDirty = true;
+}
+
+static void moveList(int direction) {
+  const int maxOffset = std::max(0, listCount() - listRows());
+  if (direction < 0) {
+    if (listOffset > 0) {
+      --listOffset;
+      uiDirty = true;
+    } else {
+      moveMode(-1);
+    }
+  } else if (listOffset < maxOffset) {
+    ++listOffset;
+    uiDirty = true;
+  } else {
+    moveMode(1);
+  }
+}
+
 static void handleKeyboard() {
-  if (!M5Cardputer.Keyboard.isChange() || !M5Cardputer.Keyboard.isPressed()) {
+  if (scanInProgress || otaActive || otaJobBusy) {
     return;
   }
   const Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
-  bool scan = keys.enter;
-  for (const char c : keys.word) {
-    scan = scan || c == 's' || c == 'S';
+  // Arrow legends sit on ; , . / and only reach keys.up with Fn held.
+  // Accept both, so the list moves either way.
+  const bool up = keys.up || wordHas(keys, ';');
+  const bool down = keys.down || wordHas(keys, '.');
+  const bool left = keys.left || wordHas(keys, ',');
+  const bool right = keys.right || wordHas(keys, '/');
+
+  int scroll = 0;
+  int mode = 0;
+  if (left && !right) {
+    mode = -1;
+  } else if (right && !left) {
+    mode = 1;
+  } else if (up && !down) {
+    scroll = -1;
+  } else if (down && !up) {
+    scroll = 1;
   }
-  if (scan) {
+
+  const int gesture = scroll * 2 + mode;
+  static int held = 0;
+  static uint32_t repeatAt = 0;
+  if (gesture != 0) {
+    const uint32_t now = millis();
+    const bool first = gesture != held;
+    if (first || static_cast<int32_t>(now - repeatAt) >= 0) {
+      if (mode != 0) {
+        moveMode(mode);
+      } else {
+        moveList(scroll);
+      }
+      held = gesture;
+      repeatAt = now + (first ? 360 : 140);
+    }
+  } else {
+    held = 0;
+  }
+
+  static bool enterHeld = false;
+  if (keys.enter && !enterHeld) {
+    taskENTER_CRITICAL(&radioMux);
+    requestedKind = static_cast<uint8_t>(menuIndex);
     scanRequested = true;
+    taskEXIT_CRITICAL(&radioMux);
+  }
+  enterHeld = keys.enter;
+}
+
+static void handleSideButton() {
+  if (scanInProgress || otaActive || otaJobBusy || !M5Cardputer.BtnA.wasPressed()) {
+    return;
+  }
+  bool saved = false;
+  if (menuIndex == 0) {
+    saved = saveWifi();
+  } else if (menuIndex == 1) {
+    saved = saveLan();
+  } else {
+    saved = saveBle();
+  }
+  showBanner(saved ? "Saved" : "Nothing to save");
+  if (saved && isConnected()) {
+    queueUnsent();
   }
 }
 
@@ -1244,7 +1907,9 @@ void setup() {
   WiFi.disconnect();
 
   otaCrcOk = otaCrcSelfCheck();
+  xTaskCreatePinnedToCore(otaTaskMain, "ota", 16384, nullptr, 1, &otaTask, 1);
   setupBle();
+  loadStored();
   uiDirty = true;
 }
 
@@ -1255,6 +1920,7 @@ void loop() {
   }
   if (!otaActive) {
     handleKeyboard();
+    handleSideButton();
   }
 
   if (intervalChanged) {
@@ -1265,15 +1931,33 @@ void loop() {
   if (linkChanged) {
     linkChanged = false;
     uiDirty = true;
+    if (isConnected()) {
+      queueUnsent();
+    } else {
+      outbox.clear();
+      for (StoredCapture &cap : stored) {
+        cap.queued = false;
+      }
+    }
   }
   watchBattery();
+  drainAcks();
+  if (banner[0] != '\0' && static_cast<int32_t>(millis() - bannerUntil) >= 0) {
+    banner[0] = '\0';
+    uiDirty = true;
+  }
 
-  const bool due = scanIntervalSec > 0 && isConnected() && !otaActive &&
+  const bool due = scanIntervalSec > 0 && isConnected() && !otaActive && !otaJobBusy &&
                    millis() - lastScanMs >= static_cast<uint32_t>(scanIntervalSec) * 1000;
   bool startScan = false;
+  uint8_t kind = 0;
   taskENTER_CRITICAL(&radioMux);
-  if ((scanRequested || due) && !otaActive) {
+  if (due && !scanRequested) {
+    requestedKind = 0;
+  }
+  if ((scanRequested || due) && !otaActive && !otaJobBusy) {
     scanRequested = false;
+    kind = requestedKind;
     scanInProgress = true;
     startScan = true;
   } else if (otaActive) {
@@ -1281,9 +1965,17 @@ void loop() {
   }
   taskEXIT_CRITICAL(&radioMux);
   if (startScan) {
-    runScan();
+    if (kind == 1) {
+      runLanScan();
+    } else if (kind == 2) {
+      runBluetoothScan();
+    } else {
+      runScan();
+    }
     scanInProgress = false;
+    uiDirty = true;
   }
+  pumpOutbox();
 
   if (uiDirty) {
     uiDirty = false;

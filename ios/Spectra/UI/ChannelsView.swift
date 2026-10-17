@@ -12,8 +12,7 @@ struct ChannelsView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
+        List {
                 if inRange.isEmpty {
                     ContentUnavailableView(
                         "Nothing on the air yet",
@@ -43,7 +42,6 @@ struct ChannelsView: View {
             }
             .navigationTitle("Channels")
             .animation(.default, value: inRange.map(\.rssi))
-        }
     }
 
     private var recommendation: some View {

@@ -88,7 +88,15 @@ class LanDevice(
         }
 
     val displayName: String
-        get() = pinnedName ?: identity.model ?: identity.manufacturer ?: manufacturer ?: ipAddress
+        get() {
+            val pinned = pinnedName?.takeUnless { isWeakHostname(it) }
+            return pinned
+                ?: identity.model
+                ?: identity.manufacturer
+                ?: manufacturer
+                ?: pinnedName
+                ?: if (identity.operatingSystem == "Android") "Android" else ipAddress
+        }
 
     val notable: NotableDevice?
         get() = NotableDevice.classify(
@@ -119,10 +127,16 @@ class LanDevice(
     private fun consider(raw: String?, rank: Int) {
         val shown = presentable(raw ?: return) ?: return
         if (shown.equals(ipAddress, ignoreCase = true)) return
-        if (rank > pinnedRank || (rank == pinnedRank && rank >= 2 && shown != pinnedName)) {
+        val quality = if (isWeakHostname(shown)) rank - 1 else rank
+        if (quality > pinnedRank || (quality == pinnedRank && quality >= 2 && shown != pinnedName)) {
             pinnedName = shown
-            pinnedRank = rank
+            pinnedRank = quality
         }
+    }
+
+    private fun isWeakHostname(name: String): Boolean {
+        val folded = name.lowercase().replace('-', ' ').replace('_', ' ')
+        return folded == "android" || folded == "windows" || folded.startsWith("android ")
     }
 
     companion object {

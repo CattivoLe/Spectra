@@ -330,8 +330,8 @@ nonisolated private func resolveHostname(_ ip: String) -> String? {
 /// smart-home gear often drop every probe but still advertise these. Keep in
 /// sync with NSBonjourServices in Config/Spectra-Info.plist.
 nonisolated private let bonjourServiceTypes = [
-    "_device-info._tcp", "_companion-link._tcp", "_apple-mobdev2._tcp", "_airplay._tcp", "_raop._tcp",
-    "_googlecast._tcp", "_hap._tcp", "_spotify-connect._tcp", "_ipp._tcp",
+    "_googlecast._tcp", "_device-info._tcp", "_companion-link._tcp", "_apple-mobdev2._tcp",
+    "_airplay._tcp", "_raop._tcp", "_hap._tcp", "_spotify-connect._tcp", "_ipp._tcp",
     "_printer._tcp", "_smb._tcp", "_ssh._tcp", "_http._tcp",
 ]
 
@@ -705,7 +705,7 @@ final class LANScanner {
         state = .scanning(progress: 0.2, phase: String(localized: "Discovering devices…"))
 
         // Bonjour browses meanwhile, for hosts that drop every probe.
-        async let bonjourResult = discoverBonjourHosts(timeout: 3)
+        async let bonjourResult = discoverBonjourHosts(timeout: 5)
 
         let discoveryTargets = hosts.flatMap { ip in
             Self.discoveryPorts.map { (ip: ip, port: $0) }
@@ -736,9 +736,9 @@ final class LANScanner {
             let device = LANDevice(
                 ipAddress: ip,
                 macAddress: arpByIP[ip] ?? existing?.macAddress,
-                hostnames: keptNames.isEmpty ? (bonjourNames[ip] ?? []) : keptNames,
+                hostnames: Self.mergedNames(bonjourNames[ip] ?? [], keptNames),
                 openPorts: existing?.openPorts ?? [],
-                services: bonjourServices[ip] ?? existing?.services ?? [],
+                services: Self.mergedServices(bonjourServices[ip] ?? [], existing?.services ?? []),
                 portsScanned: existing?.portsScanned ?? false,
                 isGateway: ip == info.gateway,
                 isLocalDevice: ip == info.localIP,
@@ -802,6 +802,28 @@ final class LANScanner {
     }
 
     // MARK: - Port scanning
+
+    /// Bonjour names from this sweep first, then names learned earlier.
+    private static func mergedNames(_ fresh: [String], _ kept: [String]) -> [String] {
+        var names = fresh
+        for name in kept where !names.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
+            names.append(name)
+        }
+        return names
+    }
+
+    /// A sweep that only resolved one service must not forget the others.
+    private static func mergedServices(_ fresh: [ServiceAdvertisement], _ kept: [ServiceAdvertisement]) -> [ServiceAdvertisement] {
+        var ads = kept
+        for service in fresh {
+            if let index = ads.firstIndex(where: { $0.type == service.type && $0.name == service.name }) {
+                if ads[index].model == nil { ads[index].model = service.model }
+            } else {
+                ads.append(service)
+            }
+        }
+        return ads
+    }
 
     /// Ports tried on every address to tell whether a host is there: web,
     /// SSH, SMB, iPhone sync, AirPlay, RTSP cameras and printers.

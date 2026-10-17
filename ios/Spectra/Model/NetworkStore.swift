@@ -2,13 +2,13 @@ import Foundation
 import Observation
 
 /// WPS device info extracted from vendor-specific IEs in beacons/probe responses.
-struct VendorDeviceInfo: Equatable {
+struct VendorDeviceInfo: Equatable, Codable {
     var deviceName: String
     var manufacturer: String
 }
 
 /// Traffic volume observed for an AP during one promiscuous-mode capture window.
-struct TrafficSnapshot: Equatable {
+struct TrafficSnapshot: Equatable, Codable {
     var bytes: UInt32
     var packets: Int
 
@@ -36,8 +36,8 @@ struct TrafficSnapshot: Equatable {
 }
 
 /// An access point followed across scans.
-struct TrackedNetwork: Identifiable, Equatable {
-    struct Sample: Equatable {
+struct TrackedNetwork: Identifiable, Equatable, Codable {
+    struct Sample: Equatable, Codable {
         var date: Date
         var rssi: Int
     }
@@ -138,7 +138,7 @@ final class NetworkStore {
         case .traffic(_, let bssid, let bytes, let packets):
             pendingTraffic[bssid] = TrafficSnapshot(bytes: bytes, packets: packets)
 
-        case .battery:
+        case .battery, .saved:
             break
 
         case .scanFinished(let scanID, _, let duration, _, _):

@@ -85,7 +85,7 @@ class NetworkStore {
             is SensorProtocol.Message.Traffic -> {
                 pendingTraffic[message.bssid] = TrafficSnapshot(message.bytes, message.packets)
             }
-            is SensorProtocol.Message.Battery -> Unit
+            is SensorProtocol.Message.Battery, is SensorProtocol.Message.Saved -> Unit
             is SensorProtocol.Message.ScanFinished -> finishSensorScan(message, at)
         }
         publish()

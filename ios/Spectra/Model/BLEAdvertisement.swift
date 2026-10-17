@@ -13,13 +13,13 @@ nonisolated struct BLEFields: Equatable, Sendable {
     var isConnectable: Bool?
 }
 
-nonisolated struct BLEServiceRef: Equatable, Sendable, Identifiable {
+nonisolated struct BLEServiceRef: Equatable, Codable, Sendable, Identifiable {
     var uuid: String
     var name: String?
     var id: String { uuid }
 }
 
-nonisolated struct BLEServiceData: Equatable, Sendable, Identifiable {
+nonisolated struct BLEServiceData: Equatable, Codable, Sendable, Identifiable {
     var uuid: String
     var name: String?
     var data: Data
@@ -134,7 +134,7 @@ nonisolated enum AppleAdvertisement: Equatable, Sendable {
 
 /// How busy a nearby Apple device says it is. The code is the low nibble of
 /// the first Nearby Info status byte.
-nonisolated enum NearbyActivity: UInt8, Equatable, Sendable {
+nonisolated enum NearbyActivity: UInt8, Equatable, Codable, Sendable {
     case reportingOff = 1
     case locked = 3
     case audio = 5
@@ -162,7 +162,7 @@ nonisolated enum NearbyActivity: UInt8, Equatable, Sendable {
 
 /// Why a device sent a Nearby Action. Values that are only useful as
 /// protocol noise are left unmapped, and the row falls back to "Nearby".
-nonisolated enum NearbyAction: UInt8, Equatable, Sendable {
+nonisolated enum NearbyAction: UInt8, Equatable, Codable, Sendable {
     case appleTVSetup = 0x01
     case mobileBackup = 0x04
     case watchSetup = 0x05
@@ -206,7 +206,7 @@ nonisolated enum NearbyAction: UInt8, Equatable, Sendable {
 
 /// AirPods and Beats proximity pairing. Battery nibbles are steps of 10%.
 /// `0xF` means that part is not in the packet.
-nonisolated struct ProximityPairing: Equatable, Sendable {
+nonisolated struct ProximityPairing: Equatable, Codable, Sendable {
     var modelID: UInt16
     var modelName: String?
     var leftBattery: Int?
@@ -467,6 +467,85 @@ nonisolated struct BLEAdvertisement: Equatable, Sendable {
         0x1D00: "Faucets",
         0x1E00: "Shower Systems",
     ]
+}
+
+extension AppleAdvertisement: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case kind, uuid, major, minor, power, category, device, action, activity, pairing
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var box = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .airPrint:
+            try box.encode("airprint", forKey: .kind)
+        case .iBeacon(let uuid, let major, let minor, let power):
+            try box.encode("ibeacon", forKey: .kind)
+            try box.encode(uuid, forKey: .uuid)
+            try box.encode(major, forKey: .major)
+            try box.encode(minor, forKey: .minor)
+            try box.encode(power, forKey: .power)
+        case .airDrop:
+            try box.encode("airdrop", forKey: .kind)
+        case .homeKit(let category):
+            try box.encode("homekit", forKey: .kind)
+            try box.encodeIfPresent(category, forKey: .category)
+        case .proximity(let pairing):
+            try box.encode("proximity", forKey: .kind)
+            try box.encode(pairing, forKey: .pairing)
+        case .heySiri(let device):
+            try box.encode("siri", forKey: .kind)
+            try box.encodeIfPresent(device, forKey: .device)
+        case .airPlayTarget:
+            try box.encode("airplay-target", forKey: .kind)
+        case .airPlaySource:
+            try box.encode("airplay-source", forKey: .kind)
+        case .autoUnlock:
+            try box.encode("unlock", forKey: .kind)
+        case .handoff:
+            try box.encode("handoff", forKey: .kind)
+        case .wifiSettings:
+            try box.encode("wifi", forKey: .kind)
+        case .instantHotspot:
+            try box.encode("hotspot", forKey: .kind)
+        case .nearbyAction(let action):
+            try box.encode("action", forKey: .kind)
+            try box.encodeIfPresent(action, forKey: .action)
+        case .nearbyInfo(let activity):
+            try box.encode("info", forKey: .kind)
+            try box.encodeIfPresent(activity, forKey: .activity)
+        case .findMy:
+            try box.encode("findmy", forKey: .kind)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let box = try decoder.container(keyedBy: CodingKeys.self)
+        switch try box.decode(String.self, forKey: .kind) {
+        case "airprint": self = .airPrint
+        case "ibeacon":
+            self = .iBeacon(
+                uuid: try box.decode(UUID.self, forKey: .uuid),
+                major: try box.decode(UInt16.self, forKey: .major),
+                minor: try box.decode(UInt16.self, forKey: .minor),
+                measuredPower: try box.decode(Int.self, forKey: .power)
+            )
+        case "airdrop": self = .airDrop
+        case "homekit": self = .homeKit(category: try box.decodeIfPresent(String.self, forKey: .category))
+        case "proximity": self = .proximity(try box.decode(ProximityPairing.self, forKey: .pairing))
+        case "siri": self = .heySiri(device: try box.decodeIfPresent(String.self, forKey: .device))
+        case "airplay-target": self = .airPlayTarget
+        case "airplay-source": self = .airPlaySource
+        case "unlock": self = .autoUnlock
+        case "handoff": self = .handoff
+        case "wifi": self = .wifiSettings
+        case "hotspot": self = .instantHotspot
+        case "action": self = .nearbyAction(try box.decodeIfPresent(NearbyAction.self, forKey: .action))
+        case "info": self = .nearbyInfo(try box.decodeIfPresent(NearbyActivity.self, forKey: .activity))
+        case "findmy": self = .findMy
+        default: self = .findMy
+        }
+    }
 }
 
 nonisolated func bleHex(_ data: Data) -> String {

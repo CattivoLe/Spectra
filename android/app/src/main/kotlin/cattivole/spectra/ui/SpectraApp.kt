@@ -12,10 +12,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.SettingsInputAntenna
 import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -45,10 +45,10 @@ import cattivole.spectra.platform.Permissions
 import cattivole.spectra.platform.SensorLink
 
 private enum class Tab(val route: String, val label: String) {
-    Networks("networks", "Networks"),
-    Channels("channels", "Channels"),
+    Networks("networks", "Wi‑Fi"),
     Lan("lan", "LAN"),
     Bluetooth("bluetooth", "Bluetooth"),
+    History("history", "History"),
     Sensor("sensor", "Sensor"),
 }
 
@@ -89,6 +89,7 @@ fun SpectraApp(model: SpectraModel) {
                     onOpen = { nav.navigate("network/${it.routeId()}") },
                     onOpenHost = { nav.navigate("host/${Uri.encode(it)}") },
                     onSensor = { openTab(nav, Tab.Sensor.route) },
+                    onChannels = { nav.navigate("channels") },
                 )
             }
             composable(
@@ -101,7 +102,7 @@ fun SpectraApp(model: SpectraModel) {
                     onOpenHost = { nav.navigate("host/${Uri.encode(it)}") },
                 )
             }
-            composable(Tab.Channels.route) { ChannelsScreen(model) }
+            composable("channels") { ChannelsScreen(model, onBack = { nav.popBackStack() }) }
             composable(Tab.Lan.route) { LanScreen(model, onOpen = { nav.navigate("host/${Uri.encode(it)}") }) }
             composable(
                 "host/{ip}",
@@ -118,6 +119,15 @@ fun SpectraApp(model: SpectraModel) {
                 arguments = listOf(navArgument("address") { type = NavType.StringType }),
             ) { entry ->
                 BleDetail(model, Uri.decode(entry.arguments?.getString("address").orEmpty()))
+            }
+            composable(Tab.History.route) {
+                HistoryScreen(model, onOpen = { nav.navigate("history/${Uri.encode(it)}") })
+            }
+            composable(
+                "history/{id}",
+                arguments = listOf(navArgument("id") { type = NavType.StringType }),
+            ) { entry ->
+                HistoryDetail(model, Uri.decode(entry.arguments?.getString("id").orEmpty()), onBack = { nav.popBackStack() })
             }
             composable(Tab.Sensor.route) { SensorScreen(model) }
         }
@@ -162,9 +172,9 @@ internal fun sensorDetail(model: SpectraModel): String {
 
 private fun Tab.icon() = when (this) {
     Tab.Networks -> Icons.Default.Wifi
-    Tab.Channels -> Icons.Default.WifiTethering
     Tab.Lan -> Icons.Default.SettingsInputAntenna
     Tab.Bluetooth -> Icons.Default.Bluetooth
+    Tab.History -> Icons.Default.History
     Tab.Sensor -> Icons.Default.Sensors
 }
 

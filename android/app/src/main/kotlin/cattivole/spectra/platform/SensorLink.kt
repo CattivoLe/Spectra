@@ -12,6 +12,7 @@ import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.os.Build
+import cattivole.spectra.core.HistoryStore
 import cattivole.spectra.core.DemoSensor
 import cattivole.spectra.core.FirmwareUpdate
 import cattivole.spectra.core.FirmwareUpdateProgress
@@ -38,6 +39,7 @@ class SensorLink(
     context: Context,
     private val store: NetworkStore,
     private val radio: BleRadio,
+    private val history: HistoryStore,
 ) {
     sealed class State {
         data object Starting : State()
@@ -327,6 +329,13 @@ class SensorLink(
             return
         }
         val message = SensorProtocol.decode(data) ?: return
+        if (message is SensorProtocol.Message.Saved) {
+            if (history.ingest(message, sensorName())) {
+                enqueue(control, SensorProtocol.Command.AckSaved(message.captureId).data)
+            }
+            publish()
+            return
+        }
         if (message is SensorProtocol.Message.Battery) {
             batteryLevel = message.level
             isCharging = message.isCharging
@@ -334,6 +343,8 @@ class SensorLink(
         store.handle(message)
         publish()
     }
+
+    private fun sensorName(): String = (state as? State.Connected)?.name ?: "Cardputer"
 
     private fun enqueue(characteristic: BluetoothGattCharacteristic?, bytes: ByteArray) {
         if (characteristic == null || gatt == null || state !is State.Connected) return

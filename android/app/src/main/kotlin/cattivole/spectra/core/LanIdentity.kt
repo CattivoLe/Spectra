@@ -134,6 +134,16 @@ data class HostIdentity(
             if (types.any { "device-info" in it || "companion-link" in it }) {
                 found = found.apply(HostIdentity(manufacturer = "Apple"), overwrite = false)
             }
+            val handheld = texts.any {
+                val folded = it.lowercase()
+                "iphone" in folded || "ipad" in folded || "ipod" in folded
+            }
+            if (found.operatingSystem == null && !handheld &&
+                types.any { "device-info" in it || "companion-link" in it } &&
+                types.none { "apple-mobdev" in it }
+            ) {
+                found = found.apply(HostIdentity("Apple", "macOS", "Mac"), overwrite = false)
+            }
             if (types.any { "apple-mobdev" in it }) {
                 val ipad = texts.any { "ipad" in it.lowercase() }
                 found = found.apply(
@@ -193,8 +203,20 @@ data class HostIdentity(
             return when {
                 "iphone" in folded || "ipod" in folded -> HostIdentity("Apple", "iOS", "iPhone")
                 "ipad" in folded -> HostIdentity("Apple", "iPadOS", "iPad")
-                "macbook" in folded || "imac" in folded || "mac mini" in folded || "mac studio" in folded ->
-                    HostIdentity("Apple", "macOS", if ("macbook" in folded) "MacBook" else "Mac")
+                "macbook" in folded || "imac" in folded || "mac mini" in folded || "mac studio" in folded ||
+                    "mac pro" in folded || folded == "mac" || folded.endsWith(" mac") ->
+                    HostIdentity(
+                        "Apple",
+                        "macOS",
+                        when {
+                            "macbook" in folded -> "MacBook"
+                            "imac" in folded -> "iMac"
+                            "mac mini" in folded -> "Mac mini"
+                            "mac studio" in folded -> "Mac Studio"
+                            "mac pro" in folded -> "Mac Pro"
+                            else -> "Mac"
+                        },
+                    )
                 "apple tv" in folded || "appletv" in folded -> HostIdentity("Apple", "tvOS", "Apple TV")
                 "z fold" in folded || "galaxy fold" in folded || "samsung fold" in folded ->
                     HostIdentity("Samsung", "Android", titled(text, "fold") ?: "Galaxy Z Fold")
@@ -203,8 +225,9 @@ data class HostIdentity(
                 "galaxy" in folded || samsungCode.containsMatchIn(coded) ->
                     HostIdentity("Samsung", "Android", titled(text, "galaxy") ?: titled(text, "sm-"))
                 "pixel" in folded -> HostIdentity("Google", "Android", titled(text, "pixel") ?: "Pixel")
+                folded == "android" || folded.startsWith("android ") -> HostIdentity(operatingSystem = "Android")
                 "crystal uhd" in folded || "qled" in folded || "the frame" in folded || "neo qled" in folded ||
-                    tvCode.containsMatchIn(compact) ->
+                    (!compact.startsWith("android") && tvCode.containsMatchIn(compact)) ->
                     HostIdentity("Samsung", "Tizen", shortLabel(text))
                 "eversolo" in folded -> HostIdentity("Eversolo", null, shortLabel(text, "eversolo"))
                 else -> null
@@ -319,7 +342,7 @@ enum class NotableDevice(val title: String) {
 /** Parsers for the text and SMB packets a host answers with. Sockets live in the scanner. */
 object LanIdentity {
     private val genericNames = setOf(
-        "unknown", "unnamed", "device", "localhost", "android", "windows",
+        "unknown", "unnamed", "device", "localhost", "windows",
         "mediarenderer", "mediaserver", "basic", "internetgatewaydevice",
         "wandevice", "wanconnectiondevice",
     )

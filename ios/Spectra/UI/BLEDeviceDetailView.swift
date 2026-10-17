@@ -2,12 +2,22 @@ import Charts
 import SwiftUI
 
 struct BLEDeviceDetailView: View {
-    var id: UUID
+    private var lookup: UUID?
+    private var snapshot: BLEDevice?
+
+    init(id: UUID) {
+        lookup = id
+    }
+
+    /// A saved peripheral, shown with the same card as a live one.
+    init(device: BLEDevice) {
+        snapshot = device
+    }
 
     @Environment(BLEScanner.self) private var scanner
 
     var body: some View {
-        if let device = scanner.devices[id] {
+        if let device = snapshot ?? lookup.flatMap({ scanner.devices[$0] }) {
             content(device)
         } else {
             ContentUnavailableView("Device cleared", systemImage: "wave.3.right")
@@ -15,7 +25,7 @@ struct BLEDeviceDetailView: View {
     }
 
     private func content(_ device: BLEDevice) -> some View {
-        let nearby = device.isNearby(at: scanner.now)
+        let nearby = device.isNearby(at: snapshot == nil ? scanner.now : device.lastSeen)
         let quality = SignalQuality(rssi: device.rssi)
 
         return List {

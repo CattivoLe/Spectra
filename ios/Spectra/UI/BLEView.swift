@@ -2,6 +2,7 @@ import SwiftUI
 
 struct BLEView: View {
     @Environment(BLEScanner.self) private var scanner
+    @Environment(HistoryStore.self) private var history
     @Environment(\.scenePhase) private var scenePhase
     @State private var search = ""
     @AppStorage("bleSort") private var sort: Sort = .signal
@@ -106,6 +107,15 @@ struct BLEView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     BLEStatusBar()
+                }
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save", systemImage: "square.and.arrow.down") {
+                        history.saveBluetooth(Array(scanner.devices.values), source: "This iPhone")
+                    }
+                    .disabled(scanner.devices.isEmpty)
                 }
                 if #available(iOS 26, *) {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)
