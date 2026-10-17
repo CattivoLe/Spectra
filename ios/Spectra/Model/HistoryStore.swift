@@ -219,10 +219,20 @@ struct SavedBLE: Codable, Equatable, Identifiable {
     }
 }
 
+/// What was just saved, for the confirmation the app shows.
+struct SaveNotice: Equatable {
+    let id = UUID()
+    var kind: HistoryEntry.Kind
+    var count: Int
+    var fromSensor: Bool
+}
+
 /// Saved scans from the phone and from the Cardputer's side button.
 @Observable
 final class HistoryStore {
     private(set) var entries: [HistoryEntry] = []
+    /// The latest save, from a button or from the Cardputer.
+    private(set) var lastSave: SaveNotice?
 
     private struct Partial {
         var kind: HistoryEntry.Kind
@@ -330,6 +340,7 @@ final class HistoryStore {
             bluetooth: bluetooth
         )
         guard entry.itemCount > 0 else { return }
+        lastSave = SaveNotice(kind: kind, count: entry.itemCount, fromSensor: captureID != nil)
         entries.insert(entry, at: 0)
         if entries.count > 100 {
             entries.removeLast(entries.count - 100)

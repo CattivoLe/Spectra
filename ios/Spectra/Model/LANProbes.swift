@@ -14,6 +14,31 @@ nonisolated enum LANProbes {
         return LANProfile(upnp: upnp, banners: banners, rtsp: rtsp, windows: windows)
     }
 
+    // MARK: Names
+
+    /// The host's name when the system resolver had none. The router's DNS
+    /// knows the names phones give it over DHCP ("Galaxy-Z-Fold4") even when
+    /// the iPhone itself uses another DNS server; a host with an mDNS
+    /// responder answers for its own address.
+    static func reverseName(_ ip: String, gateway: String?) -> String? {
+        let id = UInt16.random(in: 1 ... .max)
+        guard let query = LANIdentity.ptrQuery(for: ip, id: id) else { return nil }
+        if let gateway, gateway != ip {
+            for reply in exchangeUDP(ip: gateway, port: 53, payload: query, timeout: .milliseconds(700)) {
+                // The router's own domain (".lan", ".home") says nothing about the host.
+                if let name = LANIdentity.parsePTR(reply, id: id), let host = name.split(separator: ".").first {
+                    return String(host)
+                }
+            }
+        }
+        for reply in exchangeUDP(ip: ip, port: 5353, payload: query, timeout: .milliseconds(700)) {
+            if let name = LANIdentity.parsePTR(reply) {
+                return name
+            }
+        }
+        return nil
+    }
+
     // MARK: UPnP
 
     private static func discoverUPnP(_ ip: String) -> UPnPIdentity? {

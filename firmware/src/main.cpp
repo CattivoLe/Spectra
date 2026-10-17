@@ -18,7 +18,10 @@
 #include <cstring>
 #include <vector>
 
-static constexpr char kFirmwareVersion[] = "0.8.2";
+// The phone app finds this tag in a firmware.bin to show which version it
+// carries. The version below points into it, so the linker keeps the tag.
+static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.8.4";
+static constexpr const char* kFirmwareVersion = kFirmwareTag + 11;
 static constexpr uint8_t kProtocolVersion = 6;
 
 static constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
@@ -142,6 +145,8 @@ static volatile bool scanRequested = false;
 static volatile uint8_t scanIntervalSec = 0;
 static volatile bool intervalChanged = false;
 static volatile bool linkChanged = true;
+// When to tell a newly connected phone that the services may have changed.
+static uint32_t serviceChangedAt = 0;
 
 static uint16_t scanId = 0;
 static uint32_t lastScanMs = 0;
@@ -1558,7 +1563,7 @@ static void drawUi() {
 
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.setCursor(4, 58);
-  d.print("; . scroll   , / mode   Enter");
+  d.print("Fn+;. scroll  Fn+,/ mode  Enter");
 
   const int maxOffset = std::max(0, listCount() - listRows());
   if (listOffset > maxOffset) {
@@ -1793,15 +1798,6 @@ static void setupBle() {
   updateInfo();
 }
 
-static bool wordHas(const Keyboard_Class::KeysState &keys, char c) {
-  for (const char w : keys.word) {
-    if (w == c) {
-      return true;
-    }
-  }
-  return false;
-}
-
 static void moveMode(int direction) {
   menuIndex = (menuIndex + (direction < 0 ? 2 : 1)) % 3;
   listOffset = 0;
@@ -1830,12 +1826,12 @@ static void handleKeyboard() {
     return;
   }
   const Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
-  // Arrow legends sit on ; , . / and only reach keys.up with Fn held.
-  // Accept both, so the list moves either way.
-  const bool up = keys.up || wordHas(keys, ';');
-  const bool down = keys.down || wordHas(keys, '.');
-  const bool left = keys.left || wordHas(keys, ',');
-  const bool right = keys.right || wordHas(keys, '/');
+  // Arrows only with Fn held, on the ; , . / legends. A bare key does
+  // nothing, so a stray press in a pocket does not move the list.
+  const bool up = keys.up;
+  const bool down = keys.down;
+  const bool left = keys.left;
+  const bool right = keys.right;
 
   int scroll = 0;
   int mode = 0;
@@ -1933,11 +1929,22 @@ void loop() {
     uiDirty = true;
     if (isConnected()) {
       queueUnsent();
+      // iOS keeps a copy of the service list per device and reuses it, so a
+      // phone that met firmware without the Firmware characteristic never
+      // sees it. A Service Changed indication makes it look again; it is sent
+      // once the phone has had time to subscribe to it.
+      serviceChangedAt = millis() + 1500;
     } else {
       outbox.clear();
       for (StoredCapture &cap : stored) {
         cap.queued = false;
       }
+    }
+  }
+  if (serviceChangedAt != 0 && static_cast<int32_t>(millis() - serviceChangedAt) >= 0) {
+    serviceChangedAt = 0;
+    if (isConnected() && server != nullptr) {
+      server->sendServiceChangedIndication();
     }
   }
   watchBattery();

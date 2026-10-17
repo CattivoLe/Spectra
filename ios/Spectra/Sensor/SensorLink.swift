@@ -1,6 +1,10 @@
 import CoreBluetooth
 import Foundation
 import Observation
+import os
+
+/// Connection and firmware update trail, readable in Console as subsystem cattivole.spectra.
+private let log = Logger(subsystem: "cattivole.spectra", category: "sensor")
 
 /// The Bluetooth connection to a Spectra sensor (a Cardputer running the
 /// firmware in /firmware), or the built-in demo standing in for one.
@@ -153,7 +157,7 @@ final class SensorLink: NSObject {
                 if self.firmwareCancel {
                     self.firmwareUpdate = FirmwareUpdateProgress(stage: .failed(FirmwareUpdate.TransferError.cancelled.message))
                 } else {
-                    self.firmwareUpdate = FirmwareUpdateProgress(stage: .failed(FirmwareUpdate.TransferError.notConnected.message))
+                    self.firmwareUpdate = FirmwareUpdateProgress(stage: .failed(self.notReadyMessage))
                     self.shouldReconnect = true
                     self.beginScan(autoConnect: true)
                 }
@@ -207,6 +211,9 @@ final class SensorLink: NSObject {
 
     private func receive(_ data: Data) {
         if let status = FirmwareUpdate.Status.decode(data) {
+            if status.phase != .progress {
+                log.notice("update status \(String(describing: status.phase), privacy: .public) accepted \(status.bytesAccepted) failure \(String(describing: status.failure), privacy: .public)")
+            }
             pendingStatuses.append(status)
             return
         }
@@ -282,6 +289,7 @@ final class SensorLink: NSObject {
     /// The file picker and a reboot both drop the link. Wait until the
     /// characteristics are back before sending an image.
     private func waitUntilReadyForUpdate() async -> Bool {
+        log.notice("update waits for the link: state \(String(describing: self.state), privacy: .public), firmware characteristic \(self.firmware != nil)")
         if case .connected = state, firmware != nil { return true }
         shouldReconnect = true
         if case .connecting = state {
@@ -304,15 +312,58 @@ final class SensorLink: NSObject {
 
     // MARK: Firmware update
 
+    /// The link can drop while the sensor finishes a sweep or during the
+    /// transfer; the sensor abandons a half-written image when it does. The
+    /// update then starts over on the next link, up to three tries.
     private func runFirmwareUpdate(_ image: Data) async {
         let resumeInterval = liveInterval
+        var attempt = 0
+        while true {
+            attempt += 1
+            switch await attemptFirmwareUpdate(image) {
+            case .finished:
+                if case .failed = firmwareUpdate?.stage {
+                    send(.setInterval(seconds: resumeInterval))
+                }
+                return
+            case .retry(let error) where attempt < 3 && !firmwareCancel:
+                firmwareUpdate = FirmwareUpdateProgress(stage: .preparing)
+                guard await waitUntilReadyForUpdate() else {
+                    firmwareUpdate = FirmwareUpdateProgress(stage: .failed(firmwareCancel
+                        ? FirmwareUpdate.TransferError.cancelled.message
+                        : error == .notConnected ? notReadyMessage : error.message))
+                    return
+                }
+            case .retry(let error):
+                firmwareUpdate = FirmwareUpdateProgress(stage: .failed(firmwareCancel
+                    ? FirmwareUpdate.TransferError.cancelled.message
+                    : error.message))
+                send(.setInterval(seconds: resumeInterval))
+                return
+            }
+        }
+    }
+
+    private enum UpdateOutcome {
+        case finished
+        /// The link went away; worth another go on a fresh one.
+        case retry(FirmwareUpdate.TransferError)
+    }
+
+    private func attemptFirmwareUpdate(_ image: Data) async -> UpdateOutcome {
+        log.notice("update attempt, \(image.count) bytes, chunk \(self.currentChunkSize())")
         send(.setInterval(seconds: 0))
         await waitUntilNotScanning()
-        guard !firmwareCancel else {
+        if firmwareCancel {
             firmwareUpdate = FirmwareUpdateProgress(stage: .failed(FirmwareUpdate.TransferError.cancelled.message))
-            send(.setInterval(seconds: resumeInterval))
-            return
+            return .finished
         }
+        // A sweep that was running can take the link down with it.
+        guard case .connected = state, firmware != nil else {
+            log.error("update: link gone after the sweep, state \(String(describing: self.state), privacy: .public)")
+            return .retry(.notConnected)
+        }
+        pendingStatuses.removeAll()
 
         var upload = FirmwareUpload(image: image, chunkSize: currentChunkSize())
         var packet: Data? = upload.begin()
@@ -326,6 +377,10 @@ final class SensorLink: NSObject {
                     // both outlast a normal command. The write itself returns
                     // immediately; Ready and Done arrive when the flash is done.
                     let status = try await waitForStatus(timeout: .seconds(120))
+                    if upload.phase == .waitReady, status.phase == .failed, status.failure == .busy {
+                        // The sensor was still sweeping. Let it finish and start over.
+                        return .retry(.notConnected)
+                    }
                     packet = upload.handle(status)
                     if upload.phase == .sending {
                         firmwareUpdate = FirmwareUpdateProgress(stage: .uploading(sent: 0, total: image.count))
@@ -348,28 +403,53 @@ final class SensorLink: NSObject {
                 if case .succeeded = upload.phase {
                     firmwareUpdate = FirmwareUpdateProgress(stage: .rebooting)
                     await waitForReboot()
-                    return
+                    return .finished
                 }
                 if case .failed(let failure) = upload.phase {
                     firmwareUpdate = FirmwareUpdateProgress(stage: .failed(failure.message))
-                    send(.setInterval(seconds: resumeInterval))
-                    return
+                    return .finished
                 }
             }
             firmwareUpdate = FirmwareUpdateProgress(stage: .failed(FirmwareUpdate.TransferError.linkLost.message))
-            send(.setInterval(seconds: resumeInterval))
+            return .finished
         } catch let error as FirmwareUpdate.TransferError {
+            log.error("update attempt failed: \(String(describing: error), privacy: .public) in \(String(describing: upload.phase), privacy: .public) at \(upload.offset)")
             if case .cancelled = error, case .connected = state {
                 try? await writeFirmware(upload.abortCommand)
             }
-            firmwareUpdate = FirmwareUpdateProgress(stage: .failed(error.message))
-            send(.setInterval(seconds: resumeInterval))
+            switch error {
+            case .notConnected, .linkLost:
+                // The sensor dropped the half-done image with the link; start over.
+                return .retry(error)
+            default:
+                firmwareUpdate = FirmwareUpdateProgress(stage: .failed(error.message))
+                return .finished
+            }
         } catch {
+            log.error("update write failed: \(error.localizedDescription, privacy: .public) in \(String(describing: upload.phase), privacy: .public) at \(upload.offset)")
             if case .connected = state {
                 try? await writeFirmware(upload.abortCommand)
             }
             firmwareUpdate = FirmwareUpdateProgress(stage: .failed(FirmwareUpdate.TransferError.linkLost.message))
-            send(.setInterval(seconds: resumeInterval))
+            return .finished
+        }
+    }
+
+    /// Why the update could not start. Connected without the Firmware
+    /// characteristic means iOS is using a list of the sensor's services from
+    /// before it could take updates.
+    private var notReadyMessage: String {
+        if case .connected = state, firmware == nil {
+            return String(localized: "iOS does not see the sensor's update channel, probably from an old cached list of its services. Turn Bluetooth off and on in Settings, reconnect and try again.")
+        }
+        return FirmwareUpdate.TransferError.notConnected.message
+    }
+
+    /// Preparing and sending: a sweep now would compete with the transfer for the radio.
+    private var updateHoldsScans: Bool {
+        switch firmwareUpdate?.stage {
+        case .preparing, .uploading, .finishing: true
+        default: false
         }
     }
 
@@ -385,6 +465,8 @@ final class SensorLink: NSObject {
         while ContinuousClock.now < deadline {
             if firmwareCancel { throw FirmwareUpdate.TransferError.cancelled }
             if let status = popStatus() { return status }
+            // The sensor drops a half-done update with the link; no status is coming.
+            if firmware == nil { throw FirmwareUpdate.TransferError.linkLost }
             try await Task.sleep(for: .milliseconds(40))
         }
         throw FirmwareUpdate.TransferError.timedOut
@@ -423,6 +505,8 @@ final class SensorLink: NSObject {
             case .connected where sawDrop && info != nil:
                 shouldReconnect = false
                 firmwareUpdate = FirmwareUpdateProgress(stage: .succeeded(version: info?.fw ?? ""))
+                // The reconnect happened while the update still held scans back.
+                send(.setInterval(seconds: liveInterval))
                 return
             default:
                 break
@@ -512,11 +596,13 @@ extension SensorLink: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        log.notice("connected to \(peripheral.identifier, privacy: .public); write limit \(peripheral.maximumWriteValueLength(for: .withResponse))")
         UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: Keys.lastSensor)
         peripheral.discoverServices([SensorProtocol.service])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        log.error("connect failed: \(error?.localizedDescription ?? "no error", privacy: .public)")
         let retry = shouldReconnect
         resetConnection()
         if retry, central.state == .poweredOn {
@@ -531,6 +617,7 @@ extension SensorLink: CBCentralManagerDelegate {
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?
     ) {
+        log.error("disconnected: \(error?.localizedDescription ?? "no error", privacy: .public); update \(String(describing: self.firmwareUpdate?.stage), privacy: .public)")
         guard peripheral == sensor, !userDisconnected else { return }
         // Out of range or rebooted: keep a connection request pending, which
         // iOS completes whenever the sensor comes back. If that request
@@ -548,6 +635,7 @@ extension SensorLink: CBCentralManagerDelegate {
 
 extension SensorLink: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        log.notice("services: \(peripheral.services?.map(\.uuid.uuidString).joined(separator: ", ") ?? "none", privacy: .public) \(error?.localizedDescription ?? "", privacy: .public)")
         guard let service = peripheral.services?.first(where: { $0.uuid == SensorProtocol.service }) else {
             disconnect()
             return
@@ -559,6 +647,7 @@ extension SensorLink: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        log.notice("characteristics: \(service.characteristics?.map(\.uuid.uuidString).joined(separator: ", ") ?? "none", privacy: .public) \(error?.localizedDescription ?? "", privacy: .public)")
         for characteristic in service.characteristics ?? [] {
             switch characteristic.uuid {
             case SensorProtocol.info:
@@ -582,7 +671,12 @@ extension SensorLink: CBPeripheralDelegate {
     ) {
         guard characteristic.uuid == SensorProtocol.results, characteristic.isNotifying else { return }
         state = .connected(name: name(of: peripheral))
-        // The firmware forgets the interval on disconnect, so set it every time.
+        // The firmware forgets the interval on disconnect, so set it every
+        // time. An update in progress keeps the sensor quiet instead.
+        if updateHoldsScans {
+            send(.setInterval(seconds: 0))
+            return
+        }
         send(.setInterval(seconds: liveInterval))
         if liveInterval == 0 {
             send(.scanOnce)
@@ -608,7 +702,20 @@ extension SensorLink: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        if let error {
+            log.error("write to \(characteristic.uuid.uuidString, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+        }
         guard characteristic.uuid == SensorProtocol.firmware else { return }
         finishFirmwareWrite(error)
+    }
+
+    /// The sensor's services changed under a cached copy, as after flashing
+    /// firmware with new characteristics. Look again instead of using the old list.
+    func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        log.notice("services changed: \(invalidatedServices.map(\.uuid.uuidString).joined(separator: ", "), privacy: .public)")
+        guard invalidatedServices.contains(where: { $0.uuid == SensorProtocol.service }) else { return }
+        control = nil
+        firmware = nil
+        peripheral.discoverServices([SensorProtocol.service])
     }
 }

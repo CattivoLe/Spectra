@@ -149,6 +149,7 @@ class PhoneWifiScanner(
             frequencyMHz = frequency,
             capabilities = capabilities ?: "",
             widthMHz = width,
+            centreFrequencyMHz = centerFreq0,
         )
     }
 }

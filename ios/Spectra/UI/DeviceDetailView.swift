@@ -123,7 +123,7 @@ struct DeviceDetailView: View {
                         }
                     }
                     if let windows = device.profile.windows {
-                        if let name = windows.computerName { InfoRow("Windows name", value: name) }
+                        if let name = windows.computerName { InfoRow("Network name", value: name) }
                         if let domain = windows.domain { InfoRow("Domain", value: domain) }
                         if windows.shares.isEmpty, windows.guestSession {
                             Text("Guest connection found no shared folders.")
@@ -205,6 +205,9 @@ struct DeviceDetailView: View {
         }
         .navigationTitle(device.ipAddress)
         .navigationBarTitleDisplayMode(.inline)
+        .sensoryFeedback(trigger: device.portScanFraction == nil) { wasIdle, isIdle in
+            !wasIdle && isIdle ? .success : nil
+        }
     }
 
     private func serviceDetail(_ service: ServiceAdvertisement) -> String {

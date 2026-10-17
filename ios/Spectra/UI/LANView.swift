@@ -66,6 +66,7 @@ struct LANView: View {
                     ContentUnavailableView.search(text: search)
                 }
             }
+            .sensoryFeedback(trigger: scanner.scanCount) { old, new in new > old ? .success : nil }
             .searchable(text: $search, prompt: Text("IP, name or MAC"))
             .refreshable { await runScan() }
             .navigationTitle("LAN")
@@ -118,6 +119,7 @@ struct LANView: View {
 /// Subnet and scan state, in its own glass capsule. Tapping starts or stops the scan.
 struct LANStatusBar: View {
     @Environment(LANScanner.self) private var scanner
+    @State private var taps = 0
 
     var body: some View {
         Button(action: toggle) {
@@ -136,10 +138,12 @@ struct LANStatusBar: View {
             }
             .frame(maxWidth: 168, alignment: .leading)
         }
+        .sensoryFeedback(.impact(weight: .light), trigger: taps)
         .accessibilityLabel("\(title), \(detail)")
     }
 
     private func toggle() {
+        taps += 1
         if scanner.isScanning {
             scanner.stop()
         } else {

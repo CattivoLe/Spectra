@@ -146,6 +146,11 @@ class AccessPointReading(
     },
     /** Phone scans sometimes advertise HT/VHT/EHT without a protocol bit. */
     val phyNote: String? = null,
+    /**
+     * Middle of a wide channel, in channel numbers. The phone reports it for
+     * 40 MHz and wider; the sensor says which side the second half is on instead.
+     */
+    val centreChannel: Double? = null,
 ) {
     val ssid: String?
         get() {
@@ -180,7 +185,7 @@ class AccessPointReading(
     val occupiedChannels: ClosedFloatingPointRange<Double>
         get() {
             val centre = when (secondaryChannel) {
-                SecondaryChannel.NONE -> channel.toDouble()
+                SecondaryChannel.NONE -> centreChannel ?: channel.toDouble()
                 SecondaryChannel.ABOVE -> channel + 2.0
                 SecondaryChannel.BELOW -> channel - 2.0
             }
@@ -207,7 +212,8 @@ class AccessPointReading(
             band == other.band &&
             widthMHz == other.widthMHz &&
             visibility == other.visibility &&
-            phyNote == other.phyNote
+            phyNote == other.phyNote &&
+            centreChannel == other.centreChannel
     }
 
     override fun hashCode(): Int {

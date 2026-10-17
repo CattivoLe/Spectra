@@ -1,0 +1,416 @@
+# Russian wording for the Android app, keyed by the English text in tr(). Tab separated.
+Starting Bluetooth…	Запуск Bluetooth…
+Bluetooth is off	Bluetooth выключен
+Bluetooth permission is off	Нет разрешения на Bluetooth
+No Bluetooth radio	Нет модуля Bluetooth
+This phone	Этот телефон
+Saved to History	Сохранено в историю
+Save	Сохранить
+Options	Параметры
+Stop	Остановить
+Scan now	Сканировать
+Classic inquiry	Классический поиск
+Clear list	Очистить список
+Turn Bluetooth on in quick settings.	Включите Bluetooth в быстрых настройках.
+Spectra is not allowed to scan for nearby devices.	Spectra не разрешено искать устройства поблизости.
+This phone has no Bluetooth Low Energy.	В этом телефоне нет Bluetooth Low Energy.
+Listening	Слушаю эфир
+Devices appear as their advertisements arrive.	Устройства появятся, как только придут их рекламные пакеты.
+Phones, headphones, sensors and other devices that are advertising nearby.	Телефоны, наушники, датчики и другие устройства, которые вещают поблизости.
+Scan	Сканировать
+No results	Ничего не найдено
+Nothing matches “%s”.	Нет совпадений с «%s».
+No devices	Нет устройств
+Nothing in this filter is nearby.	Рядом нет ничего подходящего под фильтр.
+Scanning…	Сканирование…
+Paused	На паузе
+Nearby: %d	Рядом: %d
+Nearby: %d · seen: %d	Рядом: %d · всего: %d
+Name, company or address	Имя, компания или адрес
+Signal	Сигнал
+Name	Имя
+Recently seen	Недавние
+With a name	С именем
+Out of range	Вне зоны
+Classic inquiry pauses low-energy scanning on many phones until it finishes.	На многих телефонах классический поиск приостанавливает сканирование BLE, пока не закончится.
+Android reports the hardware address. A resolvable private address still changes, so the same device can reappear under a new one.	Android сообщает аппаратный адрес. Разрешимый приватный адрес всё равно меняется, поэтому одно устройство может появиться снова под новым адресом.
+Copy name	Скопировать имя
+Copy address	Скопировать адрес
+Address	Адрес
+Out of range · %s	Вне зоны · %s
+Sensor	Сенсор
+Classic	Classic
+Device cleared	Устройство удалено
+It has not advertised since this list was cleared.	Оно не выходило в эфир с тех пор, как список очистили.
+Saved %s	Сохранено %s
+dBm	дБм
+avg %d · min %d · max %d	сред. %d · мин. %d · макс. %d
+The graph fills in as advertisements arrive.	График заполняется по мере прихода пакетов.
+Identity	Идентификация
+A resolvable private address changes every few minutes; a public or static one stays.	Разрешимый приватный адрес меняется каждые несколько минут, публичный или статический — постоянный.
+Address type	Тип адреса
+Transport	Транспорт
+Low energy	Low Energy
+Connection	Подключение
+Connectable	Можно подключиться
+Not connectable	Без подключения
+TX power	Мощность передачи
+%d dBm	%d дБм
+Company	Компания
+Class	Класс
+Services	Службы
+Looking for	Ищет
+Service data	Данные служб
+Manufacturer data	Данные производителя
+Observed	Наблюдение
+First seen	Впервые замечено
+Last seen	Последний раз
+Packets	Пакетов
+The graph fills in as scans come in	График заполняется по мере сканирований
+%s copied	%s: скопировано
+Back	Назад
+Clear	Очистить
+just now	только что
+%d s ago	%d с назад
+%d min ago	%d мин назад
+%d h %d min ago	%d ч %d мин назад
+%.1f MB	%.1f МБ
+%.0f KB	%.0f КБ
+%d B	%d Б
+Randomised	Случайный
+Maker-assigned (OUI %s)	Заводской (OUI %s)
+%s %s, charging	%s %s, заряжается
+Nearby	Рядом
+Clear history?	Очистить историю?
+Saved scans from this phone and the Cardputer are removed.	Сохранённые сканирования с этого телефона и Cardputer будут удалены.
+Clear history	Очистить историю
+Cancel	Отмена
+History	История
+Nothing saved	Ничего не сохранено
+Save what Wi‑Fi, LAN or Bluetooth just found. The Cardputer's side button saves its own scan, and it arrives here when the phone connects.	Сохраните то, что нашли Wi‑Fi, LAN или Bluetooth. Боковая кнопка Cardputer сохраняет его собственное сканирование — оно появится здесь, когда телефон подключится.
+Swipe a saved scan to the left to delete it.	Смахните сохранённое сканирование влево, чтобы удалить его.
+Delete	Удалить
+Deauth detected	Обнаружен deauth
+Gone	Удалено
+This saved scan is no longer here.	Этого сохранённого сканирования больше нет.
+Networks: %d	Сетей: %d
+Probing: %d	Ищут сети: %d
+Devices: %d	Устройств: %d
+This device	Это устройство
+Gateway	Шлюз
+Camera	Камера
+IoT	IoT
+Looking for %s addresses	Проверка адресов: %s
+Checking %s hosts	Проверка хостов: %s
+Devices: %s	Устройств: %s
+No Wi-Fi	Нет Wi-Fi
+Connect to a Wi-Fi network to scan devices on it.	Подключитесь к сети Wi-Fi, чтобы просканировать её устройства.
+Try again	Повторить
+Local network	Локальная сеть
+Find devices, their hardware addresses and open ports on the network this phone is on.	Найдите устройства, их аппаратные адреса и открытые порты в сети, к которой подключён телефон.
+Join a network	Подключитесь к сети
+gateway %s	шлюз %s
+Tap to scan	Нажмите для сканирования
+The prefix is wider than /24, so only the local /24 is walked.	Префикс шире /24, поэтому проверяется только своя /24.
+IP, name or MAC	IP, имя или MAC
+ports %s	порты %s
+Copy IP	Скопировать IP
+Copy MAC	Скопировать MAC
+It is not in this scan. Run the LAN scan again.	Его нет в этом сканировании. Запустите сканирование LAN ещё раз.
+Ports: %d	Портов: %d
+Network	Сеть
+IP address	IP-адрес
+MAC address	MAC-адрес
+Maker-assigned (%s)	Заводской (%s)
+Maker-assigned	Заводской
+Manufacturer	Производитель
+System	Система
+Model	Модель
+Hostname	Имя хоста
+UPnP name	Имя UPnP
+Device type	Тип устройства
+Server	Сервер
+Network name	Сетевое имя
+Domain	Домен
+Guest connection found no shared folders.	Гостевое подключение не нашло общих папок.
+Guest shares	Гостевые папки
+Ports	Порты
+Checks %d common TCP ports, or every TCP port from 1 to 65535.	Проверяет %d популярных TCP-портов или все TCP-порты с 1 по 65535.
+No open ports found	Открытых портов не найдено
+Scanning ports…	Сканирование портов…
+Rescan ports	Пересканировать порты
+Scan ports	Сканировать порты
+Scan all ports	Сканировать все порты
+Demo sensor	Демо-сенсор
+Searching	Поиск
+Bluetooth permission	Разрешение Bluetooth
+No Bluetooth	Нет Bluetooth
+No sensor	Нет сенсора
+%d%%, charging	%d%%, заряжается
+Scanning	Сканирование
+Connected	Подключён
+Connecting…	Подключение…
+Looking for a Cardputer	Ищу Cardputer
+Tap to connect	Нажмите, чтобы подключить
+Only when asked	Только по запросу
+Every %d min	Каждые %d мин
+Every %d s	Каждые %d с
+Could not read the firmware file.	Не удалось прочитать файл прошивки.
+Install this firmware?	Установить эту прошивку?
+%s (%s). The Cardputer reboots when the transfer finishes. Keep it powered and nearby.	%s (%s). Cardputer перезагрузится в конце передачи. Не выключайте его и держите рядом.
+Install firmware	Установить
+Nearby sensors	Сенсоры поблизости
+Looking for Cardputers running Spectra…	Ищу Cardputer со Spectra…
+Last sweep	Последний проход
+%.1f s	%.1f с
+Scans this session	Сканирований за сеанс
+Device	Устройство
+This firmware cannot take updates from the app. Flash 0.6.0 or newer once over USB or the launcher; after that, updates install from here.	Эта прошивка не принимает обновления из приложения. Один раз прошейте 0.6.0 или новее по USB или через лаунчер — после этого обновления ставятся отсюда.
+Choose firmware.bin from pio run, the same app image Launcher installs. A merged image with a bootloader is rejected.	Выберите firmware.bin после pio run — тот же образ приложения, что ставит Launcher. Объединённый образ с загрузчиком не подойдёт.
+Firmware	Прошивка
+Reported interval	Интервал на устройстве
+Updates	Обновления
+From the app	Из приложения
+Not from the app	Не из приложения
+Battery	Батарея
+Chip	Чип
+Protocol	Протокол
+Bands	Диапазоны
+%s GHz	%s ГГц
+This firmware speaks protocol %d; the app expects %d. Update the one that is older.	Прошивка использует протокол %d, а приложение ждёт %d. Обновите то, что старее.
+Choose a firmware file…	Выбрать файл прошивки…
+Made-up networks with drifting signal, for trying the app without a Cardputer.	Выдуманные сети с плавающим сигналом — чтобы попробовать приложение без Cardputer.
+About the sensor	О сенсоре
+Android lists nearby networks by itself, including 5 and 6 GHz. A Cardputer adds what a phone cannot hear: clients, probe requests, deauth frames, hidden names and traffic. Its ESP32-S3 hears the 2.4 GHz band only.	Android сам показывает сети поблизости, включая 5 и 6 ГГц. Cardputer добавляет то, чего телефон не слышит: клиентов, probe-запросы, deauth-кадры, скрытые имена и трафик. Его ESP32-S3 слышит только диапазон 2,4 ГГц.
+Connecting to %s	Подключение к %s
+Searching…	Поиск…
+Not connected	Не подключён
+Disconnect	Отключить
+Open Settings	Открыть настройки
+Bluetooth settings	Настройки Bluetooth
+Find sensor	Найти сенсор
+Automatic scan	Автосканирование
+Firmware update	Обновление прошивки
+Preparing the sensor…	Подготовка сенсора…
+Sending	Передача
+%s of %s	%s из %s
+Checking the image…	Проверка образа…
+Waiting for the sensor to reboot…	Ждём перезагрузки сенсора…
+Firmware installed	Прошивка установлена
+Firmware installed: %s	Прошивка установлена: %s
+Cancel update	Отменить обновление
+Dismiss	Закрыть
+Channels	Каналы
+No networks yet	Сетей пока нет
+The phone lists what its own radio hears, including 5 GHz. A Cardputer adds clients, probe requests, deauth frames and hidden names.	Телефон показывает то, что слышит его собственное радио, включая 5 ГГц. Cardputer добавляет клиентов, probe-запросы, deauth-кадры и скрытые имена.
+Networks appear here after the first scan.	Сети появятся здесь после первого сканирования.
+Name, BSSID or maker	Имя, BSSID или производитель
+Channel	Канал
+Deauthentication frames force devices off the network. A burst or a broadcast target suggests an active attack.	Кадры деаутентификации выбивают устройства из сети. Серия кадров или широковещательная цель говорят об активной атаке.
+In the latest pass: %d	В последнем проходе: %d
+Devices sending probe requests nearby, revealing networks they have connected to before.	Устройства рядом, рассылающие probe-запросы: по ним видно, к каким сетям они подключались раньше.
+Since the last scan	С последнего скана
+Wi-Fi is off	Wi-Fi выключен
+No permission	Нет разрешения
+Location is off	Геолокация выключена
+Nothing heard	Ничего не слышно
+Quietest: %d	Тише всего: %d
+Android is limiting Wi-Fi scans. Showing the last results the system kept.	Android ограничивает сканирование Wi-Fi. Показаны последние результаты, которые сохранила система.
+Wi-Fi is off, so the phone radio is quiet.	Wi-Fi выключен, радио телефона молчит.
+Nearby Wi-Fi permission is off, so network names stay hidden.	Нет разрешения «Устройства Wi-Fi поблизости», поэтому имена сетей скрыты.
+Location services must be on or this Android version returns an empty scan.	На этой версии Android без включённой геолокации сканирование возвращается пустым.
+2.4 GHz	2,4 ГГц
+5 GHz	5 ГГц
+6 GHz	6 ГГц
+Ch %d	Кан. %d
+Clients: %d	Клиентов: %d
+Missed scans: %d	Пропусков: %d
+Copy BSSID	Скопировать BSSID
+Revealed	Раскрыто
+ATTACK	АТАКА
+SUSPICIOUS	ПОДОЗРИТЕЛЬНО
+INFO	ИНФО
+Copy source MAC	Скопировать MAC источника
+Source MAC	MAC источника
+Copy target MAC	Скопировать MAC цели
+Target MAC	MAC цели
+Broadcast deauth	Deauth для всех
+Targeted deauth	Точечный deauth
+all devices	все устройства
+broadcast	широковещательно
+on LAN %s	в LAN %s
+Copy SSIDs	Скопировать SSID
+Random	Случайный
+Network cleared	Сеть удалена
+This network is no longer in the list.	Этой сети больше нет в списке.
+Phone	Телефон
+Notes	Заметки
+Broadcast name	Имя в эфире
+Hidden	Скрыто
+Maker	Производитель
+Country	Страна
+Device name	Имя устройства
+Radio	Радио
+This sighting is from the phone. Android does not report associated clients or frames the network is not addressed to.	Эти данные с телефона. Android не сообщает подключённых клиентов и кадры, адресованные не ему.
+Frequency	Частота
+%d MHz	%d МГц
+Band	Диапазон
+Width	Ширина
+Standards	Стандарты
+Generation	Поколение
+Fine Timing Measurement	Fine Timing Measurement
+Supported	Поддерживается
+Long range	Дальний режим
+Security	Безопасность
+Authentication	Аутентификация
+Pairwise cipher	Парный шифр
+Group cipher	Групповой шифр
+On	Вкл.
+Off	Выкл.
+Devices connected to this network, found through promiscuous-mode frame capture on the sensor.	Устройства, подключённые к этой сети, найденные сенсором при захвате кадров в неразборчивом режиме.
+Traffic	Трафик
+Data frames seen during the promiscuous-mode capture window. A high bitrate may indicate streaming (cameras, microphones).	Кадры данных, пойманные в окне захвата. Высокий битрейт может означать трансляцию (камеры, микрофоны).
+Volume	Объём
+Est. bitrate	Оценка битрейта
+Readings	Измерений
+Missed scans	Пропущено сканов
+Open network: traffic is not encrypted, anyone nearby can read it.	Открытая сеть: трафик не шифруется, его может прочитать любой поблизости.
+%s is obsolete and can be broken in minutes.	%s устарел, его можно взломать за минуты.
+WPS is on. Its PIN method is a known weak point; turn it off if this is your router.	Включён WPS. Его PIN-метод — известное слабое место; отключите его, если это ваш роутер.
+TKIP is enabled for old devices and weakens the whole network.	TKIP включён для старых устройств и ослабляет всю сеть.
+Randomised address: usually a phone hotspot, a guest network or a mesh node.	Случайный адрес: обычно это точка доступа телефона, гостевая сеть или узел mesh.
+Hidden SSID revealed from a probe response or association frame — the AP hides its name from beacons.	Скрытый SSID раскрыт по probe-ответу или кадру ассоциации — точка прячет имя в маяках.
+%d MHz (secondary above)	%d МГц (доп. канал выше)
+%d MHz (secondary below)	%d МГц (доп. канал ниже)
+It has not been heard since this list was cleared.	Его не слышно с тех пор, как список очистили.
+Probing	Ищет сети
+Associated	Подключение
+Yes	Да
+Probe only	Только запросы
+Probes	Запросы
+Broadcast	Широковещательно
+On the LAN	В локальной сети
+Nothing on the air yet	В эфире пока пусто
+Channel use is drawn from the networks in range.	Загрузка каналов строится по сетям в зоне действия.
+Each hump is one network: its width is the channels it covers, its height how loud it is here.	Каждый горб — одна сеть: ширина — занятые каналы, высота — насколько она громкая здесь.
+Quietest channel here	Самый тихий канал
+Of the non-overlapping channels 1, 6 and 11, this one meets the least interference. Set it on your router if you control one.	Из непересекающихся каналов 1, 6 и 11 на этом меньше всего помех. Выставьте его на роутере, если он ваш.
+Networks per channel	Сети по каналам
+Heard by the phone; the Cardputer is 2.4 GHz only.	Слышит телефон; Cardputer работает только на 2,4 ГГц.
+5 and 6 GHz from the phone	5 и 6 ГГц с телефона
+%.1f Mbit/s	%.1f Мбит/с
+%.0f kbit/s	%.0f кбит/с
+%.0f bit/s	%.0f бит/с
+Excellent	Отличный
+Good	Хороший
+Fair	Средний
+Weak	Слабый
+Poor	Плохой
+Unspecified	Не указана
+Auth no longer valid	Аутентификация истекла
+Leaving / deassociated	Уход / отключение
+Inactivity	Бездействие
+AP full	Точка переполнена
+Class 2 from non-auth	Кадр класса 2 без аутентификации
+Class 3 from non-assoc	Кадр класса 3 без ассоциации
+Leaving / disassociated	Уход / разъединение
+Not authenticated	Не аутентифицирован
+4-way handshake timeout	Тайм-аут 4-way handshake
+Group key handshake timeout	Тайм-аут обмена групповым ключом
+None	Нет
+Unknown	Неизвестно
+Hidden network	Скрытая сеть
+Name withheld	Имя скрыто системой
+Apple audio	Аудиоустройство Apple
+Unknown device	Неизвестное устройство
+Classic device	Устройство Classic
+Find My	Локатор
+AirPlay target	Приёмник AirPlay
+AirPlay source	Источник AirPlay
+Auto Unlock	Авторазблокировка
+Wi-Fi settings	Настройки Wi-Fi
+Instant Hotspot	Режим модема
+Activity off	Активность скрыта
+Locked	Заблокирован
+Audio playing	Играет аудио
+Screen changing	Экран переключается
+Video playing	Играет видео
+Notifying a Watch	Уведомления на Watch
+In use	Используется
+Driving	За рулём
+On a call	На звонке
+Apple TV setup	Настройка Apple TV
+Mobile backup	Резервное копирование
+Watch setup	Настройка Watch
+Apple TV pairing	Сопряжение с Apple TV
+Internet relay	Интернет-ретрансляция
+Wi-Fi password	Пароль Wi-Fi
+iOS setup	Настройка iOS
+Repair	Режим ремонта
+Speaker setup	Настройка колонки
+Apple Pay	Apple Pay
+Whole-home audio	Аудио по всему дому
+Developer pairing	Сопряжение для разработчика
+Call answered	Звонок принят
+Call ended	Звонок завершён
+Remote management	Удалённое управление
+Remote display	Удалённый экран
+Left	Левый
+Right	Правый
+Case	Футляр
+Resolvable private	Разрешимый приватный
+Random static	Случайный статический
+Public	Публичный
+Non-resolvable private	Неразрешимый приватный
+Audio	Аудио
+Computer	Компьютер
+Peripheral	Периферия
+Imaging	Печать и сканирование
+Wearable	Носимое
+Toy	Игрушка
+Other	Другое
+Bridge	Мост
+Fan	Вентилятор
+Garage Door Opener	Ворота гаража
+Lightbulb	Лампа
+Door Lock	Замок
+Outlet	Розетка
+Switch	Выключатель
+Thermostat	Термостат
+Security System	Охранная система
+Door	Дверь
+Window	Окно
+Window Covering	Шторы
+Programmable Switch	Программируемая кнопка
+Range Extender	Повторитель
+IP Camera	IP-камера
+Video Doorbell	Видеозвонок
+Air Purifier	Очиститель воздуха
+Heater	Обогреватель
+Air Conditioner	Кондиционер
+Humidifier	Увлажнитель
+Dehumidifier	Осушитель
+Sprinklers	Полив
+Faucets	Краны
+Shower Systems	Душ
+iPhone sync	Синхронизация iPhone
+Continuity	Continuity
+Device info	Сведения об устройстве
+Printer	Принтер
+Web	Веб
+Reading the network	Чтение сети
+Join a Wi-Fi network to scan it	Подключитесь к Wi-Fi, чтобы её просканировать
+The sensor is not connected.	Сенсор не подключён.
+The update timed out. Keep the Cardputer close and try again.	Обновление не успело завершиться. Держите Cardputer ближе и попробуйте снова.
+Update cancelled.	Обновление отменено.
+The link to the sensor dropped.	Связь с сенсором оборвалась.
+This is not an ESP32 application image. Choose firmware.bin from pio run, not a merged flash image.	Это не образ приложения ESP32. Выберите firmware.bin после pio run, а не объединённый образ флеш-памяти.
+This image does not fit in the sensor's update slot.	Образ не помещается в слот обновления сенсора.
+The sensor could not finish the update.	Сенсор не смог завершить обновление.
+The sensor is still scanning. Wait for the sweep to finish and try again.	Сенсор ещё сканирует. Дождитесь конца прохода и попробуйте снова.
+The sensor could not start the update. Flash it once over USB so the OTA slots exist, then try again.	Сенсор не смог начать обновление. Один раз прошейте его по USB, чтобы появились OTA-слоты, и попробуйте снова.
+The sensor lost its place in the image.	Сенсор сбился с позиции в образе.
+The sensor could not write the image.	Сенсор не смог записать образ.
+The image failed its checksum. Transfer it again.	Не сошлась контрольная сумма образа. Передайте его ещё раз.
+The sensor rejected the image header.	Сенсор отклонил заголовок образа.
+The sensor rebooted, but the app could not reconnect. It is looking for the Cardputer again.	Сенсор перезагрузился, но приложение не смогло переподключиться. Снова ищу Cardputer.

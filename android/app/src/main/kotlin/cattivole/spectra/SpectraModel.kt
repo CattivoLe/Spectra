@@ -33,12 +33,22 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         phone.observe(bump)
         ble.observe(bump)
         lan.observe(bump)
+        radio.onAdapterChange { ble.availabilityChanged() }
         phone.start()
     }
 
     fun onForeground() {
         link.refreshAvailability(connectSaved = true)
         ble.resumeIfWanted()
+        if (ble.state is cattivole.spectra.platform.DeviceBleScanner.State.Unavailable) ble.availabilityChanged()
+        phone.refresh()
+    }
+
+    /** The permission dialog closed, or the user came back from Settings. */
+    fun permissionsChanged() {
+        link.refreshAvailability(connectSaved = true)
+        radio.retry()
+        ble.availabilityChanged()
         phone.refresh()
     }
 

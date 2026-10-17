@@ -442,29 +442,88 @@ class BleDevice(
             return parts.joinToString(" · ")
         }
 
+    val hasOwnName: Boolean
+        get() = cleaned(localName) != null || cleaned(peripheralName) != null ||
+            proximity?.modelName != null || heySiriDevice != null
+
+    val strongestRssi: Int get() = samples.maxOfOrNull { it.rssi } ?: rssi
+    val weakestRssi: Int get() = samples.minOfOrNull { it.rssi } ?: rssi
+    val averageRssi: Int get() = if (samples.isEmpty()) rssi else samples.sumOf { it.rssi } / samples.size
+
+    /**
+     * Folds another advertisement in. Identity fields are kept across packets,
+     * because one advertisement often carries only the name and the next only
+     * the services. Signal samples are limited to a few a second so a chatty
+     * peripheral does not redraw the list on every packet.
+     */
     fun absorb(advertisement: BleAdvertisement, peripheralName: String?, rssi: Int, at: Long) {
-        val usable = if (rssi == 127) -100 else rssi
-        this.rssi = usable
-        smoothedRssi = smoothedRssi * 0.6 + usable * 0.4
-        if (kotlin.math.abs(smoothedRssi - orderRssi) >= 3) orderRssi = smoothedRssi.toInt()
-        lastSeen = at
         packetCount += 1
-        if (!peripheralName.isNullOrEmpty()) this.peripheralName = peripheralName
-        if (!advertisement.localName.isNullOrEmpty()) localName = advertisement.localName
+        cleaned(advertisement.localName)?.let { localName = it }
+        cleaned(peripheralName)?.let { this.peripheralName = it }
         if (advertisement.companyId != null) {
             companyId = advertisement.companyId
             companyName = advertisement.companyName
-            manufacturerPayload = advertisement.manufacturerPayload
         }
-        if (advertisement.services.isNotEmpty()) services = advertisement.services
-        if (advertisement.solicitedServices.isNotEmpty()) solicitedServices = advertisement.solicitedServices
-        if (advertisement.serviceData.isNotEmpty()) serviceData = advertisement.serviceData
+        if (advertisement.manufacturerPayload.isNotEmpty()) manufacturerPayload = advertisement.manufacturerPayload
+        if (advertisement.apple.isNotEmpty()) {
+            // Messages rotate across packets. Keep each kind and refresh it when
+            // it shows up again, so the name does not flicker between packets.
+            val merged = apple.toMutableList()
+            for (message in advertisement.apple) {
+                val index = merged.indexOfFirst { it::class == message::class }
+                if (index >= 0) merged[index] = message else merged.add(message)
+            }
+            apple = merged
+        }
+        val knownServices = services.toMutableList()
+        for (service in advertisement.services) {
+            if (knownServices.none { it.uuid == service.uuid }) knownServices.add(service)
+        }
+        services = knownServices
+        val knownSolicited = solicitedServices.toMutableList()
+        for (service in advertisement.solicitedServices) {
+            if (knownSolicited.none { it.uuid == service.uuid }) knownSolicited.add(service)
+        }
+        solicitedServices = knownSolicited
+        val knownData = serviceData.toMutableList()
+        for (item in advertisement.serviceData) {
+            val index = knownData.indexOfFirst { it.uuid == item.uuid }
+            if (index >= 0) knownData[index] = item else knownData.add(item)
+        }
+        serviceData = knownData
         if (advertisement.txPower != null) txPower = advertisement.txPower
         if (advertisement.isConnectable != null) isConnectable = advertisement.isConnectable
-        if (advertisement.apple.isNotEmpty()) apple = advertisement.apple
+
+        lastSeen = at
+        val due = samples.lastOrNull()?.let { at - it.date >= 250 } ?: true
+        if (!due || rssi == 127) return
+        this.rssi = rssi
+        smoothedRssi = smoothedRssi * 0.5 + rssi * 0.5
+        val smoothed = kotlin.math.round(smoothedRssi).toInt()
+        if (kotlin.math.abs(smoothed - orderRssi) >= 8) orderRssi = smoothed
         sampleCounter += 1
-        samples.add(Sample(sampleCounter, at, usable))
-        if (samples.size > 40) samples.removeAt(0)
+        samples.add(Sample(sampleCounter, at, rssi))
+        if (samples.size > 60) samples.subList(0, samples.size - 60).clear()
+    }
+
+    /** A saved device coming back from history. */
+    fun restore(
+        advertisement: BleAdvertisement,
+        peripheralName: String?,
+        samples: List<Sample>,
+        packets: Int,
+        lastSeen: Long,
+        deviceClass: String?,
+    ) {
+        absorb(advertisement, peripheralName, 127, firstSeen)
+        this.samples.clear()
+        this.samples.addAll(samples)
+        sampleCounter = samples.size
+        packetCount = packets
+        this.lastSeen = lastSeen
+        this.deviceClass = deviceClass
+        orderRssi = rssi
+        smoothedRssi = rssi.toDouble()
     }
 
     private fun cleaned(value: String?): String? {

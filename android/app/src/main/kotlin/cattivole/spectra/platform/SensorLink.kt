@@ -9,6 +9,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.os.Build
@@ -87,8 +88,9 @@ class SensorLink(
     private var userDisconnected = false
     private var shouldReconnect = false
     private var writing = false
-    private val writes = ArrayDeque<ByteArray>()
-    private var writeTarget: BluetoothGattCharacteristic? = null
+    /** Each write keeps its own characteristic: a control command can queue behind firmware chunks. */
+    private val writes = ArrayDeque<Pair<BluetoothGattCharacteristic, ByteArray>>()
+    private var rebootJob: Job? = null
     private var upload: FirmwareUpload? = null
     private var updateJob: Job? = null
     private var firmwareCancel = false
@@ -106,10 +108,26 @@ class SensorLink(
         val saved = prefs.getInt(KEY_INTERVAL, 30)
         liveInterval = if (saved in liveIntervals) saved else 30
         radio.addListener { result -> onScan(result) }
+        radio.onAdapterChange { adapterChanged() }
         refreshAvailability(connectSaved = true)
     }
 
+    /** Bluetooth was switched on or off in the system. */
+    private fun adapterChanged() {
+        if (state is State.Demo) return
+        if (adapter?.isEnabled != true) {
+            closeGatt()
+            resetSession()
+            state = State.PoweredOff
+            publish()
+        } else {
+            refreshAvailability(connectSaved = true)
+        }
+    }
+
     fun refreshAvailability(connectSaved: Boolean = false) {
+        // The demo needs no radio; a missing permission must not end it.
+        if (state is State.Demo) return
         when {
             adapter == null -> state = State.Unsupported
             !Permissions.canScanBluetooth(app) -> state = State.Unauthorized
@@ -139,32 +157,55 @@ class SensorLink(
         publish()
     }
 
+    /**
+     * [background] keeps the request pending until the sensor is in range,
+     * which is how the last sensor and a dropped link come back by themselves.
+     */
     @SuppressLint("MissingPermission")
-    fun connect(address: String, name: String = address) {
+    fun connect(address: String, name: String = address, background: Boolean = false) {
         if (!readyForRadio()) return
-        val device = adapter?.getRemoteDevice(address) ?: return
+        val device = try {
+            adapter?.getRemoteDevice(address)
+        } catch (_: IllegalArgumentException) {
+            null
+        } ?: return
         userDisconnected = false
-        shouldReconnect = false
         closeGatt()
         state = State.Connecting(name)
         radio.setWants(sensor = false, devices = radioKeepsDevices())
         publish()
-        gatt = device.connectGatt(app, false, callback, BluetoothDevice.TRANSPORT_LE)
+        gatt = device.connectGatt(app, background, callback, BluetoothDevice.TRANSPORT_LE)
     }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
         userDisconnected = true
         shouldReconnect = false
-        prefs.edit().remove(KEY_SENSOR).apply()
+        rebootJob?.cancel()
+        prefs.edit().remove(KEY_SENSOR).remove(KEY_SENSOR_NAME).apply()
         closeGatt()
+        resetSession()
         state = State.Idle
-        info = null
         publish()
+    }
+
+    /** What belongs to one connection: forgotten when it ends. */
+    private fun resetSession() {
+        info = null
+        batteryLevel = null
+        isCharging = null
+        store.abandonScan()
+        if (upload != null) failUpdate(FirmwareUpdate.TransferError.LINK_LOST.message)
     }
 
     fun scanNow() {
         if (demo != null) demo?.scan() else enqueue(control, SensorProtocol.Command.ScanOnce.data)
+    }
+
+    /** The firmware file could not be read. */
+    fun failFirmwareUpdate(message: String) {
+        firmwareUpdate = FirmwareUpdateProgress(FirmwareUpdateProgress.Stage.Failed(message))
+        publish()
     }
 
     fun setLiveInterval(seconds: Int) {
@@ -239,7 +280,12 @@ class SensorLink(
 
     fun cancelFirmwareUpdate() {
         firmwareCancel = true
-        upload?.let { enqueue(firmwareChar, it.abortCommand) }
+        val session = upload
+        if (session != null) {
+            enqueue(firmwareChar, session.abortCommand)
+        } else if (firmwareUpdate?.stage is FirmwareUpdateProgress.Stage.Preparing) {
+            failUpdate(FirmwareUpdate.TransferError.CANCELLED.message)
+        }
     }
 
     fun dismissFirmwareUpdate() {
@@ -251,15 +297,14 @@ class SensorLink(
     fun close() {
         demo?.stop()
         updateJob?.cancel()
+        rebootJob?.cancel()
         scope.coroutineContext[Job]?.cancel()
         closeGatt()
     }
 
     fun noteDeviceScan(active: Boolean) {
         deviceScanWanted = active
-        if (state is State.Searching || active) {
-            radio.setWants(sensor = state is State.Searching, devices = active)
-        }
+        radio.setWants(sensor = state is State.Searching, devices = active)
     }
 
     private var deviceScanWanted = false
@@ -274,8 +319,8 @@ class SensorLink(
     @SuppressLint("MissingPermission")
     private fun connectSaved() {
         val address = prefs.getString(KEY_SENSOR, null) ?: return
-        if (userDisconnected || demo != null) return
-        connect(address, "Spectra")
+        if (userDisconnected || demo != null || gatt != null) return
+        connect(address, prefs.getString(KEY_SENSOR_NAME, null) ?: "Spectra", background = true)
     }
 
     private fun onScan(result: ScanResult) {
@@ -285,6 +330,11 @@ class SensorLink(
         val spectra = services.any { it == SensorProtocol.SERVICE } || (name?.startsWith("Spectra-") == true)
         if (!spectra || state !is State.Searching) return
         val address = result.device.address ?: return
+        if (shouldReconnect && address == prefs.getString(KEY_SENSOR, null)) {
+            // Back after a reboot or out of range: no need to pick it again.
+            connect(address, name ?: "Spectra")
+            return
+        }
         val row = found.getOrPut(address) {
             Discovered(address, name ?: "Spectra", result.rssi, System.currentTimeMillis())
         }
@@ -319,8 +369,8 @@ class SensorLink(
                     is FirmwareUpload.Phase.Failed -> failUpdate(phase.failure.message)
                     FirmwareUpload.Phase.Succeeded -> {
                         firmwareUpdate = FirmwareUpdateProgress(FirmwareUpdateProgress.Stage.Rebooting)
-                        shouldReconnect = true
                         upload = null
+                        waitForReboot()
                     }
                     else -> if (next != null) enqueue(firmwareChar, next)
                 }
@@ -344,12 +394,46 @@ class SensorLink(
         publish()
     }
 
+    /**
+     * The sensor drops the link to boot the new image. Success is the same
+     * sensor back, connected, with its info read again.
+     */
+    private fun waitForReboot() {
+        shouldReconnect = true
+        rebootJob?.cancel()
+        rebootJob = scope.launch {
+            var sawDrop = false
+            val deadline = System.currentTimeMillis() + 45_000
+            while (System.currentTimeMillis() < deadline) {
+                when (val current = state) {
+                    is State.Connecting, State.Searching, State.PoweredOff -> sawDrop = true
+                    State.Idle -> {
+                        sawDrop = true
+                        val saved = prefs.getString(KEY_SENSOR, null)
+                        if (saved != null) connect(saved, prefs.getString(KEY_SENSOR_NAME, null) ?: "Spectra", background = true)
+                    }
+                    is State.Connected -> if (sawDrop && info != null) {
+                        shouldReconnect = false
+                        firmwareUpdate = FirmwareUpdateProgress(FirmwareUpdateProgress.Stage.Succeeded(info?.fw ?: current.name))
+                        publish()
+                        return@launch
+                    }
+                    else -> Unit
+                }
+                delay(250)
+            }
+            firmwareUpdate = FirmwareUpdateProgress(
+                FirmwareUpdateProgress.Stage.Failed("The sensor rebooted, but the app could not reconnect. It is looking for the Cardputer again."),
+            )
+            publish()
+        }
+    }
+
     private fun sensorName(): String = (state as? State.Connected)?.name ?: "Cardputer"
 
     private fun enqueue(characteristic: BluetoothGattCharacteristic?, bytes: ByteArray) {
         if (characteristic == null || gatt == null || state !is State.Connected) return
-        writes.addLast(bytes)
-        writeTarget = characteristic
+        writes.addLast(characteristic to bytes)
         drain()
     }
 
@@ -357,11 +441,10 @@ class SensorLink(
     private fun drain() {
         if (writing) return
         val gatt = gatt ?: return
-        val characteristic = writeTarget ?: return
-        val bytes = writes.removeFirstOrNull() ?: return
+        val (characteristic, bytes) = writes.removeFirstOrNull() ?: return
         writing = true
         val started = if (Build.VERSION.SDK_INT >= 33) {
-            gatt.writeCharacteristic(characteristic, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothGatt.GATT_SUCCESS
+            gatt.writeCharacteristic(characteristic, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
         } else {
             @Suppress("DEPRECATION")
             characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
@@ -380,6 +463,8 @@ class SensorLink(
         if (upload == null && firmwareUpdate?.isRunning != true) return
         upload = null
         firmwareUpdate = FirmwareUpdateProgress(FirmwareUpdateProgress.Stage.Failed(message))
+        // The update paused automatic scans; give them back.
+        enqueue(control, SensorProtocol.Command.SetInterval(liveInterval).data)
         publish()
     }
 
@@ -398,20 +483,36 @@ class SensorLink(
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             scope.launch {
-                if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
-                    this@SensorLink.gatt = gatt
-                    gatt.discoverServices()
-                } else {
-                    closeGatt()
-                    store.abandonScan()
-                    if (shouldReconnect && !userDisconnected) {
-                        state = State.Searching
-                        radio.setWants(sensor = true, devices = deviceScanWanted)
-                    } else if (state !is State.Demo) {
-                        state = State.Idle
-                    }
-                    publish()
+                if (gatt != this@SensorLink.gatt) {
+                    // A link that was already replaced or closed.
+                    gatt.close()
+                    return@launch
                 }
+                if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                    gatt.discoverServices()
+                    return@launch
+                }
+                val wasConnected = state is State.Connected
+                val device = gatt.device
+                closeGatt()
+                resetSession()
+                when {
+                    state is State.Demo || userDisconnected -> Unit
+                    wasConnected || shouldReconnect -> {
+                        // Out of range or rebooting: keep a request pending, which
+                        // Android completes whenever the sensor comes back.
+                        val name = (state as? State.Connected)?.name ?: prefs.getString(KEY_SENSOR_NAME, null) ?: "Spectra"
+                        state = State.Connecting(name)
+                        publish()
+                        // A failure can come back at once; do not spin on it.
+                        delay(800)
+                        if (state is State.Connecting && this@SensorLink.gatt == null && !userDisconnected) {
+                            connect(device.address, name, background = true)
+                        }
+                    }
+                    else -> state = State.Idle
+                }
+                publish()
             }
         }
 
@@ -425,7 +526,7 @@ class SensorLink(
                 control = service.getCharacteristic(SensorProtocol.CONTROL)
                 results = service.getCharacteristic(SensorProtocol.RESULTS)
                 firmwareChar = service.getCharacteristic(SensorProtocol.FIRMWARE)
-                gatt.requestMtu(517)
+                if (!gatt.requestMtu(517)) readInfo(gatt)
             }
         }
 
@@ -433,8 +534,7 @@ class SensorLink(
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             scope.launch {
                 if (status == BluetoothGatt.GATT_SUCCESS) this@SensorLink.mtu = mtu
-                val infoChar = gatt.getService(SensorProtocol.SERVICE)?.getCharacteristic(SensorProtocol.INFO)
-                if (infoChar != null) gatt.readCharacteristic(infoChar) else subscribe(gatt)
+                readInfo(gatt)
             }
         }
 
@@ -453,10 +553,17 @@ class SensorLink(
         @SuppressLint("MissingPermission")
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             scope.launch {
-                val name = gatt.device.name ?: gatt.device.address
-                prefs.edit().putString(KEY_SENSOR, gatt.device.address).apply()
+                if (gatt != this@SensorLink.gatt) return@launch
+                val name = gatt.device.name ?: (state as? State.Connecting)?.name ?: gatt.device.address
+                prefs.edit()
+                    .putString(KEY_SENSOR, gatt.device.address)
+                    .putString(KEY_SENSOR_NAME, name)
+                    .apply()
                 state = State.Connected(name ?: "Spectra")
+                radio.setWants(sensor = false, devices = radioKeepsDevices())
+                // The firmware forgets the interval on disconnect, so set it every time.
                 enqueue(control, SensorProtocol.Command.SetInterval(liveInterval).data)
+                if (liveInterval == 0) enqueue(control, SensorProtocol.Command.ScanOnce.data)
                 publish()
             }
         }
@@ -470,8 +577,7 @@ class SensorLink(
                         val sent = upload?.offset ?: 0
                         val total = upload?.image?.size ?: 0
                         firmwareUpdate = FirmwareUpdateProgress(FirmwareUpdateProgress.Stage.Uploading(sent, total))
-                        writes.addFirst(next)
-                        writeTarget = characteristic
+                        writes.addFirst(characteristic to next)
                     } else if (upload?.phase is FirmwareUpload.Phase.WaitDone) {
                         firmwareUpdate = FirmwareUpdateProgress(FirmwareUpdateProgress.Stage.Finishing)
                     }
@@ -506,6 +612,12 @@ class SensorLink(
     }
 
     @SuppressLint("MissingPermission")
+    private fun readInfo(gatt: BluetoothGatt) {
+        val infoChar = gatt.getService(SensorProtocol.SERVICE)?.getCharacteristic(SensorProtocol.INFO)
+        if (infoChar == null || !gatt.readCharacteristic(infoChar)) subscribe(gatt)
+    }
+
+    @SuppressLint("MissingPermission")
     private fun subscribe(gatt: BluetoothGatt) {
         val characteristic = results ?: return
         gatt.setCharacteristicNotification(characteristic, true)
@@ -535,6 +647,7 @@ class SensorLink(
         }
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         private const val KEY_SENSOR = "lastSensor"
+        private const val KEY_SENSOR_NAME = "lastSensorName"
         private const val KEY_INTERVAL = "liveInterval"
     }
 }

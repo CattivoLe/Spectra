@@ -268,6 +268,67 @@ struct LANIdentityTests {
         #expect(names?.domain == "HOME")
     }
 
+    @Test func ntlmPrefersTheDnsNameOverATruncatedNetbiosName() {
+        var info = Data()
+        info.append(contentsOf: av(1, "ALEXANDERS-MACB"))
+        info.append(contentsOf: av(2, "WORKGROUP"))
+        info.append(contentsOf: av(3, "Alexanders-MacBook-Pro.local"))
+        info.append(contentsOf: [0, 0, 0, 0])
+
+        var message = Data("NTLMSSP\0".utf8)
+        message.append(contentsOf: [2, 0, 0, 0])
+        message.append(contentsOf: [0, 0, 0, 0, 48, 0, 0, 0])
+        message.append(contentsOf: [UInt8](repeating: 0, count: 4 + 8 + 8))
+        message.append(contentsOf: UInt16(info.count).littleEndianBytes)
+        message.append(contentsOf: UInt16(info.count).littleEndianBytes)
+        message.append(contentsOf: [48, 0, 0, 0])
+        message.append(info)
+
+        let names = LANIdentity.parseNTLMChallenge(Data([0xFE, 0x53]) + message)
+        #expect(names?.computer == "Alexanders-MacBook-Pro")
+        #expect(names?.domain == "WORKGROUP")
+        #expect(LANIdentity.preferredComputerName(netbios: "OFFICE-PC", dns: "office-pc") == "OFFICE-PC")
+    }
+
+    @Test func aMacWithFileSharingIsRecognisedFromItsSmbName() {
+        let mac = LANDevice(
+            ipAddress: "192.168.1.30",
+            profile: LANProfile(windows: WindowsHost(computerName: "Alexanders-MacBook-Pro", domain: "WORKGROUP"))
+        )
+        #expect(mac.identity.manufacturer == "Apple")
+        #expect(mac.identity.operatingSystem == "macOS")
+        #expect(mac.identity.model == "MacBook")
+    }
+
+    @Test func aMacModelIdNamesTheFamily() {
+        let service = ServiceAdvertisement(type: "_device-info._tcp", name: "Office", model: "MacBookPro18,3")
+        let identity = HostIdentity.recognize(names: ["Office"], services: [service])
+        #expect(identity.operatingSystem == "macOS")
+        #expect(identity.model == "MacBook Pro")
+        let silicon = HostIdentity.recognize(names: [], services: [ServiceAdvertisement(type: "_device-info._tcp", name: "x", model: "Mac15,7")])
+        #expect(silicon.model == "Mac")
+    }
+
+    @Test func aReverseLookupReadsTheRoutersDhcpName() throws {
+        let query = try #require(LANIdentity.ptrQuery(for: "192.168.1.57", id: 0x1234))
+        #expect(query.count == 43)
+        #expect(Array(query.prefix(2)) == [0x12, 0x34])
+        #expect(LANIdentity.ptrQuery(for: "not an ip", id: 1) == nil)
+
+        var reply = query
+        reply[2] = 0x81
+        reply[3] = 0x80
+        reply[7] = 1
+        let target: [UInt8] = [14] + Array("Galaxy-Z-Fold4".utf8) + [3] + Array("lan".utf8) + [0]
+        reply.append(contentsOf: [0xC0, 0x0C, 0x00, 0x0C, 0x00, 0x01, 0, 0, 0x0E, 0x10, 0x00, UInt8(target.count)])
+        reply.append(contentsOf: target)
+        #expect(LANIdentity.parsePTR(reply, id: 0x1234) == "Galaxy-Z-Fold4.lan")
+        #expect(LANIdentity.parsePTR(reply, id: 0x9999) == nil)
+
+        let fold = HostIdentity.recognize(names: ["Galaxy-Z-Fold4"])
+        #expect(fold.model == "Galaxy Z Fold4")
+    }
+
     @Test func camerasAndIoTAreFlaggedFromTheVendor() {
         #expect(NotableDevice.classify(manufacturer: "Hikvision", oui: "44:19:B6", upnpType: nil, hasRTSP: false) == .camera)
         #expect(NotableDevice.classify(manufacturer: "Espressif", oui: nil, upnpType: nil, hasRTSP: false) == .iot)

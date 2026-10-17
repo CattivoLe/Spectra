@@ -146,6 +146,27 @@ nonisolated enum FirmwareUpdate {
         guard image[image.startIndex] == magic else { throw ImageError.notAnAppImage }
     }
 
+    /// The version a Spectra image carries in its "SPECTRA-FW:x.y.z" tag.
+    /// Images built before the tag existed have none.
+    static func taggedVersion(_ image: Data) -> String? {
+        let tag = Array("SPECTRA-FW:".utf8)
+        let bytes = [UInt8](image)
+        guard bytes.count > tag.count else { return nil }
+        var index = 0
+        while index + tag.count < bytes.count {
+            if bytes[index] == tag[0], Array(bytes[index..<(index + tag.count)]) == tag {
+                var end = index + tag.count
+                while end < bytes.count, bytes[end] == UInt8(ascii: ".") || (48...57).contains(bytes[end]) {
+                    end += 1
+                }
+                let version = String(decoding: bytes[(index + tag.count)..<end], as: UTF8.self)
+                return version.isEmpty ? nil : version
+            }
+            index += 1
+        }
+        return nil
+    }
+
     /// ISO-HDLC CRC-32, the same value as zlib. `123456789` hashes to `0xCBF43926`.
     enum CRC32 {
         static func hash(_ data: Data) -> UInt32 {

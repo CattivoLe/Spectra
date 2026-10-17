@@ -76,6 +76,11 @@ low-energy scanning until it finishes. The GATT link asks for a larger ATT
 MTU itself (iOS does that automatically) and reconnects to the last sensor
 by its address.
 
+Saved scans keep the records themselves, so a network, host or Bluetooth
+device opens the same card from History. The interface follows the system
+language (English or Russian); strings live in
+`android/app/src/main/resources/spectra/strings-ru.tsv`, keyed by the English text.
+
 The LAN tab reads `/proc/net/arp`, so neighbour hardware addresses are
 usually visible, and it walks the joined Wi-Fi or Ethernet subnet. A prefix
 wider than /24 is limited to the local /24. There is no raw ICMP, so a host

@@ -7,7 +7,11 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.os.ParcelUuid
 import cattivole.spectra.core.SensorProtocol
 
@@ -24,14 +28,47 @@ class BleRadio(context: Context) {
 
     var onFailure: ((Int) -> Unit)? = null
     private val listeners = mutableListOf<(ScanResult) -> Unit>()
+    private val adapterListeners = mutableListOf<() -> Unit>()
 
     fun addListener(listener: (ScanResult) -> Unit) {
         listeners.add(listener)
     }
 
+    /** Called on the main thread when Bluetooth is switched on or off. */
+    fun onAdapterChange(listener: () -> Unit) {
+        adapterListeners.add(listener)
+    }
+
+    private val adapterReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            val now = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+            if (now != BluetoothAdapter.STATE_ON && now != BluetoothAdapter.STATE_OFF) return
+            // A scan started before the radio was on never delivers anything.
+            restart(force = true)
+            adapterListeners.toList().forEach { it() }
+        }
+    }
+
+    init {
+        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= 33) {
+            app.registerReceiver(adapterReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            app.registerReceiver(adapterReceiver, filter)
+        }
+    }
+
+    /** Permissions changed: try again with whatever is wanted. */
+    fun retry() = restart(force = true)
+
     private var sensorSearch = false
     private var deviceScan = false
     private var callback: ScanCallback? = null
+    private var mode = Mode.NONE
+
+    private enum class Mode { NONE, SENSOR, ALL }
 
     val isSupported: Boolean get() = adapter != null
     val isEnabled: Boolean get() = adapter?.isEnabled == true
@@ -46,15 +83,32 @@ class BleRadio(context: Context) {
         sensorSearch = false
         deviceScan = false
         restart()
+        try {
+            app.unregisterReceiver(adapterReceiver)
+        } catch (_: IllegalArgumentException) {
+        }
     }
 
+    /**
+     * Android silently stops delivering results to an app that starts more
+     * than five scans in 30 seconds, so an unchanged request keeps the scan
+     * that is already running.
+     */
     @SuppressLint("MissingPermission")
-    private fun restart() {
+    private fun restart(force: Boolean = false) {
+        val wanted = when {
+            deviceScan -> Mode.ALL
+            sensorSearch -> Mode.SENSOR
+            else -> Mode.NONE
+        }
+        if (!force && wanted == mode && (callback != null || wanted == Mode.NONE)) return
+        mode = wanted
         val scanner = adapter?.bluetoothLeScanner
         callback?.let { current ->
             try {
                 scanner?.stopScan(current)
-            } catch (_: SecurityException) {
+            } catch (_: Exception) {
+                // Not permitted any more, or the adapter is already off.
             }
         }
         callback = null
@@ -85,7 +139,7 @@ class BleRadio(context: Context) {
         callback = next
         try {
             scanner.startScan(filters, settings, next)
-        } catch (_: SecurityException) {
+        } catch (_: Exception) {
             callback = null
         }
     }

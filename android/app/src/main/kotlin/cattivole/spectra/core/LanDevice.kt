@@ -62,6 +62,9 @@ class LanDevice(
 
     var pinnedName: String? = null
         private set
+
+    /** 0..1 while a port scan of this host runs. */
+    var portScanFraction: Float? = null
     private var pinnedRank = 0
 
     val manufacturer: String?
@@ -74,8 +77,9 @@ class LanDevice(
     val identity: HostIdentity
         get() {
             val upnp = profile.upnp
+            // The SMB / NetBIOS name is often all a Mac or PC with file sharing gives away.
             val found = HostIdentity.recognize(
-                names = hostnames,
+                names = hostnames + listOfNotNull(profile.windows?.computerName),
                 services = services,
                 ports = openPorts.map { it.number },
                 vendor = manufacturer,

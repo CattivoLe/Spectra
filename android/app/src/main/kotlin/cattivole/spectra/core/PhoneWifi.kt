@@ -21,6 +21,14 @@ object PhoneWifi {
         else -> 0
     }
 
+    /** Like [channel], without rounding: a 40 MHz centre sits between two channel numbers. */
+    fun centreChannel(frequencyMHz: Int): Double? = when {
+        frequencyMHz in 2400..2500 -> (frequencyMHz - 2407) / 5.0
+        frequencyMHz in 5000..5925 -> (frequencyMHz - 5000) / 5.0
+        frequencyMHz > 5925 -> (frequencyMHz - 5950) / 5.0
+        else -> null
+    }
+
     fun visibility(ssid: String?): SsidVisibility = when {
         ssid.isNullOrEmpty() -> SsidVisibility.HIDDEN
         ssid == "<unknown ssid>" -> SsidVisibility.REDACTED
@@ -34,6 +42,7 @@ object PhoneWifi {
         frequencyMHz: Int,
         capabilities: String,
         widthMHz: Int,
+        centreFrequencyMHz: Int = 0,
     ): AccessPointReading? {
         val mac = MacAddress.parse(bssid) ?: return null
         val shown = visibility(ssid)
@@ -53,6 +62,7 @@ object PhoneWifi {
             widthMHz = widthMHz,
             visibility = shown,
             phyNote = parsed.phyNote,
+            centreChannel = if (widthMHz > 20 && centreFrequencyMHz > 0) centreChannel(centreFrequencyMHz) else null,
         )
     }
 

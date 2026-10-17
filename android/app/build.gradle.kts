@@ -42,6 +42,13 @@ android {
     }
 }
 
+// The models are plain mutable objects; SpectraModel.generation tells the UI to
+// redraw. Strong skipping would skip any row whose object is the same instance
+// as before, so a changed network or sensor state would not be drawn.
+composeCompiler {
+    enableStrongSkippingMode = false
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
@@ -57,4 +64,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
+    // HistoryCodec uses org.json, which is only a stub in local unit tests.
+    testImplementation("org.json:json:20240303")
 }

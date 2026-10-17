@@ -6,11 +6,13 @@ struct SensorView: View {
     @Environment(NetworkStore.self) private var store
     @State private var pickingFirmware = false
     @State private var pendingFirmware: PendingFirmware?
+    @State private var installTaps = 0
 
-    private struct PendingFirmware: Identifiable {
+    struct PendingFirmware: Identifiable {
         let id = UUID()
         var name: String
         var data: Data
+        var version: String?
     }
 
     var body: some View {
@@ -82,13 +84,27 @@ struct SensorView: View {
                                     .symbolRenderingMode(.multicolor)
                             }
                             if case .connected = link.state, info.ota, link.firmwareUpdate?.isRunning != true {
-                                if let image = BundledFirmware.image {
-                                    Button("Install included firmware", systemImage: "arrow.down.circle") {
-                                        pendingFirmware = PendingFirmware(name: "firmware.bin", data: image)
+                                if let bundled = BundledFirmware.current {
+                                    if let version = bundled.version, version == info.fw {
+                                        Label("Firmware is up to date", systemImage: "checkmark.seal.fill")
+                                            .foregroundStyle(.green)
+                                        Button("Reinstall \(version)", systemImage: "arrow.clockwise") {
+                                            offer(PendingFirmware(name: "firmware.bin", data: bundled.data, version: version))
+                                        }
+                                    } else {
+                                        Button(
+                                            bundled.version.map { String(localized: "Install firmware \($0)") }
+                                                ?? String(localized: "Install included firmware"),
+                                            systemImage: "arrow.down.circle"
+                                        ) {
+                                            offer(PendingFirmware(name: "firmware.bin", data: bundled.data, version: bundled.version))
+                                        }
                                     }
-                                }
-                                Button("Choose a firmware file…", systemImage: "folder") {
-                                    pickingFirmware = true
+                                } else {
+                                    // Only a build without the image needs a file from elsewhere.
+                                    Button("Choose a firmware file…", systemImage: "folder") {
+                                        pickingFirmware = true
+                                    }
                                 }
                             }
                         } header: {
@@ -96,8 +112,10 @@ struct SensorView: View {
                         } footer: {
                             if case .connected = link.state, !info.ota {
                                 Text("This firmware cannot take updates from the app. Flash 0.6.0 or newer once over USB or the launcher; after that, updates install from here.")
-                            } else if case .connected = link.state, info.ota, BundledFirmware.image != nil {
-                                Text("Included firmware is the firmware.bin from the last app build. Rebuild the iOS app after pio run and it is picked up on its own.")
+                            } else if case .connected = link.state, info.ota, BundledFirmware.current != nil {
+                                Text("The app carries the firmware.bin from its last build. Rebuild the iOS app after pio run and the new version shows up here.")
+                            } else if case .connected = link.state, info.ota {
+                                Text("This build of the app has no firmware inside. Run pio run before building the app, or pick firmware.bin from Files.")
                             }
                         }
                     }
@@ -122,6 +140,13 @@ struct SensorView: View {
                 }
             }
             .navigationTitle("Sensor")
+            .sensoryFeedback(trigger: link.firmwareUpdate?.stage) { _, stage in
+                switch stage {
+                case .succeeded: .success
+                case .failed: .error
+                default: nil
+                }
+            }
             .fileImporter(
                 isPresented: $pickingFirmware,
                 allowedContentTypes: firmwareFileTypes,
@@ -129,37 +154,38 @@ struct SensorView: View {
             ) { result in
                 loadFirmware(result)
             }
-            .confirmationDialog(
-                "Install this firmware?",
-                isPresented: Binding(
-                    get: { pendingFirmware != nil },
-                    set: { if !$0 { pendingFirmware = nil } }
-                ),
-                titleVisibility: .visible,
-                presenting: pendingFirmware
-            ) { pending in
-                Button("Install firmware") {
+            .sheet(item: $pendingFirmware) { pending in
+                FirmwareInstallSheet(pending: pending, current: link.info?.fw) {
+                    installTaps += 1
                     link.installFirmware(pending.data)
                     pendingFirmware = nil
-                }
-                Button("Cancel", role: .cancel) {
+                } cancel: {
                     pendingFirmware = nil
                 }
-            } message: { pending in
-                Text(installMessage(pending))
+                .presentationDetents([.height(400)])
+                .presentationDragIndicator(.visible)
             }
+            .sensoryFeedback(.selection, trigger: pendingFirmware?.id)
+            .sensoryFeedback(.impact(weight: .medium), trigger: installTaps)
         }
     }
 
-    private enum BundledFirmware {
+    private func offer(_ firmware: PendingFirmware) {
+        pendingFirmware = firmware
+    }
+
+    private struct BundledFirmware {
+        var data: Data
+        var version: String?
+
         /// Copied into the app by the Xcode build, from pio's firmware.bin.
-        static var image: Data? {
+        static let current: BundledFirmware? = {
             guard let url = Bundle.main.url(forResource: "firmware", withExtension: "bin"),
                   let data = try? Data(contentsOf: url),
                   (try? FirmwareUpdate.validate(data)) != nil
             else { return nil }
-            return data
-        }
+            return BundledFirmware(data: data, version: FirmwareUpdate.taggedVersion(data))
+        }()
     }
 
     private var firmwareFileTypes: [UTType] {
@@ -181,17 +207,8 @@ struct SensorView: View {
                 link.failFirmwareUpdate(String(localized: "Could not read the firmware file."))
                 return
             }
-            pendingFirmware = PendingFirmware(name: url.lastPathComponent, data: data)
+            pendingFirmware = PendingFirmware(name: url.lastPathComponent, data: data, version: FirmwareUpdate.taggedVersion(data))
         }
-    }
-
-    private func installMessage(_ pending: PendingFirmware) -> String {
-        let size = ByteCountFormatter.string(fromByteCount: Int64(pending.data.count), countStyle: .file)
-        return String(
-            format: String(localized: "%@ (%@). The Cardputer reboots when the transfer finishes. Keep it powered and nearby."),
-            pending.name,
-            size
-        )
     }
 
     @ViewBuilder private func firmwareStatus(_ update: FirmwareUpdateProgress) -> some View {
@@ -271,20 +288,32 @@ struct SensorView: View {
             }
 
         case .connecting(let name):
-            HStack {
+            HStack(spacing: 12) {
                 Label(name, systemImage: "antenna.radiowaves.left.and.right")
                 Spacer()
                 ProgressView()
-            }
-            Button("Cancel", role: .cancel) {
-                link.disconnect()
+                Button("Cancel", systemImage: "xmark.circle.fill", role: .cancel) {
+                    link.disconnect()
+                }
+                .labelStyle(.iconOnly)
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .buttonStyle(.borderless)
             }
 
         case .connected(let name):
-            Label(name, systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-            Button("Disconnect", role: .destructive) {
-                link.disconnect()
+            HStack(spacing: 12) {
+                Label(name, systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Spacer()
+                Button("Disconnect", systemImage: "xmark.circle.fill", role: .destructive) {
+                    link.disconnect()
+                }
+                .labelStyle(.iconOnly)
+                .font(.title2)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.red)
+                .buttonStyle(.borderless)
             }
 
         case .demo:
@@ -299,5 +328,79 @@ struct SensorView: View {
         case .unauthorized: "Spectra is not allowed to use Bluetooth."
         case .unsupported: "This device has no Bluetooth Low Energy."
         }
+    }
+}
+
+/// Asks before sending an image: which version replaces which, how big it
+/// is, and that the Cardputer has to stay on and near.
+private struct FirmwareInstallSheet: View {
+    var pending: SensorView.PendingFirmware
+    var current: String?
+    var install: () -> Void
+    var cancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 52))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(Color.accentColor)
+                .padding(.top, 8)
+
+            VStack(spacing: 6) {
+                Text("Install this firmware?")
+                    .font(.title3.weight(.semibold))
+                versions
+                Text(details)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            .multilineTextAlignment(.center)
+
+            Label("The Cardputer reboots when the transfer finishes. Keep it powered and nearby.", systemImage: "bolt.horizontal.circle")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 12))
+
+            VStack(spacing: 10) {
+                Button(action: install) {
+                    Text("Install firmware")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+
+                Button("Cancel", role: .cancel, action: cancel)
+                    .buttonStyle(.borderless)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 12)
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder private var versions: some View {
+        if let new = pending.version {
+            HStack(spacing: 8) {
+                if let current, current != new {
+                    Text(current).foregroundStyle(.secondary)
+                    Image(systemName: "arrow.right")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                Text(new).foregroundStyle(Color.accentColor)
+            }
+            .font(.system(.title2, design: .rounded, weight: .bold).monospacedDigit())
+        }
+    }
+
+    private var details: String {
+        let size = ByteCountFormatter.string(fromByteCount: Int64(pending.data.count), countStyle: .file)
+        return "\(pending.name) · \(size)"
     }
 }

@@ -225,6 +225,7 @@ struct BLEView: View {
 /// sensor status on Networks. Tapping starts or stops the scan.
 struct BLEStatusBar: View {
     @Environment(BLEScanner.self) private var scanner
+    @State private var taps = 0
 
     var body: some View {
         Button(action: toggle) {
@@ -244,10 +245,12 @@ struct BLEStatusBar: View {
             .frame(maxWidth: 168, alignment: .leading)
         }
         .disabled(unavailable)
+        .sensoryFeedback(.impact(weight: .light), trigger: taps)
         .accessibilityLabel("\(title), \(detail)")
     }
 
     private func toggle() {
+        taps += 1
         if scanner.isScanning {
             scanner.stop()
         } else if !unavailable {

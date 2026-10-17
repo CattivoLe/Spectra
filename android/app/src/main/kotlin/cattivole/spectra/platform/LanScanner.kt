@@ -24,6 +24,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -37,6 +38,7 @@ import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
@@ -57,10 +59,19 @@ class LanScanner(context: Context) {
         private set
     var widePrefix: Boolean = false
         private set
+    /** 0..1 through the sweep, for the progress bar. */
+    var fraction: Float = 0f
+        private set
+    var lastScanDate: Long? = null
+        private set
+    /** The last attempt found no Wi-Fi or Ethernet to walk. */
+    var noNetwork: Boolean = false
+        private set
 
     private val app = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var job: Job? = null
+    private var portJob: Job? = null
     private val listeners = mutableListOf<() -> Unit>()
     private val known = linkedMapOf<String, LanDevice>()
 
@@ -71,9 +82,13 @@ class LanScanner(context: Context) {
 
     fun scan() {
         if (scanning) return
+        portJob?.cancel()
+        known.values.forEach { it.portScanFraction = null }
         job = scope.launch {
             scanning = true
             widePrefix = false
+            noNetwork = false
+            fraction = 0.02f
             describedHosts.clear()
             progress = "Reading the network"
             publish()
@@ -81,12 +96,14 @@ class LanScanner(context: Context) {
             subnet = info
             if (info == null) {
                 progress = "Join a Wi-Fi network to scan it"
+                noNetwork = true
                 scanning = false
                 publish()
                 return@launch
             }
             val hosts = hostAddresses(info)
             progress = "Looking for ${hosts.size} addresses"
+            fraction = 0.05f
             publish()
             val lock = multicastLock()
             try {
@@ -104,11 +121,18 @@ class LanScanner(context: Context) {
                                 announced.keys + info.localIp
                             ).distinct()
                         progress = "Checking ${alive.size} hosts"
+                        fraction = 0.6f
                         publishOnMain()
+                        var checked = 0
                         val profiles = alive.map { ip ->
                             async {
                                 val ports = scanPorts(ip)
                                 val profile = identify(ip, ports)
+                                withContext(Dispatchers.Main.immediate) {
+                                    checked += 1
+                                    fraction = 0.6f + 0.4f * checked / alive.size
+                                    publish()
+                                }
                                 Triple(ip, ports, profile)
                             }
                         }.awaitAll()
@@ -117,6 +141,7 @@ class LanScanner(context: Context) {
                 }
                 apply(info, found)
                 progress = "${devices.size} devices"
+                lastScanDate = System.currentTimeMillis()
             } finally {
                 lock?.release()
                 scanning = false
@@ -129,6 +154,62 @@ class LanScanner(context: Context) {
         job?.cancel()
         scanning = false
         publish()
+    }
+
+    fun clear() {
+        stop()
+        portJob?.cancel()
+        known.clear()
+        devices = emptyList()
+        subnet = null
+        lastScanDate = null
+        progress = ""
+        publish()
+    }
+
+    /**
+     * Ports of one host: the common list, or every TCP port from 1 to 65535.
+     * Banners and Windows names are read again from what turns up.
+     */
+    fun scanHostPorts(ip: String, all: Boolean = false) {
+        val device = known[ip] ?: return
+        if (scanning || device.portScanFraction != null) return
+        portJob?.cancel()
+        portJob = scope.launch {
+            device.portScanFraction = 0f
+            publish()
+            try {
+                val candidates = if (all) (1..65535).map { it to DiscoveredPort.serviceName(it) } else DiscoveredPort.commonPorts
+                val gate = Semaphore(if (all) 384 else 24)
+                val done = AtomicInteger()
+                val ticker = launch {
+                    while (true) {
+                        delay(250)
+                        device.portScanFraction = done.get().toFloat() / candidates.size
+                        publish()
+                    }
+                }
+                val found = withContext(Dispatchers.IO) {
+                    coroutineScope {
+                        candidates.map { (port, name) ->
+                            async {
+                                val open = gate.withPermit { probePort(ip, port, if (all) 350 else 400) }
+                                done.incrementAndGet()
+                                if (open) DiscoveredPort(port, name) else null
+                            }
+                        }.awaitAll().filterNotNull()
+                    }
+                }
+                ticker.cancel()
+                val profile = withContext(Dispatchers.IO) { identify(ip, found) }
+                device.openPorts = found
+                device.portsScanned = true
+                device.profile = profile.filled(device.profile)
+            } finally {
+                device.portScanFraction = null
+                publish()
+            }
+        }
     }
 
     private suspend fun publishOnMain() {
@@ -162,13 +243,17 @@ class LanScanner(context: Context) {
                 isGateway = ip == info.gateway,
                 isLocalDevice = ip == info.localIp,
                 profile = if (previous != null) mergedProfile.filled(previous.profile) else mergedProfile,
+                firstSeen = previous?.firstSeen ?: System.currentTimeMillis(),
+                lastSeen = System.currentTimeMillis(),
             )
             device.preservePinnedName(previous)
             next[ip] = device
         }
         known.clear()
         known.putAll(next)
-        devices = next.values.sortedWith(compareBy<LanDevice> { !it.isGateway }.thenBy { it.ipAddress })
+        devices = next.values.sortedWith(
+            compareBy<LanDevice> { !it.isLocalDevice }.thenBy { !it.isGateway }.thenBy { ipv4(it.ipAddress) ?: 0L },
+        )
     }
 
     private fun currentSubnet(): SubnetInfo? {
@@ -211,10 +296,18 @@ class LanScanner(context: Context) {
 
     private suspend fun poke(hosts: List<String>): Map<String, Boolean> = coroutineScope {
         val gate = Semaphore(64)
+        var done = 0
         hosts.map { ip ->
             async(Dispatchers.IO) {
                 gate.withPermit {
                     val open = probePort(ip, 80, 120) || probePort(ip, 443, 120) || probePort(ip, 445, 80)
+                    withContext(Dispatchers.Main.immediate) {
+                        done += 1
+                        if (done % 8 == 0 || done == hosts.size) {
+                            fraction = 0.05f + 0.55f * done / hosts.size
+                            publish()
+                        }
+                    }
                     if (open) ip to true else null
                 }
             }

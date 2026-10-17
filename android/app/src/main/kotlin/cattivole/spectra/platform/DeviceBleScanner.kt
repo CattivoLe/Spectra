@@ -1,6 +1,7 @@
 package cattivole.spectra.platform
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothClass
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
@@ -56,9 +57,25 @@ class DeviceBleScanner(
     private val ticker = object : Runnable {
         override fun run() {
             now = System.currentTimeMillis()
-            publish()
+            if (onTab) publish()
             clock?.postDelayed(this, 1000)
         }
+    }
+
+    /** Busy airwaves deliver hundreds of packets a second; the list redraws a few times a second. */
+    private var publishPending = false
+    private val flush = Runnable {
+        publishPending = false
+        devices = rows.toMap()
+        now = System.currentTimeMillis()
+        publish()
+    }
+
+    private fun publishSoon() {
+        if (publishPending) return
+        publishPending = true
+        ensureClock()
+        clock?.postDelayed(flush, 250)
     }
 
     fun observe(listener: () -> Unit): () -> Unit {
@@ -72,6 +89,7 @@ class DeviceBleScanner(
 
     fun start() {
         pausedByUser = false
+        onTab = true
         ensureClock()
         begin()
     }
@@ -84,9 +102,50 @@ class DeviceBleScanner(
         publish()
     }
 
+    /** The Bluetooth tab is showing. A scan the user stopped stays stopped. */
     fun resumeUnlessPaused() {
-        if (!pausedByUser) start()
+        onTab = true
+        if (!pausedByUser) {
+            start()
+        } else {
+            ensureClock()
+            if (state is State.Unavailable) state = availability()?.let { State.Unavailable(it) } ?: State.Idle
+            publish()
+        }
     }
+
+    /**
+     * The Bluetooth tab went away. Opening a device stays inside the tab, so
+     * a running scan keeps running in the detail and Stop stays stopped.
+     */
+    fun leave() {
+        onTab = false
+        link.noteDeviceScan(false)
+        if (state is State.Scanning) state = State.Idle
+        stopClassic()
+        publish()
+    }
+
+    /** Bluetooth was switched on or off, or a permission changed. */
+    fun availabilityChanged() {
+        val missing = availability()
+        when {
+            missing != null -> {
+                link.noteDeviceScan(false)
+                stopClassic()
+                state = State.Unavailable(missing)
+            }
+            onTab && !pausedByUser -> {
+                begin()
+                return
+            }
+            state is State.Unavailable -> state = State.Idle
+        }
+        publish()
+    }
+
+    val isScanning: Boolean get() = state is State.Scanning
+    val nearbyCount: Int get() = devices.values.count { it.isNearby(now) }
 
     fun clear() {
         rows.clear()
@@ -105,26 +164,40 @@ class DeviceBleScanner(
         publish()
     }
 
+    /** The app went to the background. The scan comes back with it if it was running. */
     fun suspend() {
+        val wasScanning = state is State.Scanning
         link.noteDeviceScan(false)
-        if (state is State.Scanning) state = State.Idle
+        if (wasScanning) state = State.Idle
+        stopClassic()
+        resumeOnForeground = wasScanning
         publish()
     }
 
     fun resumeIfWanted() {
-        if (!pausedByUser && state !is State.Unavailable) begin()
+        if (!resumeOnForeground || pausedByUser || !onTab) return
+        resumeOnForeground = false
+        begin()
+    }
+
+    private var resumeOnForeground = false
+    private var onTab = false
+
+    private fun availability(): Availability? = when {
+        adapter == null -> Availability.UNSUPPORTED
+        !Permissions.canScanBluetooth(app) -> Availability.UNAUTHORIZED
+        adapter.isEnabled != true -> Availability.POWERED_OFF
+        else -> null
     }
 
     private fun begin() {
-        when {
-            adapter == null -> state = State.Unavailable(Availability.UNSUPPORTED)
-            !Permissions.canScanBluetooth(app) -> state = State.Unavailable(Availability.UNAUTHORIZED)
-            adapter.isEnabled != true -> state = State.Unavailable(Availability.POWERED_OFF)
-            else -> {
-                state = State.Scanning
-                link.noteDeviceScan(true)
-                if (classicInquiry) startClassic()
-            }
+        val missing = availability()
+        if (missing != null) {
+            state = State.Unavailable(missing)
+        } else {
+            state = State.Scanning
+            link.noteDeviceScan(true)
+            if (classicInquiry) startClassic()
         }
         publish()
     }
@@ -139,9 +212,9 @@ class DeviceBleScanner(
             BleDevice(address, kind, result.rssi, seen, BleDevice.Transport.LE)
         }
         val name = result.scanRecord?.deviceName ?: result.device.name
-        device.absorb(BleAdvertisement.parse(result.scanRecord.toFields()), name, result.rssi, seen)
-        devices = rows.toMap()
-        publish()
+        val fields = result.scanRecord.toFields().copy(isConnectable = result.isConnectable)
+        device.absorb(BleAdvertisement.parse(fields), name, result.rssi, seen)
+        publishSoon()
     }
 
     private fun ScanRecord?.toFields(): BleFields {
@@ -184,6 +257,16 @@ class DeviceBleScanner(
         if (classicReceiver != null || adapter == null) return
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == BluetoothAdapter.ACTION_DISCOVERY_FINISHED) {
+                    // An inquiry lasts about 12 seconds. Keep it going while the tab scans.
+                    if (classicInquiry && state is State.Scanning) {
+                        try {
+                            adapter?.startDiscovery()
+                        } catch (_: SecurityException) {
+                        }
+                    }
+                    return
+                }
                 if (intent?.action != BluetoothDevice.ACTION_FOUND) return
                 val device = if (Build.VERSION.SDK_INT >= 33) {
                     intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
@@ -199,12 +282,13 @@ class DeviceBleScanner(
                     BleDevice(address, "Classic", rssi, seen, BleDevice.Transport.CLASSIC)
                 }
                 row.transportNote(device.name, klass, rssi, seen)
-                devices = rows.toMap()
-                publish()
+                publishSoon()
             }
         }
         classicReceiver = receiver
-        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
+        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND).apply {
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        }
         if (Build.VERSION.SDK_INT >= 33) {
             app.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -251,6 +335,7 @@ class DeviceBleScanner(
 
     fun shutdown() {
         clock?.removeCallbacks(ticker)
+        clock?.removeCallbacks(flush)
         stopClassic()
         link.noteDeviceScan(false)
     }

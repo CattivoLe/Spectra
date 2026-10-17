@@ -24,6 +24,7 @@ import cattivole.spectra.core.SensorProtocol
 import cattivole.spectra.core.ServiceAdvertisement
 import cattivole.spectra.core.UPnPIdentity
 import cattivole.spectra.core.WifiClient
+import cattivole.spectra.core.WindowsHost
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -331,6 +332,42 @@ class CoreTest {
         assertEquals(0xFE, payload[0].toInt() and 0xFF)
         assertEquals(0x53, payload[1].toInt() and 0xFF)
         assertEquals(0L, LanIdentity.smbStatus(payload))
+    }
+
+    @Test
+    fun ntlmPrefersTheDnsNameOverATruncatedNetbiosName() {
+        fun av(id: Int, text: String): ByteArray {
+            val value = text.toByteArray(Charsets.UTF_16LE)
+            return byteArrayOf(id.toByte(), 0, value.size.toByte(), 0) + value
+        }
+        val info = av(1, "ALEXANDERS-MACB") + av(2, "WORKGROUP") + av(3, "Alexanders-MacBook-Pro.local") + byteArrayOf(0, 0, 0, 0)
+        val header = "NTLMSSP\u0000".encodeToByteArray() +
+            byteArrayOf(2, 0, 0, 0) +
+            byteArrayOf(0, 0, 0, 0, 48, 0, 0, 0) +
+            ByteArray(4 + 8 + 8) +
+            byteArrayOf(info.size.toByte(), 0, info.size.toByte(), 0) +
+            byteArrayOf(48, 0, 0, 0)
+        val names = LanIdentity.parseNtlmChallenge(byteArrayOf(0xFE.toByte(), 0x53) + header + info)
+        assertEquals("Alexanders-MacBook-Pro", names?.computer)
+        assertEquals("WORKGROUP", names?.domain)
+        assertEquals("OFFICE-PC", LanIdentity.preferredComputerName("OFFICE-PC", "office-pc"))
+    }
+
+    @Test
+    fun aMacWithFileSharingIsRecognisedFromItsSmbName() {
+        val mac = LanDevice(
+            ipAddress = "192.168.1.30",
+            profile = LanProfile(windows = WindowsHost("Alexanders-MacBook-Pro", "WORKGROUP")),
+        )
+        assertEquals("Apple", mac.identity.manufacturer)
+        assertEquals("macOS", mac.identity.operatingSystem)
+        assertEquals("MacBook", mac.identity.model)
+
+        val pro = HostIdentity.recognize(
+            names = listOf("Office"),
+            services = listOf(ServiceAdvertisement("_device-info._tcp", "Office", "MacBookPro18,3")),
+        )
+        assertEquals("MacBook Pro", pro.model)
     }
 }
 

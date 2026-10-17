@@ -105,6 +105,9 @@ struct NetworksView: View {
                     ContentUnavailableView.search(text: search)
                 }
             }
+            .sensoryFeedback(.warning, trigger: store.deauthEvents.filter { $0.severity == .critical }.count) { old, new in
+                new > old
+            }
             .searchable(text: $search, prompt: Text("Name or BSSID"))
             .refreshable { link.scanNow() }
             .navigationTitle("Wi‑Fi")
@@ -116,18 +119,18 @@ struct NetworksView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    SensorBar(open: { showChannels = true })
+                    SensorBar(openSensor: openSensor)
                 }
                 if #available(iOS 26, *) {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 }
-                if store.lastScanFinished != nil || store.isScanning {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        ScanTimer()
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Channels", systemImage: "chart.bar.xaxis") {
+                        showChannels = true
                     }
-                    if #available(iOS 26, *) {
-                        ToolbarSpacer(.fixed, placement: .topBarTrailing)
-                    }
+                }
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save", systemImage: "square.and.arrow.down") {
@@ -162,15 +165,19 @@ struct NetworksView: View {
     }
 }
 
-/// Sensor name and status, in its own glass capsule. Tapping opens the channel chart.
+/// Sensor name, battery and time since the last sweep, in its own glass
+/// capsule, like the LAN and Bluetooth status. Tapping scans, or opens the
+/// Sensor tab when there is nothing to scan with.
 struct SensorBar: View {
-    var open: () -> Void
+    var openSensor: () -> Void
 
     @Environment(NetworkStore.self) private var store
     @Environment(SensorLink.self) private var link
+    @State private var scanStarted: Date?
+    @State private var taps = 0
 
     var body: some View {
-        Button(action: open) {
+        Button(action: tap) {
             HStack(spacing: 6) {
                 Image(systemName: symbol)
                     .symbolEffect(.variableColor.iterative, isActive: store.isScanning)
@@ -178,15 +185,32 @@ struct SensorBar: View {
                     Text(title)
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
-                    Text(detail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(detail(at: context.date))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
             .frame(maxWidth: 168, alignment: .leading)
         }
-        .accessibilityLabel("\(title), \(detail)")
+        .sensoryFeedback(.impact(weight: .light), trigger: taps)
+        .accessibilityLabel(title)
+        .accessibilityValue(spokenDetail)
+        .accessibilityHint(link.isConnected ? Text("Scans now") : Text("Opens the Sensor tab"))
+        .onChange(of: store.isScanning, initial: true) { _, scanning in
+            scanStarted = scanning ? .now : nil
+        }
+    }
+
+    private func tap() {
+        taps += 1
+        if link.isConnected {
+            link.scanNow()
+        } else {
+            openSensor()
+        }
     }
 
     private var symbol: String {
@@ -207,49 +231,39 @@ struct SensorBar: View {
         }
     }
 
-    private var detail: String {
-        var parts: [String] = []
-        if store.isScanning { parts.append(String(localized: "Scanning")) }
-        if let level = link.batteryLevel {
-            parts.append(link.isCharging == true ? String(localized: "\(level)% charging") : "\(level)%")
-        }
-        if !parts.isEmpty { return parts.joined(separator: " · ") }
-        switch link.state {
-        case .connected, .demo: return String(localized: "Connected")
-        case .connecting: return String(localized: "Connecting…")
-        case .searching: return String(localized: "Looking for a Cardputer")
-        default: return String(localized: "Tap to connect")
-        }
+    private var battery: String? {
+        guard let level = link.batteryLevel else { return nil }
+        return link.isCharging == true ? String(localized: "\(level)% charging") : "\(level)%"
     }
-}
 
-/// Time since the last finished scan, or through the one in progress.
-/// Its own glass capsule. Tapping starts a scan.
-struct ScanTimer: View {
-    @Environment(NetworkStore.self) private var store
-    @Environment(SensorLink.self) private var link
-    @State private var scanStarted: Date?
-
-    var body: some View {
-        Button(action: link.scanNow) {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let anchor = store.isScanning ? (scanStarted ?? context.date) : store.lastScanFinished
-                if let anchor {
-                    Label(Self.clock(context.date.timeIntervalSince(anchor)), systemImage: "timer")
-                        .font(.caption.monospacedDigit())
-                        .labelStyle(.titleAndIcon)
-                } else {
-                    Label("Scan", systemImage: "timer")
-                        .font(.caption.monospacedDigit())
-                        .labelStyle(.titleAndIcon)
-                }
+    /// Battery, then the sweep clock: time through a running scan, or since the last one.
+    private func detail(at now: Date) -> String {
+        guard link.isConnected else {
+            switch link.state {
+            case .connecting: return String(localized: "Connecting…")
+            case .searching: return String(localized: "Looking for a Cardputer")
+            default: return String(localized: "Tap to connect")
             }
         }
-        .disabled(!link.isConnected)
-        .accessibilityLabel(scanLabel)
-        .onChange(of: store.isScanning, initial: true) { _, scanning in
-            scanStarted = scanning ? .now : nil
+        var parts: [String] = []
+        if store.isScanning {
+            parts.append(String(localized: "Scanning \(Self.clock(now.timeIntervalSince(scanStarted ?? now)))"))
+        } else if let finished = store.lastScanFinished {
+            parts.append("↻ \(Self.clock(now.timeIntervalSince(finished)))")
         }
+        if let battery { parts.append(battery) }
+        return parts.isEmpty ? String(localized: "Tap to scan") : parts.joined(separator: " · ")
+    }
+
+    private var spokenDetail: String {
+        var parts: [String] = []
+        if let anchor = store.isScanning ? scanStarted : store.lastScanFinished {
+            let span = Duration.seconds(max(0, Int(Date.now.timeIntervalSince(anchor))))
+                .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide))
+            parts.append(store.isScanning ? String(localized: "Scanning for \(span)") : String(localized: "Updated \(span) ago"))
+        }
+        if let battery { parts.append(battery) }
+        return parts.joined(separator: ", ")
     }
 
     private static func clock(_ interval: TimeInterval) -> String {
@@ -258,22 +272,6 @@ struct ScanTimer: View {
             return String(format: "%d:%02d", seconds / 60, seconds % 60)
         }
         return String(format: "%dh %02dm", seconds / 3600, (seconds % 3600) / 60)
-    }
-
-    private var scanLabel: String {
-        guard let anchor = store.isScanning ? scanStarted : store.lastScanFinished else {
-            return String(localized: "Scan now")
-        }
-        return Self.spoken(since: anchor, at: .now, scanning: store.isScanning)
-    }
-
-    private static func spoken(since date: Date, at now: Date, scanning: Bool) -> String {
-        let span = Duration.seconds(max(0, Int(now.timeIntervalSince(date))))
-            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide))
-        if scanning {
-            return String(localized: "Scanning for \(span)")
-        }
-        return String(localized: "Updated \(span) ago")
     }
 }
 

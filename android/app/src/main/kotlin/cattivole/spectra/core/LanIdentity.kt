@@ -189,8 +189,19 @@ data class HostIdentity(
                 key.startsWith("watch") -> HostIdentity("Apple", "watchOS", "Apple Watch")
                 key.startsWith("appletv") -> HostIdentity("Apple", "tvOS", "Apple TV")
                 key.startsWith("audioaccessory") -> HostIdentity("Apple", "audioOS", "HomePod")
-                else -> HostIdentity("Apple", "macOS", appleModels[id] ?: "Mac")
+                else -> HostIdentity("Apple", "macOS", appleModels[id] ?: macFamily(key))
             }
+        }
+
+        /** Intel-era ids name the family; Apple silicon Macs are all "MacNN,N". */
+        private fun macFamily(key: String): String = when {
+            key.startsWith("macbookpro") -> "MacBook Pro"
+            key.startsWith("macbookair") -> "MacBook Air"
+            key.startsWith("macbook") -> "MacBook"
+            key.startsWith("macmini") -> "Mac mini"
+            key.startsWith("macpro") -> "Mac Pro"
+            key.startsWith("imac") -> "iMac"
+            else -> "Mac"
         }
 
         private fun namedIdentity(text: String): HostIdentity? {
@@ -508,8 +519,10 @@ object LanIdentity {
         val infoOffset = data.u32le(start + 44).toInt()
         val infoStart = start + infoOffset
         if (infoLength <= 0 || infoStart < 0 || infoStart + infoLength > data.size) return null
-        var computer: String? = null
-        var domain: String? = null
+        var netbiosComputer: String? = null
+        var dnsComputer: String? = null
+        var netbiosDomain: String? = null
+        var dnsDomain: String? = null
         var cursor = infoStart
         val end = infoStart + infoLength
         while (cursor + 4 <= end) {
@@ -519,12 +532,29 @@ object LanIdentity {
             if (cursor + length > end) break
             if (id == 0) break
             val value = utf16le(data.copyOfRange(cursor, cursor + length))
-            if ((id == 1 || id == 3) && computer == null) computer = value
-            if ((id == 2 || id == 4) && domain == null) domain = value
+            when (id) {
+                1 -> netbiosComputer = netbiosComputer ?: value
+                2 -> netbiosDomain = netbiosDomain ?: value
+                3 -> dnsComputer = dnsComputer ?: value
+                4 -> dnsDomain = dnsDomain ?: value
+            }
             cursor += length
         }
+        val computer = preferredComputerName(netbiosComputer, dnsComputer)
+        val domain = netbiosDomain ?: dnsDomain
         if (computer == null && domain == null) return null
         return NtlmNames(computer, domain)
+    }
+
+    /**
+     * NetBIOS cuts a name to 15 capitals: "ALEXANDERS-MACB". The DNS name a
+     * Mac or a Windows PC also sends ("Alexanders-MacBook-Pro.local") keeps
+     * the words that identify it, so its host part wins when it says more.
+     */
+    fun preferredComputerName(netbios: String?, dns: String?): String? {
+        val host = dns?.substringBefore('.')?.let { cleanedText(it) } ?: return netbios
+        if (netbios == null) return host
+        return if (host.length > netbios.length) host else netbios
     }
 
     fun smbStatus(response: ByteArray): Long? {

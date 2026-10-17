@@ -267,6 +267,79 @@ nonisolated enum LANIdentity {
         return (clip(message.headers["server"]), clip(message.headers["public"]))
     }
 
+    // MARK: Reverse DNS
+
+    /// A PTR question for `ip`: "d.c.b.a.in-addr.arpa". The same packet asks
+    /// a router's DNS or, sent to port 5353, the host's own mDNS responder.
+    static func ptrQuery(for ip: String, id: UInt16) -> Data? {
+        let octets = ip.split(separator: ".")
+        guard octets.count == 4, octets.allSatisfy({ UInt8($0) != nil }) else { return nil }
+        var data = Data([UInt8(id >> 8), UInt8(id & 0xFF), 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+        for label in octets.reversed().map(String.init) + ["in-addr", "arpa"] {
+            data.append(UInt8(label.utf8.count))
+            data.append(contentsOf: label.utf8)
+        }
+        data.append(contentsOf: [0x00, 0x00, 0x0C, 0x00, 0x01])
+        return data
+    }
+
+    /// The name in the first PTR answer, without the trailing dot.
+    static func parsePTR(_ data: Data, id: UInt16? = nil) -> String? {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 12, bytes[2] & 0x80 != 0, bytes[3] & 0x0F == 0 else { return nil }
+        if let id, (UInt16(bytes[0]) << 8 | UInt16(bytes[1])) != id { return nil }
+        let questions = Int(bytes[4]) << 8 | Int(bytes[5])
+        let answers = Int(bytes[6]) << 8 | Int(bytes[7])
+        var index = 12
+        for _ in 0..<questions {
+            guard let next = skipName(bytes, at: index) else { return nil }
+            index = next + 4
+        }
+        for _ in 0..<answers {
+            guard let next = skipName(bytes, at: index), next + 10 <= bytes.count else { return nil }
+            let type = Int(bytes[next]) << 8 | Int(bytes[next + 1])
+            let length = Int(bytes[next + 8]) << 8 | Int(bytes[next + 9])
+            let rdata = next + 10
+            guard rdata + length <= bytes.count else { return nil }
+            if type == 12, let name = readName(bytes, at: rdata), !name.isEmpty {
+                return name
+            }
+            index = rdata + length
+        }
+        return nil
+    }
+
+    private static func skipName(_ bytes: [UInt8], at start: Int) -> Int? {
+        var index = start
+        while index < bytes.count {
+            let length = Int(bytes[index])
+            if length == 0 { return index + 1 }
+            if length & 0xC0 == 0xC0 { return index + 2 <= bytes.count ? index + 2 : nil }
+            index += 1 + length
+        }
+        return nil
+    }
+
+    private static func readName(_ bytes: [UInt8], at start: Int) -> String? {
+        var labels: [String] = []
+        var index = start
+        var jumps = 0
+        while index < bytes.count {
+            let length = Int(bytes[index])
+            if length == 0 { break }
+            if length & 0xC0 == 0xC0 {
+                guard index + 1 < bytes.count, jumps < 16 else { return nil }
+                index = (length & 0x3F) << 8 | Int(bytes[index + 1])
+                jumps += 1
+                continue
+            }
+            guard index + 1 + length <= bytes.count else { return nil }
+            labels.append(String(decoding: bytes[(index + 1)..<(index + 1 + length)], as: UTF8.self))
+            index += 1 + length
+        }
+        return labels.isEmpty ? nil : labels.joined(separator: ".")
+    }
+
     static func netbiosNodeStatusRequest() -> Data {
         var packet = Data([
             0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x43, 0x4B,
@@ -343,8 +416,10 @@ nonisolated enum LANIdentity {
             | UInt32(bytes[start + 46]) << 16 | UInt32(bytes[start + 47]) << 24)
         let infoStart = start + infoOffset
         guard infoLength > 0, infoStart >= 0, infoStart + infoLength <= bytes.count else { return nil }
-        var computer: String?
-        var domain: String?
+        var netbiosComputer: String?
+        var dnsComputer: String?
+        var netbiosDomain: String?
+        var dnsDomain: String?
         var cursor = infoStart
         let end = infoStart + infoLength
         while cursor + 4 <= end {
@@ -354,12 +429,31 @@ nonisolated enum LANIdentity {
             guard cursor + length <= end else { break }
             if id == 0 { break }
             let value = utf16LE(bytes[cursor..<(cursor + length)])
-            if id == 1 || id == 3, computer == nil { computer = value }
-            if id == 2 || id == 4, domain == nil { domain = value }
+            switch id {
+            case 1: netbiosComputer = netbiosComputer ?? value
+            case 2: netbiosDomain = netbiosDomain ?? value
+            case 3: dnsComputer = dnsComputer ?? value
+            case 4: dnsDomain = dnsDomain ?? value
+            default: break
+            }
             cursor += length
         }
+        let computer = preferredComputerName(netbios: netbiosComputer, dns: dnsComputer)
+        let domain = netbiosDomain ?? dnsDomain
         guard computer != nil || domain != nil else { return nil }
         return (computer, domain)
+    }
+
+    /// NetBIOS cuts a name to 15 capitals: "ALEXANDERS-MACB". The DNS name a
+    /// Mac or a Windows PC also sends ("Alexanders-MacBook-Pro.local") keeps
+    /// the words that identify it, so its host part wins when it says more.
+    static func preferredComputerName(netbios: String?, dns: String?) -> String? {
+        let host = dns.flatMap { name in
+            name.split(separator: ".", maxSplits: 1).first.map(String.init)
+        }.flatMap(cleanedText)
+        guard let host else { return netbios }
+        guard let netbios else { return host }
+        return host.count > netbios.count ? host : netbios
     }
 
     static func smbStatus(_ response: Data) -> UInt32? {
@@ -770,7 +864,18 @@ nonisolated struct HostIdentity: Equatable, Sendable {
         if key.hasPrefix("audioaccessory") {
             return HostIdentity(manufacturer: "Apple", operatingSystem: "audioOS", model: "HomePod")
         }
-        return HostIdentity(manufacturer: "Apple", operatingSystem: "macOS", model: appleModels[id] ?? "Mac")
+        return HostIdentity(manufacturer: "Apple", operatingSystem: "macOS", model: appleModels[id] ?? macFamily(key))
+    }
+
+    /// Intel-era ids name the family; Apple silicon Macs are all "MacNN,N".
+    private static func macFamily(_ key: String) -> String {
+        if key.hasPrefix("macbookpro") { return "MacBook Pro" }
+        if key.hasPrefix("macbookair") { return "MacBook Air" }
+        if key.hasPrefix("macbook") { return "MacBook" }
+        if key.hasPrefix("macmini") { return "Mac mini" }
+        if key.hasPrefix("macpro") { return "Mac Pro" }
+        if key.hasPrefix("imac") { return "iMac" }
+        return "Mac"
     }
 
     private static func namedIdentity(in text: String) -> HostIdentity? {

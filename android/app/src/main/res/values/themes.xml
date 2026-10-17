@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Spectra" parent="@android:style/Theme.DeviceDefault.NoActionBar" />
+    <!-- The window shows this colour before Compose draws, so the launch does not flash white in the dark. -->
+    <style name="Theme.Spectra" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFF2F5FA</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>

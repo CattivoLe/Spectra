@@ -347,6 +347,8 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
     private var servicesByIP: [String: [ServiceAdvertisement]] = [:]
     private var ipByEndpoint: [NWEndpoint: String] = [:]
     private var modelByEndpoint: [NWEndpoint: String] = [:]
+    /// Instances no connection could reach, matched to a host by name at the end.
+    private var unresolved: [NWEndpoint: Unresolved] = [:]
     private var completion: (@Sendable (BonjourFindings) -> Void)?
     private var finished = false
 
@@ -401,8 +403,24 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
 
     /// Network.framework has no bare resolve call, so a TCP connection to the
     /// service does it; the address it reaches is the one we want.
+    private struct Unresolved {
+        var name: String
+        var rank: Int
+        var service: String
+        var model: String?
+        var friendly: String?
+    }
+
     private func resolve(_ endpoint: NWEndpoint, name: String, rank: Int, service: String, model: String?, friendly: String?) {
         guard !finished, resolving.insert(endpoint).inserted else { return }
+        let pending = Unresolved(name: name, rank: rank, service: service, model: model, friendly: friendly)
+        // device-info has no listener (its port is 0), so it never connects.
+        // It still carries the model id, like "MacBookPro18,3"; the same
+        // instance name on another service says which host it belongs to.
+        if service.hasPrefix("_device-info.") {
+            unresolved[endpoint] = pending
+            return
+        }
 
         let tcp = NWProtocolTCP.Options()
         tcp.connectionTimeout = 3
@@ -424,6 +442,11 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
                 }
                 connection.cancel()
             case .waiting, .failed:
+                if ipByEndpoint[endpoint] == nil {
+                    var latest = pending
+                    latest.model = modelByEndpoint[endpoint] ?? model
+                    unresolved[endpoint] = latest
+                }
                 connection.cancel()
             default:
                 break
@@ -461,6 +484,7 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
         connections.forEach { $0.cancel() }
         browsers = []
         connections = []
+        attachUnresolved()
 
         let names = namesByIP.mapValues { entries in
             var seen: Set<String> = []
@@ -470,6 +494,20 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
         }
         completion?(BonjourFindings(names: names, services: servicesByIP))
         completion = nil
+    }
+}
+
+private extension BonjourDiscovery {
+    /// Gives each unreachable instance to the one host that advertised the same name elsewhere.
+    func attachUnresolved() {
+        for (endpoint, entry) in unresolved where ipByEndpoint[endpoint] == nil {
+            let owners = servicesByIP.filter { _, ads in
+                ads.contains { $0.name.caseInsensitiveCompare(entry.name) == .orderedSame }
+            }.map(\.key)
+            guard owners.count == 1, let ip = owners.first else { continue }
+            record(entry.name, rank: entry.rank, ip: ip, service: entry.service, model: modelByEndpoint[endpoint] ?? entry.model, friendly: entry.friendly)
+        }
+        unresolved = [:]
     }
 }
 
@@ -772,10 +810,12 @@ final class LANScanner {
         // Phase 6: Hostname resolution.
         state = .scanning(progress: 0.92, phase: String(localized: "Resolving names…"))
 
+        let gateway = info.gateway
         await withTaskGroup(of: (String, String?).self) { group in
             for (ip, device) in newDevices where !device.hostnames.contains(where: { LANDevice.usefulHostname($0, ip: ip) != nil }) {
                 group.addTask { @Sendable in
-                    (ip, resolveHostname(ip))
+                    // The system resolver first, then the router and the host directly.
+                    (ip, resolveHostname(ip) ?? LANProbes.reverseName(ip, gateway: gateway))
                 }
             }
             for await (ip, hostname) in group {

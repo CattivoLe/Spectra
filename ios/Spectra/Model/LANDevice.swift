@@ -151,8 +151,9 @@ final class LANDevice: Identifiable {
 
     var identity: HostIdentity {
         let upnp = profile.upnp
+        // The SMB / NetBIOS name is often all a Mac or PC with file sharing gives away.
         let found = HostIdentity.recognize(
-            names: hostnames,
+            names: hostnames + [profile.windows?.computerName].compactMap { $0 },
             services: services,
             ports: openPorts.map(\.number),
             vendor: manufacturer,
