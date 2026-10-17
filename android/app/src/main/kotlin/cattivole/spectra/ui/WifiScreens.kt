@@ -221,10 +221,11 @@ private fun WifiStatusChips(model: SpectraModel, nav: Navigator) {
         StatusChip(
             icon = Icons.Rounded.SettingsInputAntenna,
             title = sensorHeadline(model),
-            detail = sensorDetail(model),
+            detail = sensorDetail(model, showCharging = false),
             tint = if (link.isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             busy = store.isScanning || link.state is cattivole.spectra.platform.SensorLink.State.Searching ||
                 link.state is cattivole.spectra.platform.SensorLink.State.Connecting,
+            indicator = if (link.isCharging == true && link.batteryLevel != null) Spectra.colors.success else null,
             onClick = nav::sensorTab,
         )
         val anchor = scanStart ?: store.lastScanFinished

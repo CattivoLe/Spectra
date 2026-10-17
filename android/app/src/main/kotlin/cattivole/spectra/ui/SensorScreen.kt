@@ -67,11 +67,11 @@ internal fun sensorHeadline(model: SpectraModel): String = when (val state = mod
 
 internal fun batteryLine(level: Int, charging: Boolean): String = if (charging) tr("%d%%, charging", level) else "$level%"
 
-internal fun sensorDetail(model: SpectraModel): String {
+internal fun sensorDetail(model: SpectraModel, showCharging: Boolean = true): String {
     val link = model.link
     val parts = listOfNotNull(
         if (model.store.isScanning) tr("Scanning") else null,
-        link.batteryLevel?.let { batteryLine(it, link.isCharging == true) },
+        link.batteryLevel?.let { batteryLine(it, showCharging && link.isCharging == true) },
     )
     if (parts.isNotEmpty()) return parts.joinToString(" · ")
     return when (link.state) {

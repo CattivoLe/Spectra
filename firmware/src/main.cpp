@@ -13,6 +13,7 @@
 #include <WiFi.h>
 #include <time.h>
 #include <esp_mac.h>
+#include <esp_ota_ops.h>
 #include <esp_wifi.h>
 #include <algorithm>
 #include <cstring>
@@ -20,7 +21,7 @@
 
 // The phone app finds this tag in a firmware.bin to show which version it
 // carries. The version below points into it, so the linker keeps the tag.
-static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.8.6";
+static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.8.7";
 static constexpr const char* kFirmwareVersion = kFirmwareTag + 11;
 static constexpr uint8_t kProtocolVersion = 6;
 
@@ -223,6 +224,11 @@ static volatile bool otaActive = false;
 static volatile bool otaRebootPending = false;
 static volatile int otaPercent = -1;
 static bool otaCrcOk = false;
+// True only when the CRC routine works and the device runs from an OTA slot
+// with a second slot to write. Flashed over USB it is true; run from a
+// launcher without an OTA layout it is false, so the app does not offer an
+// update that the bootloader would never boot.
+static bool otaUpdatable = false;
 static uint32_t otaExpected = 0;
 static uint32_t otaReceived = 0;
 static uint32_t otaCrcExpected = 0;
@@ -601,7 +607,7 @@ static void updateInfo() {
   snprintf(json, sizeof(json),
            "{\"proto\":%u,\"fw\":\"%s\",\"chip\":\"ESP32-S3\",\"bands\":[\"2.4\"],\"interval\":%u%s%s}",
            kProtocolVersion, kFirmwareVersion, scanIntervalSec,
-           otaCrcOk ? ",\"ota\":true" : "", batJson);
+           otaUpdatable ? ",\"ota\":true" : "", batJson);
   infoChar->setValue(json);
 }
 
@@ -886,6 +892,20 @@ static bool otaCrcSelfCheck() {
   return crc32Update(0, sample, sizeof(sample)) == 0xCBF43926u;
 }
 
+// Whether an update can actually be written and booted. The app must run from
+// an OTA app partition (otherwise the bootloader ignores what we flash) and
+// there must be another slot with room for the image.
+static bool otaAvailable() {
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  if (running == nullptr || running->type != ESP_PARTITION_TYPE_APP ||
+      running->subtype < ESP_PARTITION_SUBTYPE_APP_OTA_0 ||
+      running->subtype > ESP_PARTITION_SUBTYPE_APP_OTA_15) {
+    return false;
+  }
+  const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
+  return next != nullptr && ESP.getFreeSketchSpace() >= 32;
+}
+
 static void putU32(uint8_t *p, uint32_t value) {
   p[0] = value & 0xFF;
   p[1] = (value >> 8) & 0xFF;
@@ -956,7 +976,7 @@ static bool otaTryClaim() {
 static void otaFinish();
 
 static void otaBegin(uint32_t size, uint32_t crc) {
-  if (!otaCrcOk) {
+  if (!otaUpdatable) {
     notifyOta(kOtaFailed, kOtaErrBegin);
     return;
   }
@@ -2191,6 +2211,7 @@ void setup() {
   WiFi.disconnect();
 
   otaCrcOk = otaCrcSelfCheck();
+  otaUpdatable = otaCrcOk && otaAvailable();
   xTaskCreatePinnedToCore(otaTaskMain, "ota", 16384, nullptr, 1, &otaTask, 1);
   setupBle();
   loadStored();

@@ -181,10 +181,18 @@ struct SensorBar: View {
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
                     TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(detail(at: context.date))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        HStack(spacing: 4) {
+                            Text(detail(at: context.date))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            if link.isCharging == true, link.batteryLevel != nil {
+                                Circle()
+                                    .fill(.green)
+                                    .frame(width: 6, height: 6)
+                                    .accessibilityLabel("Charging")
+                            }
+                        }
                     }
                 }
             }
@@ -228,7 +236,8 @@ struct SensorBar: View {
 
     private var battery: String? {
         guard let level = link.batteryLevel else { return nil }
-        return link.isCharging == true ? String(localized: "\(level)% charging") : "\(level)%"
+        // Charging is shown as a small green dot in the row, not spelled out.
+        return "\(level)%"
     }
 
     /// Battery, then the sweep clock: time through a running scan, or since the last one.

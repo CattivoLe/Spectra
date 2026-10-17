@@ -656,6 +656,7 @@ fun StatusChip(
     modifier: Modifier = Modifier,
     tint: Color = MaterialTheme.colorScheme.primary,
     busy: Boolean = false,
+    indicator: Color? = null,
     onClick: (() -> Unit)? = null,
 ) {
     val pulse = rememberInfiniteTransition(label = "pulse")
@@ -682,6 +683,16 @@ fun StatusChip(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(17.dp).graphicsLayer { this.alpha = alpha })
+                if (indicator != null) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(9.dp)
+                            .clip(CircleShape)
+                            .background(indicator)
+                            .border(1.5.dp, MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape),
+                    )
+                }
             }
             Column {
                 Text(title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
