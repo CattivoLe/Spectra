@@ -4,6 +4,7 @@ import SwiftUI
 struct HistoryView: View {
     @Environment(HistoryStore.self) private var history
     @State private var confirmClear = false
+    @State private var collapsed: Set<HistoryEntry.Kind> = []
 
     var body: some View {
         NavigationStack {
@@ -11,23 +12,44 @@ struct HistoryView: View {
                 ForEach(HistoryEntry.Kind.allCases, id: \.self) { kind in
                     let rows = history.entries.filter { $0.kind == kind }
                     if !rows.isEmpty {
-                        Section(kind.title) {
-                            ForEach(rows) { entry in
-                                NavigationLink(value: entry.id) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("\(entry.itemCount) · \(entry.source)")
-                                            .font(.body.weight(.semibold))
-                                        Text(entry.savedAt, style: .relative)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                        let isExpanded = !collapsed.contains(kind)
+                        Section {
+                            if isExpanded {
+                                ForEach(rows) { entry in
+                                    NavigationLink(value: entry.id) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("\(entry.itemCount) · \(entry.source)")
+                                                .font(.body.weight(.semibold))
+                                            Text(entry.savedAt, style: .relative)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
                                     }
-                                }
-                                .swipeActions {
-                                    Button("Delete", role: .destructive) {
-                                        history.delete(entry.id)
+                                    .swipeActions {
+                                        Button("Delete", role: .destructive) {
+                                            history.delete(entry.id)
+                                        }
                                     }
                                 }
                             }
+                        } header: {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    if isExpanded { collapsed.insert(kind) } else { collapsed.remove(kind) }
+                                }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Label(kind.title, systemImage: kind.systemImage)
+                                    Spacer()
+                                    Text("\(rows.count)")
+                                        .foregroundStyle(.secondary)
+                                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }

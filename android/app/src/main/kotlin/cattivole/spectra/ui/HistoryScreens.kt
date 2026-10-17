@@ -3,13 +3,17 @@ package cattivole.spectra.ui
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.GppBad
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Lan
@@ -69,6 +73,7 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     model.generation
     val history = model.history
     var confirmClear by remember { mutableStateOf(false) }
+    var collapsed by remember { mutableStateOf(setOf<String>()) }
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
@@ -103,14 +108,41 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     ) {
         for (kind in listOf("networks", "lan", "bluetooth")) {
             val rows = history.entries.filter { it.kind == kind }
-            cardSection(
-                rows,
-                header = kindTitle(kind),
-                key = { it.id },
-                sectionKey = kind,
-                dividerInset = 70.dp,
-            ) { entry ->
-                HistoryRow(entry, onOpen = { nav.history(entry.id) }, onDelete = { history.delete(entry.id) })
+            if (rows.isEmpty()) continue
+            val expanded = kind !in collapsed
+            item(key = "head-$kind", contentType = "section-header") {
+                SectionHeader(
+                    kindTitle(kind),
+                    modifier = Modifier
+                        .animateItem()
+                        .clickable { collapsed = if (expanded) collapsed + kind else collapsed - kind },
+                    tint = kindTint(kind),
+                    icon = kindIcon(kind),
+                    trailing = {
+                        Text(
+                            "${rows.size}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Icon(
+                            if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    },
+                )
+            }
+            if (expanded) {
+                cardSection(
+                    rows,
+                    header = null,
+                    key = { it.id },
+                    sectionKey = kind,
+                    dividerInset = 70.dp,
+                ) { entry ->
+                    HistoryRow(entry, onOpen = { nav.history(entry.id) }, onDelete = { history.delete(entry.id) })
+                }
             }
         }
         if (history.entries.isNotEmpty()) {

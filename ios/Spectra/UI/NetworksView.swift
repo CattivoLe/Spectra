@@ -143,11 +143,6 @@ struct NetworksView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button("Scan now", systemImage: "arrow.clockwise") {
-                            link.scanNow()
-                        }
-                        .disabled(!link.isConnected)
-                        Divider()
                         Picker("Sort by", selection: $sort) {
                             ForEach(Sort.allCases) { Text($0.label).tag($0) }
                         }

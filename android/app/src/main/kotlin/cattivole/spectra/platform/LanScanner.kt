@@ -256,22 +256,50 @@ class LanScanner(context: Context) {
         )
     }
 
+    private data class SubnetCandidate(val wifi: Boolean, val info: SubnetInfo)
+
+    /**
+     * The Wi-Fi or Ethernet subnet the phone shares with the LAN. A VPN is
+     * skipped: its network often still advertises the Wi-Fi transport, so
+     * `activeNetwork` would hand back the tunnel's own tiny subnet (e.g.
+     * `26.26.26.0/30`) and the real network would never be scanned.
+     */
+    @Suppress("DEPRECATION")
     private fun currentSubnet(): SubnetInfo? {
         val manager = app.getSystemService(ConnectivityManager::class.java) ?: return null
-        val network = manager.activeNetwork ?: return null
-        val caps = manager.getNetworkCapabilities(network) ?: return null
-        val local = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-        if (!local) return null
-        val properties = manager.getLinkProperties(network) ?: return null
-        val address = properties.linkAddresses.firstOrNull { it.address is Inet4Address } ?: return null
-        val gateway = properties.routes.firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }?.gateway?.hostAddress
-        return SubnetInfo(
-            localIp = address.address.hostAddress ?: return null,
-            prefixLength = address.prefixLength,
-            gateway = gateway,
-            interfaceName = properties.interfaceName,
-        )
+        val candidates = buildList {
+            for (network in manager.allNetworks) {
+                val caps = manager.getNetworkCapabilities(network) ?: continue
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
+                val wifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                val ethernet = caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                if (!wifi && !ethernet) continue
+                val properties = manager.getLinkProperties(network) ?: continue
+                val address = properties.linkAddresses.firstOrNull {
+                    val host = it.address
+                    host is Inet4Address && !host.isLoopbackAddress && !host.isLinkLocalAddress
+                } ?: continue
+                val ip = address.address.hostAddress ?: continue
+                val gateway = properties.routes
+                    .firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }
+                    ?.gateway?.hostAddress
+                add(
+                    SubnetCandidate(
+                        wifi,
+                        SubnetInfo(
+                            localIp = ip,
+                            prefixLength = address.prefixLength,
+                            gateway = gateway,
+                            interfaceName = properties.interfaceName,
+                        ),
+                    ),
+                )
+            }
+        }
+        // Prefer Wi-Fi, then an interface that actually has a default gateway.
+        return candidates
+            .sortedWith(compareByDescending<SubnetCandidate> { it.wifi }.thenByDescending { it.info.gateway != null })
+            .firstOrNull()?.info
     }
 
     private fun hostAddresses(info: SubnetInfo): List<String> {

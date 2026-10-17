@@ -19,6 +19,14 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
             case .bluetooth: "Bluetooth"
             }
         }
+
+        var systemImage: String {
+            switch self {
+            case .networks: "wifi"
+            case .lan: "network"
+            case .bluetooth: "wave.3.right"
+            }
+        }
     }
 
     var id = UUID()

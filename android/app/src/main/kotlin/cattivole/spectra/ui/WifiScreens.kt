@@ -21,7 +21,6 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PhoneAndroid
-import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.SettingsInputAntenna
@@ -117,15 +116,6 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(
-                        text = { Text(tr("Scan now")) },
-                        leadingIcon = { Icon(Icons.Rounded.Refresh, null) },
-                        onClick = {
-                            model.link.scanNow()
-                            model.phone.refresh()
-                            menu = false
-                        },
-                    )
                     DropdownMenuItem(
                         text = { Text(tr("Channels")) },
                         leadingIcon = { Icon(Icons.Rounded.WaterfallChart, null) },
