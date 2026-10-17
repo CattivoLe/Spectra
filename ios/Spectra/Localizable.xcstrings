@@ -1,6 +1,76 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Connect and read services" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключиться и прочитать сервисы"
+          }
+        }
+      }
+    },
+    "Connects to the device to list its services and read the values it exposes. Many devices allow only a brief connection." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключается к устройству, показывает его сервисы и читает значения, которые оно отдаёт. Многие устройства разрешают лишь кратковременное подключение."
+          }
+        }
+      }
+    },
+    "Could not connect." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось подключиться."
+          }
+        }
+      }
+    },
+    "Device is no longer in range." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Устройство больше не в зоне действия."
+          }
+        }
+      }
+    },
+    "Reading services…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Чтение сервисов…"
+          }
+        }
+      }
+    },
+    "Services (GATT)" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервисы (GATT)"
+          }
+        }
+      }
+    },
+    "Try again" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Повторить"
+          }
+        }
+      }
+    },
     "—" : {
       "localizations" : {
         "ru" : {

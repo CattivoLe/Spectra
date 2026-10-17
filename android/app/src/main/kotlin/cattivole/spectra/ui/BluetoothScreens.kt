@@ -14,6 +14,7 @@ import androidx.compose.material.icons.rounded.BluetoothDisabled
 import androidx.compose.material.icons.automirrored.rounded.BluetoothSearching
 import androidx.compose.material.icons.rounded.CheckBox
 import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
@@ -25,6 +26,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
+import cattivole.spectra.platform.BleGattClient
 import cattivole.spectra.core.BleAdvertisement
 import cattivole.spectra.core.BleDevice
 import cattivole.spectra.core.BleServiceRef
@@ -253,6 +256,9 @@ fun BleDetail(model: SpectraModel, nav: Navigator, address: String, entryId: Str
         return
     }
     val snapshot = entryId != null
+    DisposableEffect(address, snapshot) {
+        onDispose { if (!snapshot) model.gatt.disconnect() }
+    }
     val now = if (snapshot) device.lastSeen else model.ble.now
     val nearby = device.isNearby(now)
     val quality = SignalQuality.of(device.rssi)
@@ -317,6 +323,32 @@ fun BleDetail(model: SpectraModel, nav: Navigator, address: String, entryId: Str
                 device.deviceClass?.let { add { InfoRow(tr("Class"), tr(it)) } }
             },
         )
+        if (!snapshot && device.isConnectable != false) {
+            val gatt = model.gatt
+            val bound = gatt.deviceAddress == device.address
+            val gstate: BleGattClient.State = if (bound) gatt.state else BleGattClient.State.Idle
+            card(
+                header = tr("Services (GATT)"),
+                key = "gatt",
+                footer = tr("Connects to the device to list its services and read the values it exposes. Many devices allow only a brief connection."),
+                rows = buildList {
+                    add {
+                        when (gstate) {
+                            is BleGattClient.State.Idle ->
+                                ActionRow(tr("Connect and read services"), Icons.AutoMirrored.Rounded.BluetoothSearching, onClick = { gatt.connect(device.address) })
+                            is BleGattClient.State.Connecting -> NoteRow(tr("Connecting…"), warning = false)
+                            is BleGattClient.State.Discovering -> NoteRow(tr("Reading services…"), warning = false)
+                            is BleGattClient.State.Connected ->
+                                ActionRow(tr("Disconnect"), Icons.Rounded.Close, onClick = { gatt.disconnect() }, tint = Spectra.colors.danger)
+                            is BleGattClient.State.Failed -> NoteRow(tr(gstate.message), warning = true)
+                        }
+                    }
+                    if (bound) {
+                        gatt.services.forEach { svc -> add { GattServiceRow(svc) } }
+                    }
+                },
+            )
+        }
         cardSection(device.apple, header = "Apple", key = null, sectionKey = "apple") { message ->
             ListRow(title = appleLabel(message), subtitle = appleDetail(message), subtitleLines = 3)
         }
@@ -362,4 +394,34 @@ private fun ServiceRow(service: BleServiceRef) {
         subtitle = if (service.name != null) service.uuid else null,
         monoSubtitle = true,
     )
+}
+
+@Composable
+private fun GattServiceRow(service: BleGattClient.Service) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Text(service.name ?: service.uuid, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+        if (service.name != null) {
+            Text(service.uuid, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        service.characteristics.forEach { ch ->
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.Top) {
+                Text(ch.uuid, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
+                if (ch.properties.isNotEmpty()) {
+                    Text(ch.properties, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp))
+                }
+            }
+            val value = ch.value
+            if (value != null && value.isNotEmpty()) {
+                Text(gattValue(value), style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/** Hex, plus an ASCII rendering when the bytes look like text. */
+private fun gattValue(bytes: ByteArray): String {
+    val hex = hex(bytes)
+    val printable = bytes.all { it.toInt() in 32..126 }
+    return if (printable) "$hex  “${String(bytes, Charsets.US_ASCII)}”" else hex
 }

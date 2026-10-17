@@ -154,6 +154,10 @@ struct BLEDeviceDetailView: View {
                 }
             }
 
+            if snapshot == nil, device.isConnectable != false {
+                gattSection(device)
+            }
+
             Section("Observed") {
                 InfoRow("First seen") { Text(device.firstSeen, style: .time) }
                 InfoRow("Last seen") { Text(device.lastSeen, style: .relative) }
@@ -162,6 +166,95 @@ struct BLEDeviceDetailView: View {
         }
         .navigationTitle(device.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .onDisappear { scanner.disconnectGATT() }
+    }
+
+    @ViewBuilder
+    private func gattSection(_ device: BLEDevice) -> some View {
+        let bound = scanner.gattDeviceID == device.id
+        Section {
+            switch bound ? scanner.gattState : .idle {
+            case .idle:
+                Button("Connect and read services", systemImage: "antenna.radiowaves.left.and.right") {
+                    scanner.connectGATT(device.id)
+                }
+            case .connecting:
+                Label("Connecting…", systemImage: "antenna.radiowaves.left.and.right")
+                    .foregroundStyle(.secondary)
+            case .discovering:
+                Label("Reading services…", systemImage: "list.bullet.rectangle")
+                    .foregroundStyle(.secondary)
+            case .connected:
+                Button("Disconnect", systemImage: "xmark.circle", role: .destructive) {
+                    scanner.disconnectGATT()
+                }
+            case .failed(let message):
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(message, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .font(.subheadline)
+                    Button("Try again", systemImage: "arrow.clockwise") {
+                        scanner.connectGATT(device.id)
+                    }
+                }
+            }
+
+            if bound {
+                ForEach(scanner.gattServices) { service in
+                    gattServiceRow(service)
+                }
+            }
+        } header: {
+            Text("Services (GATT)")
+        } footer: {
+            Text("Connects to the device to list its services and read the values it exposes. Many devices allow only a brief connection.")
+        }
+    }
+
+    private func gattServiceRow(_ service: GATTService) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(service.name ?? service.uuid)
+                .font(.body.weight(.medium))
+            if service.name != nil {
+                Text(service.uuid)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            ForEach(service.characteristics) { characteristic in
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack {
+                        Text(characteristic.uuid)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                        Spacer(minLength: 8)
+                        if !characteristic.properties.isEmpty {
+                            Text(characteristic.properties)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let value = characteristic.value, !value.isEmpty {
+                        Text(gattValueText(value))
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.leading, 10)
+            }
+        }
+    }
+
+    /// Hex, plus an ASCII rendering when the bytes look like text.
+    private func gattValueText(_ data: Data) -> String {
+        let hex = bleHex(data)
+        let printable = data.allSatisfy { $0 >= 32 && $0 < 127 }
+        if printable, let text = String(data: data, encoding: .ascii), !text.isEmpty {
+            return "\(hex)  “\(text)”"
+        }
+        return hex
     }
 
     private func serviceRow(_ service: BLEServiceRef) -> some View {

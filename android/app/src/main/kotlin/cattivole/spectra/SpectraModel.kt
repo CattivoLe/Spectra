@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import cattivole.spectra.platform.BleGattClient
 import cattivole.spectra.platform.BleRadio
 import cattivole.spectra.platform.DeviceBleScanner
 import cattivole.spectra.platform.LanScanner
@@ -20,6 +21,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     val link = SensorLink(app, store, radio, history)
     val phone = PhoneWifiScanner(app, store)
     val ble = DeviceBleScanner(app, radio, link)
+    val gatt = BleGattClient(app)
     val lan = LanScanner(app)
 
     var generation by mutableIntStateOf(0)
@@ -32,6 +34,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         link.observe(bump)
         phone.observe(bump)
         ble.observe(bump)
+        gatt.observe(bump)
         lan.observe(bump)
         radio.onAdapterChange { ble.availabilityChanged() }
         phone.start()
@@ -58,6 +61,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         phone.stop()
+        gatt.disconnect()
         ble.shutdown()
         lan.stop()
         link.close()

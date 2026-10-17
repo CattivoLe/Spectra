@@ -415,3 +415,11 @@ The image failed its checksum. Transfer it again.	Не сошлась контр
 The sensor rejected the image header.	Сенсор отклонил заголовок образа.
 The sensor rebooted, but the app could not reconnect. It is looking for the Cardputer again.	Сенсор перезагрузился, но приложение не смогло переподключиться. Снова ищу Cardputer.
 Where	Где
+Services (GATT)	Сервисы (GATT)
+Connect and read services	Подключиться и прочитать сервисы
+Reading services…	Чтение сервисов…
+Bluetooth is unavailable.	Bluetooth недоступен.
+Could not start the connection.	Не удалось начать подключение.
+The device refused the connection.	Устройство отклонило подключение.
+Could not read the services.	Не удалось прочитать сервисы.
+Connects to the device to list its services and read the values it exposes. Many devices allow only a brief connection.	Подключается к устройству, показывает его сервисы и читает значения, которые оно отдаёт. Многие устройства разрешают лишь кратковременное подключение.
