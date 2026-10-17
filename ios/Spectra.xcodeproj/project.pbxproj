@@ -339,6 +339,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Spectra;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Spectra uses Bluetooth to connect to your Cardputer and to scan for nearby Bluetooth devices.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Spectra tags a saved scan with where your phone is, so you can tell captures apart on the map.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Spectra scans the local network to find devices, their MAC addresses and open ports.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -377,6 +378,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Spectra;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Spectra uses Bluetooth to connect to your Cardputer and to scan for nearby Bluetooth devices.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Spectra tags a saved scan with where your phone is, so you can tell captures apart on the map.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Spectra scans the local network to find devices, their MAC addresses and open ports.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

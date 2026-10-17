@@ -7,6 +7,7 @@ struct SpectraApp: App {
     @State private var link: SensorLink
     @State private var lanScanner = LANScanner()
     @State private var bleScanner = BLEScanner()
+    @State private var location = LocationService()
 
     init() {
         let store = NetworkStore()
@@ -24,6 +25,13 @@ struct SpectraApp: App {
                 .environment(link)
                 .environment(lanScanner)
                 .environment(bleScanner)
+                .environment(location)
+                .task {
+                    history.locationProvider = { [weak location] in
+                        location?.coordinate.map { ($0.latitude, $0.longitude) }
+                    }
+                    location.start()
+                }
         }
     }
 }

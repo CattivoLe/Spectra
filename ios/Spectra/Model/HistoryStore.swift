@@ -34,6 +34,10 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
     var deauths: [DeauthEvent] = []
     var lan: [SavedLAN] = []
     var bluetooth: [SavedBLE] = []
+    /// Where the phone was when it saved. Absent for sensor captures and for
+    /// saves made without location access.
+    var latitude: Double?
+    var longitude: Double?
 
     var itemCount: Int {
         switch kind {
@@ -57,7 +61,9 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         probes: [ProbingDevice] = [],
         deauths: [DeauthEvent] = [],
         lan: [SavedLAN] = [],
-        bluetooth: [SavedBLE] = []
+        bluetooth: [SavedBLE] = [],
+        latitude: Double? = nil,
+        longitude: Double? = nil
     ) {
         self.kind = kind
         self.savedAt = savedAt
@@ -69,10 +75,12 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         self.deauths = deauths
         self.lan = lan
         self.bluetooth = bluetooth
+        self.latitude = latitude
+        self.longitude = longitude
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, savedAt, source, captureID, lines, networks, probes, deauths, lan, bluetooth
+        case id, kind, savedAt, source, captureID, lines, networks, probes, deauths, lan, bluetooth, latitude, longitude
     }
 
     func encode(to encoder: Encoder) throws {
@@ -88,6 +96,8 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         try box.encode(deauths, forKey: .deauths)
         try box.encode(lan, forKey: .lan)
         try box.encode(bluetooth, forKey: .bluetooth)
+        try box.encodeIfPresent(latitude, forKey: .latitude)
+        try box.encodeIfPresent(longitude, forKey: .longitude)
     }
 
     /// Older files only have `lines`. Missing keys stay empty.
@@ -104,6 +114,8 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         deauths = try box.decodeIfPresent([DeauthEvent].self, forKey: .deauths) ?? []
         lan = try box.decodeIfPresent([SavedLAN].self, forKey: .lan) ?? []
         bluetooth = try box.decodeIfPresent([SavedBLE].self, forKey: .bluetooth) ?? []
+        latitude = try box.decodeIfPresent(Double.self, forKey: .latitude)
+        longitude = try box.decodeIfPresent(Double.self, forKey: .longitude)
     }
 }
 
@@ -233,6 +245,9 @@ final class HistoryStore {
     private(set) var entries: [HistoryEntry] = []
     /// The latest save, from a button or from the Cardputer.
     private(set) var lastSave: SaveNotice?
+    /// Supplies the phone's current coordinate for a phone-side save. Set by the
+    /// app from `LocationService`; nil when location is unavailable or denied.
+    var locationProvider: (() -> (latitude: Double, longitude: Double)?)?
 
     private struct Partial {
         var kind: HistoryEntry.Kind
@@ -262,20 +277,26 @@ final class HistoryStore {
         let probes = store.probingDevices
         let deauths = store.deauthEvents
         guard !networks.isEmpty || !probes.isEmpty || !deauths.isEmpty else { return }
-        append(kind: .networks, source: source, networks: networks, probes: probes, deauths: deauths)
+        let here = locationProvider?()
+        append(kind: .networks, source: source, networks: networks, probes: probes, deauths: deauths,
+               latitude: here?.latitude, longitude: here?.longitude)
     }
 
     func saveLAN(_ devices: [LANDevice], source: String) {
         guard !devices.isEmpty else { return }
         let saved = devices.map { SavedLAN($0) }
-        append(kind: .lan, source: source, lan: saved)
+        let here = locationProvider?()
+        append(kind: .lan, source: source, lan: saved,
+               latitude: here?.latitude, longitude: here?.longitude)
     }
 
     func saveBluetooth(_ devices: [BLEDevice], source: String) {
         let rows = devices.sorted { $0.rssi > $1.rssi }
         guard !rows.isEmpty else { return }
         let saved = rows.map { SavedBLE($0) }
-        append(kind: .bluetooth, source: source, bluetooth: saved)
+        let here = locationProvider?()
+        append(kind: .bluetooth, source: source, bluetooth: saved,
+               latitude: here?.latitude, longitude: here?.longitude)
     }
 
     /// Folds one record from the sensor. Returns true once the capture is stored
@@ -325,7 +346,9 @@ final class HistoryStore {
         probes: [ProbingDevice] = [],
         deauths: [DeauthEvent] = [],
         lan: [SavedLAN] = [],
-        bluetooth: [SavedBLE] = []
+        bluetooth: [SavedBLE] = [],
+        latitude: Double? = nil,
+        longitude: Double? = nil
     ) {
         let entry = HistoryEntry(
             kind: kind,
@@ -337,7 +360,9 @@ final class HistoryStore {
             probes: probes,
             deauths: deauths,
             lan: lan,
-            bluetooth: bluetooth
+            bluetooth: bluetooth,
+            latitude: latitude,
+            longitude: longitude
         )
         guard entry.itemCount > 0 else { return }
         lastSave = SaveNotice(kind: kind, count: entry.itemCount, fromSensor: captureID != nil)

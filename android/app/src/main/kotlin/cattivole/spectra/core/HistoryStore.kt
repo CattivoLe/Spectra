@@ -1,8 +1,12 @@
 package cattivole.spectra.core
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.os.Handler
 import android.os.Looper
+import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -34,6 +38,9 @@ class HistoryEntry(
     val deauths: List<DeauthEvent> = emptyList(),
     val lan: List<LanDevice> = emptyList(),
     val bluetooth: List<BleDevice> = emptyList(),
+    /** Where the phone was when it saved. Null for sensor captures and saves without location. */
+    val latitude: Double? = null,
+    val longitude: Double? = null,
 ) {
     val kindTitle: String
         get() = when (kind) {
@@ -67,6 +74,7 @@ class HistoryStore(context: Context) {
     var entries: List<HistoryEntry> = emptyList()
         private set
 
+    private val appContext = context.applicationContext
     private val file = File(context.applicationContext.filesDir, "spectra-history.json")
     private val listeners = mutableListOf<() -> Unit>()
     private val partials = mutableMapOf<Long, Partial>()
@@ -135,20 +143,44 @@ class HistoryStore(context: Context) {
             .put("networks", JSONArray().apply { networks.forEach { put(HistoryCodec.network(it)) } })
             .put("probes", JSONArray().apply { probes.forEach { put(HistoryCodec.probe(it)) } })
             .put("deauths", JSONArray().apply { deauths.forEach { put(HistoryCodec.deauth(it)) } })
-        append("networks", System.currentTimeMillis(), source, null, records = json)
+        val here = phoneLocation()
+        append("networks", System.currentTimeMillis(), source, null, records = json,
+            latitude = here?.first, longitude = here?.second)
     }
 
     fun saveLan(devices: List<LanDevice>, source: String) {
         if (devices.isEmpty()) return
         val json = JSONObject().put("lan", JSONArray().apply { devices.forEach { put(HistoryCodec.lan(it)) } })
-        append("lan", System.currentTimeMillis(), source, null, records = json)
+        val here = phoneLocation()
+        append("lan", System.currentTimeMillis(), source, null, records = json,
+            latitude = here?.first, longitude = here?.second)
     }
 
     fun saveBluetooth(devices: Collection<BleDevice>, source: String) {
         if (devices.isEmpty()) return
         val rows = devices.sortedByDescending { it.rssi }
         val json = JSONObject().put("bluetooth", JSONArray().apply { rows.forEach { put(HistoryCodec.ble(it)) } })
-        append("bluetooth", System.currentTimeMillis(), source, null, records = json)
+        val here = phoneLocation()
+        append("bluetooth", System.currentTimeMillis(), source, null, records = json,
+            latitude = here?.first, longitude = here?.second)
+    }
+
+    /** The phone's last known coordinate, or null without location permission or a fix. */
+    private fun phoneLocation(): Pair<Double, Double>? {
+        if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_COARSE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            return null
+        }
+        val manager = appContext.getSystemService(LocationManager::class.java) ?: return null
+        val best = runCatching {
+            manager.allProviders
+                .mapNotNull { provider -> manager.getLastKnownLocation(provider) }
+                .maxByOrNull { it.time }
+        }.getOrNull() ?: return null
+        return best.latitude to best.longitude
     }
 
     /**
@@ -202,6 +234,8 @@ class HistoryStore(context: Context) {
         captureId: Long?,
         lines: List<HistoryLine> = emptyList(),
         records: JSONObject? = null,
+        latitude: Double? = null,
+        longitude: Double? = null,
     ) {
         val json = (records ?: JSONObject())
             .put("id", UUID.randomUUID().toString())
@@ -212,6 +246,7 @@ class HistoryStore(context: Context) {
                 lines.forEach { put(JSONObject().put("title", it.title).put("detail", it.detail).put("trailing", it.trailing)) }
             })
         if (captureId != null) json.put("captureId", captureId)
+        if (latitude != null && longitude != null) json.put("latitude", latitude).put("longitude", longitude)
         // Decoding the JSON again is the snapshot: the store keeps mutating its own objects.
         val entry = decodeEntry(json)
         if (entry.itemCount == 0) return
@@ -268,6 +303,8 @@ class HistoryStore(context: Context) {
                 deauths = list("deauths", HistoryCodec::deauth),
                 lan = list("lan", HistoryCodec::lan),
                 bluetooth = list("bluetooth", HistoryCodec::ble),
+                latitude = if (obj.has("latitude")) obj.getDouble("latitude") else null,
+                longitude = if (obj.has("longitude")) obj.getDouble("longitude") else null,
             )
         }
     }

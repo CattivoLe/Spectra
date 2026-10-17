@@ -1,5 +1,7 @@
 package cattivole.spectra.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,6 +14,7 @@ import androidx.compose.material.icons.rounded.GppBad
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.Place
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -31,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.core.HistoryEntry
@@ -163,6 +167,7 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
         return
     }
     val footer = "${sourceName(entry.source)} · ${dateTime(entry.savedAt)}"
+    val context = LocalContext.current
     SpectraScreen(
         title = kindTitle(entry.kind),
         subtitle = footer,
@@ -174,6 +179,21 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
             }) { Icon(Icons.Rounded.Delete, contentDescription = tr("Delete")) }
         },
     ) {
+        val lat = entry.latitude
+        val lon = entry.longitude
+        if (lat != null && lon != null) {
+            card(header = tr("Where"), key = "where", rows = listOf {
+                ActionRow(
+                    String.format(java.util.Locale.US, "%.5f, %.5f", lat, lon),
+                    Icons.Rounded.Place,
+                    onClick = {
+                        val label = Uri.encode(sourceName(entry.source))
+                        val uri = Uri.parse("geo:$lat,$lon?q=$lat,$lon($label)")
+                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+                    },
+                )
+            })
+        }
         if (!entry.hasRecords) {
             cardSection(entry.lines.withIndex().toList(), key = { "line-${it.index}" }, sectionKey = "lines", footer = footer) { (_, line) ->
                 ListRow(

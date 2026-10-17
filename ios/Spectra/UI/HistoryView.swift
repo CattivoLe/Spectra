@@ -1,3 +1,4 @@
+import MapKit
 import SwiftUI
 
 struct HistoryView: View {
@@ -74,6 +75,7 @@ struct HistoryDetailView: View {
     var body: some View {
         List {
             if let entry {
+                locationSection(entry)
                 if entry.networks.isEmpty && entry.probes.isEmpty && entry.deauths.isEmpty
                     && entry.lan.isEmpty && entry.bluetooth.isEmpty {
                     Section {
@@ -110,6 +112,34 @@ struct HistoryDetailView: View {
                     Button("Delete", systemImage: "trash", role: .destructive) {
                         history.delete(id)
                     }
+                }
+            }
+        }
+    }
+
+    /// Where the phone was when it saved, for phone-side captures that carry a fix.
+    @ViewBuilder
+    private func locationSection(_ entry: HistoryEntry) -> some View {
+        if let lat = entry.latitude, let lon = entry.longitude {
+            let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            Section("Where") {
+                Map(initialPosition: .region(MKCoordinateRegion(
+                    center: coordinate,
+                    span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+                ))) {
+                    Marker(entry.source, coordinate: coordinate)
+                }
+                .frame(height: 150)
+                .allowsHitTesting(false)
+                .listRowInsets(EdgeInsets())
+
+                Button {
+                    let item = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
+                    item.name = entry.source
+                    item.openInMaps()
+                } label: {
+                    Label(String(format: "%.5f, %.5f", lat, lon), systemImage: "location.fill")
+                        .monospacedDigit()
                 }
             }
         }

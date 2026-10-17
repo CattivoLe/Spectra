@@ -414,3 +414,4 @@ The sensor could not write the image.	Сенсор не смог записат�
 The image failed its checksum. Transfer it again.	Не сошлась контрольная сумма образа. Передайте его ещё раз.
 The sensor rejected the image header.	Сенсор отклонил заголовок образа.
 The sensor rebooted, but the app could not reconnect. It is looking for the Cardputer again.	Сенсор перезагрузился, но приложение не смогло переподключиться. Снова ищу Cardputer.
+Where	Где
