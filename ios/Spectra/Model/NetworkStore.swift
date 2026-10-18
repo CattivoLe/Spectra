@@ -138,7 +138,7 @@ final class NetworkStore {
         case .traffic(_, let bssid, let bytes, let packets):
             pendingTraffic[bssid] = TrafficSnapshot(bytes: bytes, packets: packets)
 
-        case .battery, .saved, .lora, .loraScan, .loraProgress, .savedPosition, .gps:
+        case .battery, .saved, .lora, .loraScan, .loraProgress, .savedPosition, .gps, .knownWifi:
             break
 
         case .scanFinished(let scanID, _, let duration, _, _):

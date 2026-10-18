@@ -20,6 +20,15 @@ inline constexpr uint8_t kCmdScanOnce = 0x01;
 inline constexpr uint8_t kCmdSetInterval = 0x02;
 inline constexpr uint8_t kCmdAckSaved = 0x03;
 inline constexpr uint8_t kCmdScanLora = 0x04;
+// The phone's copy of a network. Shown on the sensor; not queued for upload.
+inline constexpr uint8_t kCmdRememberWifi = 0x05;
+inline constexpr uint8_t kCmdForgetWifi = 0x06;
+// The peripheral cannot read the central's name, so the phone sends its own.
+inline constexpr uint8_t kCmdSetPeer = 0x07;
+// The phone stored the batch the sensor just uploaded. Clear that batch.
+inline constexpr uint8_t kCmdAckKnown = 0x08;
+// The phone is about to send its whole list. Drop the previous copy.
+inline constexpr uint8_t kCmdResetKnown = 0x09;
 
 // Results notification message types (first byte).
 inline constexpr uint8_t kMsgScanStarted = 0x10;
@@ -39,6 +48,8 @@ inline constexpr uint8_t kMsgSavedGps = 0x1D;
 inline constexpr uint8_t kMsgLoraDevice = 0x1E;
 inline constexpr uint8_t kMsgLoraScan = 0x1F;
 inline constexpr uint8_t kMsgLoraProgress = 0x22;
+// A network the sensor joined, waiting for the phone to keep it.
+inline constexpr uint8_t kMsgKnownWifi = 0x23;
 inline constexpr uint8_t kMsgSavedLora = 0x20;
 inline constexpr uint8_t kMsgGps = 0x21;
 inline constexpr uint8_t kMsgUpdate = 0x30;

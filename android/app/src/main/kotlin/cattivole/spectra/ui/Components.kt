@@ -418,6 +418,7 @@ fun ListRow(
     title: String,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
+    detail: String? = null,
     leading: (@Composable () -> Unit)? = null,
     badges: @Composable RowScope.() -> Unit = {},
     trailing: (@Composable () -> Unit)? = null,
@@ -466,6 +467,15 @@ fun ListRow(
                     fontFamily = if (monoSubtitle) FontFamily.Monospace else null,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = subtitleLines,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (!detail.isNullOrEmpty()) {
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }

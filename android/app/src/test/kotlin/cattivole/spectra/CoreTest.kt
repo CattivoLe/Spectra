@@ -142,6 +142,13 @@ class CoreTest {
         assertEquals(55.75124, info?.latitude ?: 0.0, 0.00001)
         assertEquals(8, info?.satellites)
         assertArrayEquals(byteArrayOf(0x04), SensorProtocol.Command.ScanLora.data)
+        assertArrayEquals(byteArrayOf(0x05, 4, 'C'.code.toByte(), 'a'.code.toByte(), 'f'.code.toByte(), 'e'.code.toByte(), 3, 'a'.code.toByte(), 'b'.code.toByte(), 'c'.code.toByte()), SensorProtocol.Command.RememberWifi("Cafe", "abc").data)
+        assertArrayEquals(byteArrayOf(0x06, 4, 'C'.code.toByte(), 'a'.code.toByte(), 'f'.code.toByte(), 'e'.code.toByte()), SensorProtocol.Command.ForgetWifi("Cafe").data)
+        assertArrayEquals(byteArrayOf(0x07, 'P'.code.toByte(), 'i'.code.toByte(), 'x'.code.toByte()), SensorProtocol.Command.SetPeer("Pix").data)
+        assertArrayEquals(byteArrayOf(0x08), SensorProtocol.Command.AckKnown.data)
+        assertArrayEquals(byteArrayOf(0x09), SensorProtocol.Command.ResetKnown.data)
+        val uploaded = SensorProtocol.Message.KnownWifi(0, 1, "Cafe", "abc")
+        assertEquals(uploaded, SensorProtocol.decode(SensorProtocol.encode(uploaded)))
         val progress = SensorProtocol.Message.LoraProgress(3, 868_100, 7, 12, 51)
         assertEquals(progress, SensorProtocol.decode(SensorProtocol.encode(progress)))
         assertEquals("868.100 MHz · SF7 · 12/51", progress.line())
@@ -321,6 +328,8 @@ class CoreTest {
         )
         assertEquals("Samsung", television.manufacturer)
         assertEquals("Tizen", television.operatingSystem)
+        val androidTv = HostIdentity.recognize(names = listOf("Living Room"), ports = listOf(6466))
+        assertEquals("Android TV", androidTv.operatingSystem)
         assertEquals("55\" Crystal UHD", television.model)
         assertNull(
             HostIdentity.recognize(

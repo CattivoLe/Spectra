@@ -154,6 +154,15 @@ data class HostIdentity(
             if (62078 in ports) found = found.apply(HostIdentity("Apple", "iOS", "iPhone"), overwrite = false)
             if (548 in ports) found = found.apply(HostIdentity("Apple", "macOS"), overwrite = false)
             if (3389 in ports || 5357 in ports) found = found.apply(HostIdentity("Microsoft", "Windows"), overwrite = false)
+            val androidTv = 6466 in ports ||
+                types.any { "androidtv" in it } ||
+                texts.any { text ->
+                    val folded = text.lowercase()
+                    "android tv" in folded || "google tv" in folded || "androidtv" in folded || "bravia" in folded
+                }
+            if (androidTv && (found.operatingSystem == null || found.operatingSystem == "Android")) {
+                found = found.copy(operatingSystem = "Android TV")
+            }
             if (found.manufacturer == null) shortVendor(vendor)?.let { found = found.copy(manufacturer = it) }
             return found
         }

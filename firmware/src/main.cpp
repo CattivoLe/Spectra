@@ -37,9 +37,8 @@ static constexpr const char* kFirmwareVersion = kFirmwareTag + 11;
 // keeps a full sweep under two seconds.
 static constexpr uint32_t kMsPerChannel = 120;
 
-// Wi-Fi patrol while the phone is away. The app's default live interval.
-// The phone's own interval is cleared on disconnect and does not drive this.
-static constexpr uint8_t kSoloIntervalSec = 30;
+// Fixed identity for this firmware. Other boards ship with their own name.
+static constexpr char kSensorName[] = "M5Cardputer";
 
 // Same bar the phone uses: bytes on one AP during the sniff window.
 static constexpr uint32_t kStreamingBytes = 120000;
@@ -115,10 +114,11 @@ static NimBLEServer *server = nullptr;
 static NimBLECharacteristic *infoChar = nullptr;
 static NimBLECharacteristic *resultsChar = nullptr;
 static char deviceName[16];
+static char peerName[32] = "";
 
 // Written from the NimBLE host task, read from loop().
 static volatile bool scanRequested = false;
-static volatile uint8_t scanIntervalSec = 0;
+static volatile uint8_t scanIntervalSec = 30;
 static volatile bool intervalChanged = false;
 static volatile bool linkChanged = true;
 // True once the phone has subscribed to the Results characteristic. A notify
@@ -195,6 +195,30 @@ static uint8_t wifiPassLen = 0;
 static char wifiMsg[28] = "";
 static uint32_t wifiConnectUntil = 0;
 static bool wifiHaveCreds = false;
+// Joins not yet accepted by the phone. Eight is the unsent buffer: a full one
+// drops the oldest. The phone keeps the history and sends it back to draw.
+struct KnownWifi {
+  char ssid[33];
+  char pass[65];
+  uint8_t epoch;
+};
+static constexpr int kPendingMax = 8;
+static constexpr int kPhoneMax = 80;
+static std::vector<KnownWifi> knownWifi;
+static std::vector<KnownWifi> phoneWifi;
+static uint8_t nextEpoch = 1;
+static uint8_t inFlightEpoch = 0;
+static bool knownQueued = false;
+
+struct WifiOp {
+  uint8_t op;
+  char ssid[33];
+  char pass[65];
+};
+static constexpr int kWifiOpMax = 80;
+static WifiOp wifiOps[kWifiOpMax];
+static uint8_t wifiOpCount = 0;
+static portMUX_TYPE wifiOpMux = portMUX_INITIALIZER_UNLOCKED;
 // Swallows the key that opened the setup so its release is not read as a press.
 static bool wifiInputSeeded = false;
 
@@ -579,8 +603,35 @@ static bool readBatteryCharging() {
   return HWCDC::isPlugged();
 }
 
+static void appendRaw(char *out, size_t cap, const char *text) {
+  const size_t used = strlen(out);
+  const size_t add = strlen(text);
+  if (used + add + 1 > cap) {
+    return;
+  }
+  memcpy(out + used, text, add + 1);
+}
+
+static void appendQuoted(char *out, size_t cap, const char *text) {
+  appendRaw(out, cap, "\"");
+  char tmp[4];
+  for (const unsigned char *p = reinterpret_cast<const unsigned char *>(text); *p != 0; ++p) {
+    if (*p == '"' || *p == '\\') {
+      tmp[0] = '\\';
+      tmp[1] = static_cast<char>(*p);
+      tmp[2] = '\0';
+      appendRaw(out, cap, tmp);
+    } else if (*p >= 32 && *p < 127) {
+      tmp[0] = static_cast<char>(*p);
+      tmp[1] = '\0';
+      appendRaw(out, cap, tmp);
+    }
+  }
+  appendRaw(out, cap, "\"");
+}
+
 static void updateInfo() {
-  char json[360];
+  char json[1100];
   const int bat = readBatteryPercent();
   char batJson[40] = "";
   if (bat >= 0) {
@@ -598,10 +649,48 @@ static void updateInfo() {
       snprintf(capJson, sizeof(capJson), ",\"lora\":%s", loraCapReady() ? "true" : "false");
     }
   }
+  char knownJson[700];
+  knownJson[0] = '\0';
+  if (!phoneWifi.empty() || !knownWifi.empty()) {
+    appendRaw(knownJson, sizeof(knownJson), ",\"known\":[");
+    bool any = false;
+    auto appendName = [&](const char *ssid) {
+      char piece[80];
+      piece[0] = '\0';
+      if (any) {
+        appendRaw(piece, sizeof(piece), ",");
+      }
+      appendQuoted(piece, sizeof(piece), ssid);
+      if (strlen(knownJson) + strlen(piece) + 2 >= sizeof(knownJson)) {
+        return false;
+      }
+      appendRaw(knownJson, sizeof(knownJson), piece);
+      any = true;
+      return true;
+    };
+    for (const KnownWifi &row : phoneWifi) {
+      if (!appendName(row.ssid)) {
+        break;
+      }
+    }
+    for (const KnownWifi &row : knownWifi) {
+      bool seen = false;
+      for (const KnownWifi &have : phoneWifi) {
+        if (std::strcmp(have.ssid, row.ssid) == 0) {
+          seen = true;
+          break;
+        }
+      }
+      if (!seen && !appendName(row.ssid)) {
+        break;
+      }
+    }
+    appendRaw(knownJson, sizeof(knownJson), "]");
+  }
   snprintf(json, sizeof(json),
-           "{\"proto\":%u,\"fw\":\"%s\",\"chip\":\"ESP32-S3\",\"bands\":[\"2.4\"],\"interval\":%u%s%s%s}",
-           kProtocolVersion, kFirmwareVersion, scanIntervalSec,
-           otaUpdatable ? ",\"ota\":true" : "", batJson, capJson);
+           "{\"proto\":%u,\"fw\":\"%s\",\"name\":\"%s\",\"chip\":\"ESP32-S3\",\"bands\":[\"2.4\"],\"interval\":%u%s%s%s%s}",
+           kProtocolVersion, kFirmwareVersion, kSensorName, scanIntervalSec,
+           otaUpdatable ? ",\"ota\":true" : "", batJson, capJson, knownJson);
   infoChar->setValue(json);
 }
 
@@ -609,9 +698,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *, NimBLEConnInfo &) override { linkChanged = true; }
 
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
-    // The phone's interval belongs to the link. Solo patrol keeps its own.
-    scanIntervalSec = 0;
-    intervalChanged = true;
+    // The interval stays. The phone set it, and the patrol keeps using it.
+    peerName[0] = '\0';
     linkChanged = true;
     resultsSubscribed = false;
     captureFlushPending = false;
@@ -684,6 +772,67 @@ class ControlCallbacks : public NimBLECharacteristicCallbacks {
         scanRequested = true;
         taskEXIT_CRITICAL(&radioMux);
         break;
+      case kCmdRememberWifi:
+      case kCmdForgetWifi: {
+        if (value.data() == nullptr || value.size() < 2) {
+          break;
+        }
+        const uint8_t *bytes = value.data();
+        const uint8_t ssidLen = bytes[1];
+        if (ssidLen == 0 || ssidLen > 32 || value.size() < static_cast<size_t>(2 + ssidLen)) {
+          break;
+        }
+        uint8_t passLen = 0;
+        const uint8_t *pass = nullptr;
+        if (value[0] == kCmdRememberWifi) {
+          if (value.size() < static_cast<size_t>(3 + ssidLen)) {
+            break;
+          }
+          passLen = bytes[2 + ssidLen];
+          if (passLen > 64 || value.size() < static_cast<size_t>(3 + ssidLen + passLen)) {
+            break;
+          }
+          pass = bytes + 3 + ssidLen;
+        }
+        taskENTER_CRITICAL(&wifiOpMux);
+        if (wifiOpCount < kWifiOpMax) {
+          WifiOp &slot = wifiOps[wifiOpCount++];
+          slot.op = value[0] == kCmdRememberWifi ? 1 : 2;
+          memcpy(slot.ssid, bytes + 2, ssidLen);
+          slot.ssid[ssidLen] = '\0';
+          if (pass != nullptr && passLen > 0) {
+            memcpy(slot.pass, pass, passLen);
+          }
+          slot.pass[passLen] = '\0';
+        }
+        taskEXIT_CRITICAL(&wifiOpMux);
+        break;
+      }
+      case kCmdAckKnown:
+      case kCmdResetKnown: {
+        taskENTER_CRITICAL(&wifiOpMux);
+        if (wifiOpCount < kWifiOpMax) {
+          WifiOp &slot = wifiOps[wifiOpCount++];
+          slot.op = value[0] == kCmdAckKnown ? 3 : 4;
+          slot.ssid[0] = '\0';
+          slot.pass[0] = '\0';
+        }
+        taskEXIT_CRITICAL(&wifiOpMux);
+        break;
+      }
+      case kCmdSetPeer: {
+        if (value.size() < 2 || value.data() == nullptr) {
+          break;
+        }
+        size_t n = value.size() - 1;
+        if (n > 31) {
+          n = 31;
+        }
+        memcpy(peerName, value.data() + 1, n);
+        peerName[n] = '\0';
+        linkChanged = true;
+        break;
+      }
       default:
         break;
     }
@@ -1462,26 +1611,277 @@ static void rememberLan(const IPAddress &ip, const String &name) {
   keptLan.push_back(row);
 }
 
-static void loadWifiCreds() {
-  Preferences prefs;
-  prefs.begin("spectra", true);
-  const String ssid = prefs.getString("wifiSsid", "");
-  const String pass = prefs.getString("wifiPass", "");
-  prefs.end();
-  if (ssid.length() > 0) {
-    snprintf(wifiSsid, sizeof(wifiSsid), "%s", ssid.c_str());
-    snprintf(wifiPass, sizeof(wifiPass), "%s", pass.c_str());
+static int indexIn(const std::vector<KnownWifi> &list, const char *ssid) {
+  if (ssid == nullptr) {
+    return -1;
+  }
+  for (size_t i = 0; i < list.size(); ++i) {
+    if (std::strcmp(list[i].ssid, ssid) == 0) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+static bool isKnownSsid(const char *ssid) {
+  return indexIn(phoneWifi, ssid) >= 0 || indexIn(knownWifi, ssid) >= 0;
+}
+
+static const char *knownPassword(const char *ssid) {
+  const int fromPhone = indexIn(phoneWifi, ssid);
+  if (fromPhone >= 0) {
+    return phoneWifi[fromPhone].pass;
+  }
+  const int pending = indexIn(knownWifi, ssid);
+  return pending >= 0 ? knownWifi[pending].pass : nullptr;
+}
+
+static void applyHead() {
+  const KnownWifi *head = !knownWifi.empty() ? &knownWifi.front() : !phoneWifi.empty() ? &phoneWifi.front() : nullptr;
+  if (head != nullptr) {
+    snprintf(wifiSsid, sizeof(wifiSsid), "%s", head->ssid);
+    snprintf(wifiPass, sizeof(wifiPass), "%s", head->pass);
     wifiHaveCreds = true;
+  } else if (WiFi.status() != WL_CONNECTED) {
+    wifiSsid[0] = '\0';
+    wifiPass[0] = '\0';
+    wifiHaveCreds = false;
   }
 }
 
-static void saveWifiCreds(const char *ssid, const char *pass) {
+// One NVS blob. The record itself is the only ceiling: a value past this
+// does not fit in a single flash entry, so the oldest network is dropped.
+static constexpr size_t kWifiBlobMax = 4000;
+
+static std::vector<uint8_t> encodeKnown() {
+  std::vector<uint8_t> blob;
+  const uint16_t count = static_cast<uint16_t>(knownWifi.size());
+  blob.push_back(static_cast<uint8_t>(count & 0xFF));
+  blob.push_back(static_cast<uint8_t>(count >> 8));
+  for (const KnownWifi &row : knownWifi) {
+    const uint8_t ssidLen = static_cast<uint8_t>(strlen(row.ssid));
+    const uint8_t passLen = static_cast<uint8_t>(strlen(row.pass));
+    blob.push_back(ssidLen);
+    blob.insert(blob.end(), row.ssid, row.ssid + ssidLen);
+    blob.push_back(passLen);
+    blob.insert(blob.end(), row.pass, row.pass + passLen);
+  }
+  return blob;
+}
+
+static void decodeKnown(const uint8_t *blob, size_t len) {
+  if (blob == nullptr || len < 2) {
+    return;
+  }
+  const uint16_t count = static_cast<uint16_t>(blob[0] | (static_cast<uint16_t>(blob[1]) << 8));
+  size_t at = 2;
+  knownWifi.clear();
+  for (uint16_t i = 0; i < count && at < len; ++i) {
+    const uint8_t ssidLen = blob[at++];
+    if (ssidLen == 0 || ssidLen > 32 || at + ssidLen >= len) {
+      break;
+    }
+    KnownWifi row{};
+    memcpy(row.ssid, blob + at, ssidLen);
+    row.ssid[ssidLen] = '\0';
+    at += ssidLen;
+    const uint8_t passLen = blob[at++];
+    if (passLen > 64 || at + passLen > len) {
+      break;
+    }
+    memcpy(row.pass, blob + at, passLen);
+    row.pass[passLen] = '\0';
+    at += passLen;
+    knownWifi.push_back(row);
+  }
+}
+
+static void persistKnown() {
+  while (knownWifi.size() > 1 && encodeKnown().size() > kWifiBlobMax) {
+    knownWifi.pop_back();
+  }
+  const std::vector<uint8_t> blob = encodeKnown();
   Preferences prefs;
   prefs.begin("spectra", false);
-  prefs.putString("wifiSsid", ssid);
-  prefs.putString("wifiPass", pass);
+  if (blob.size() <= kWifiBlobMax) {
+    prefs.putBytes("wifi", blob.data(), blob.size());
+  }
+  for (int i = 0; i < 8; ++i) {
+    char keyS[4];
+    char keyP[4];
+    snprintf(keyS, sizeof(keyS), "w%d", i);
+    snprintf(keyP, sizeof(keyP), "p%d", i);
+    prefs.remove(keyS);
+    prefs.remove(keyP);
+  }
+  prefs.remove("wifiN");
   prefs.end();
-  wifiHaveCreds = true;
+}
+
+static void saveInterval() {
+  Preferences prefs;
+  prefs.begin("spectra", false);
+  prefs.putUChar("interval", scanIntervalSec);
+  prefs.end();
+}
+
+static void touchKnownUi() {
+  applyHead();
+  if (infoChar != nullptr) {
+    updateInfo();
+  }
+  uiDirty = true;
+}
+
+static void rememberWifi(const char *ssid, const char *pass) {
+  if (ssid == nullptr || ssid[0] == '\0') {
+    return;
+  }
+  KnownWifi row{};
+  snprintf(row.ssid, sizeof(row.ssid), "%s", ssid);
+  snprintf(row.pass, sizeof(row.pass), "%s", pass == nullptr ? "" : pass);
+  row.epoch = 0;
+  const int existing = indexIn(knownWifi, ssid);
+  if (existing >= 0) {
+    knownWifi.erase(knownWifi.begin() + existing);
+  } else if (static_cast<int>(knownWifi.size()) >= kPendingMax) {
+    knownWifi.pop_back();
+  }
+  knownWifi.insert(knownWifi.begin(), row);
+  persistKnown();
+  touchKnownUi();
+}
+
+static void rememberFromPhone(const char *ssid, const char *pass) {
+  if (ssid == nullptr || ssid[0] == '\0') {
+    return;
+  }
+  KnownWifi row{};
+  snprintf(row.ssid, sizeof(row.ssid), "%s", ssid);
+  snprintf(row.pass, sizeof(row.pass), "%s", pass == nullptr ? "" : pass);
+  const int existing = indexIn(phoneWifi, ssid);
+  if (existing >= 0) {
+    snprintf(phoneWifi[existing].pass, sizeof(phoneWifi[existing].pass), "%s", row.pass);
+  } else if (static_cast<int>(phoneWifi.size()) < kPhoneMax) {
+    // The phone sends newest first, so appending keeps that order.
+    phoneWifi.push_back(row);
+  }
+  touchKnownUi();
+}
+
+static void forgetWifi(const char *ssid) {
+  const int pending = indexIn(knownWifi, ssid);
+  if (pending >= 0) {
+    knownWifi.erase(knownWifi.begin() + pending);
+    persistKnown();
+  }
+  const int fromPhone = indexIn(phoneWifi, ssid);
+  if (fromPhone >= 0) {
+    phoneWifi.erase(phoneWifi.begin() + fromPhone);
+  }
+  if (pending >= 0 || fromPhone >= 0) {
+    touchKnownUi();
+  }
+}
+
+static void resetPhoneWifi() {
+  phoneWifi.clear();
+  touchKnownUi();
+}
+
+static void ackPendingWifi() {
+  if (inFlightEpoch != 0) {
+    knownWifi.erase(std::remove_if(knownWifi.begin(), knownWifi.end(), [](const KnownWifi &row) {
+                      return row.epoch == inFlightEpoch;
+                    }),
+                    knownWifi.end());
+    persistKnown();
+  }
+  inFlightEpoch = 0;
+  knownQueued = false;
+  touchKnownUi();
+}
+
+static void queueKnown() {
+  if (!isConnected() || knownQueued) {
+    return;
+  }
+  uint8_t total = 0;
+  for (const KnownWifi &row : knownWifi) {
+    if (row.epoch == 0) {
+      total++;
+    }
+  }
+  if (total == 0) {
+    return;
+  }
+  const uint8_t epoch = nextEpoch == 0 ? 1 : nextEpoch;
+  nextEpoch = static_cast<uint8_t>(epoch + 1);
+  if (nextEpoch == 0) {
+    nextEpoch = 1;
+  }
+  uint8_t index = 0;
+  for (KnownWifi &row : knownWifi) {
+    if (row.epoch != 0) {
+      continue;
+    }
+    row.epoch = epoch;
+    uint8_t msg[1 + 2 + 1 + 32 + 1 + 64];
+    const uint8_t ssidLen = static_cast<uint8_t>(strlen(row.ssid));
+    const uint8_t passLen = static_cast<uint8_t>(strlen(row.pass));
+    msg[0] = kMsgKnownWifi;
+    msg[1] = index++;
+    msg[2] = total;
+    msg[3] = ssidLen;
+    memcpy(msg + 4, row.ssid, ssidLen);
+    msg[4 + ssidLen] = passLen;
+    memcpy(msg + 5 + ssidLen, row.pass, passLen);
+    outbox.emplace_back(msg, msg + 5 + ssidLen + passLen);
+  }
+  inFlightEpoch = epoch;
+  knownQueued = true;
+}
+
+static void loadWifiCreds() {
+  Preferences prefs;
+  prefs.begin("spectra", true);
+  scanIntervalSec = prefs.getUChar("interval", 30);
+  bool migrated = false;
+  const size_t len = prefs.getBytesLength("wifi");
+  if (len >= 2) {
+    std::vector<uint8_t> blob(len);
+    if (prefs.getBytes("wifi", blob.data(), len) == len) {
+      decodeKnown(blob.data(), blob.size());
+    }
+  }
+  if (knownWifi.empty()) {
+    const int count = prefs.getUChar("wifiN", 0);
+    for (int i = 0; i < count && i < 8; ++i) {
+      char keyS[4];
+      char keyP[4];
+      snprintf(keyS, sizeof(keyS), "w%d", i);
+      snprintf(keyP, sizeof(keyP), "p%d", i);
+      const String ssid = prefs.getString(keyS, "");
+      const String pass = prefs.getString(keyP, "");
+      if (ssid.length() == 0 || ssid.length() > 32) {
+        continue;
+      }
+      KnownWifi row{};
+      snprintf(row.ssid, sizeof(row.ssid), "%s", ssid.c_str());
+      snprintf(row.pass, sizeof(row.pass), "%s", pass.c_str());
+      knownWifi.push_back(row);
+      migrated = true;
+    }
+  }
+  prefs.end();
+  while (static_cast<int>(knownWifi.size()) > kPendingMax) {
+    knownWifi.pop_back();
+    migrated = true;
+  }
+  applyHead();
+  if (migrated) {
+    persistKnown();
+  }
 }
 
 // Brings the stored network up, blocking up to timeoutMs. Promiscuous sniffing
@@ -1777,10 +2177,16 @@ static void drawUi() {
   if (banner[0] != '\0' && static_cast<int32_t>(millis() - bannerUntil) < 0) {
     snprintf(header, sizeof(header), "%s", banner);
   } else if (isConnected()) {
-    snprintf(header, sizeof(header), "%s  linked", deviceName);
-  } else {
+    if (peerName[0] != '\0') {
+      snprintf(header, sizeof(header), "%s  %.32s", deviceName, peerName);
+    } else {
+      snprintf(header, sizeof(header), "%s  linked", deviceName);
+    }
+  } else if (scanIntervalSec > 0) {
     snprintf(header, sizeof(header), "%s  every %us", deviceName,
-             static_cast<unsigned>(kSoloIntervalSec));
+             static_cast<unsigned>(scanIntervalSec));
+  } else {
+    snprintf(header, sizeof(header), "%s  waiting", deviceName);
   }
   drawStatus(header);
   drawTabs();
@@ -2238,9 +2644,7 @@ static void runLoraScan() {
 // ---------------------------------------------------------------------------
 
 static void setupBle() {
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_BT);
-  snprintf(deviceName, sizeof(deviceName), "Spectra-%02X%02X", mac[4], mac[5]);
+  snprintf(deviceName, sizeof(deviceName), "%s", kSensorName);
 
   NimBLEDevice::init(deviceName);
   NimBLEDevice::setMTU(517);
@@ -2311,6 +2715,9 @@ static void startWifiPick() {
     }
   }
   WiFi.scanDelete();
+  std::stable_partition(wifiList.begin(), wifiList.end(), [](const String &name) {
+    return isKnownSsid(name.c_str());
+  });
   wifiSel = 0;
   wifiListOffset = 0;
   wifiInputSeeded = false;
@@ -2361,7 +2768,7 @@ static void handleWifiKeys() {
   if (!wifiInputSeeded) {
     prevEnter = keys.enter;
     prevTab = keys.tab;
-    prevDel = keys.del;
+    prevDel = keys.del || keys.backspace;
     prevWord.assign(keys.word.begin(), keys.word.end());
     wifiInputSeeded = true;
     return;
@@ -2369,7 +2776,8 @@ static void handleWifiKeys() {
 
   const bool enterEdge = keys.enter && !prevEnter;
   const bool tabEdge = keys.tab && !prevTab;
-  const bool delEdge = keys.del && !prevDel;
+  const bool wipe = keys.del || keys.backspace;
+  const bool delEdge = wipe && !prevDel;
 
   if (wifiUi == WifiUi::Pick) {
     const NavKeys nav = navKeys(keys, true);
@@ -2397,9 +2805,19 @@ static void handleWifiKeys() {
       uiDirty = true;
     } else if (enterEdge && !wifiList.empty()) {
       snprintf(wifiSsid, sizeof(wifiSsid), "%s", wifiList[wifiSel].c_str());
-      wifiPass[0] = '\0';
-      wifiPassLen = 0;
-      wifiUi = WifiUi::Pass;
+      const char *stored = knownPassword(wifiSsid);
+      if (stored != nullptr) {
+        snprintf(wifiPass, sizeof(wifiPass), "%s", stored);
+        wifiPassLen = static_cast<uint8_t>(strlen(wifiPass));
+        WiFi.begin(wifiSsid, wifiPass);
+        wifiConnectUntil = millis() + 12000;
+        snprintf(wifiMsg, sizeof(wifiMsg), "Connecting...");
+        wifiUi = WifiUi::Connecting;
+      } else {
+        wifiPass[0] = '\0';
+        wifiPassLen = 0;
+        wifiUi = WifiUi::Pass;
+      }
       uiDirty = true;
     }
   } else if (wifiUi == WifiUi::Pass) {
@@ -2407,7 +2825,6 @@ static void handleWifiKeys() {
       wifiUi = WifiUi::Pick;
       uiDirty = true;
     } else if (enterEdge) {
-      saveWifiCreds(wifiSsid, wifiPass);
       WiFi.begin(wifiSsid, wifiPass);
       wifiConnectUntil = millis() + 12000;
       snprintf(wifiMsg, sizeof(wifiMsg), "Connecting...");
@@ -2438,7 +2855,7 @@ static void handleWifiKeys() {
 
   prevEnter = keys.enter;
   prevTab = keys.tab;
-  prevDel = keys.del;
+  prevDel = keys.del || keys.backspace;
   prevWord.assign(keys.word.begin(), keys.word.end());
 }
 
@@ -2448,6 +2865,7 @@ static void serviceWifiUi() {
     return;
   }
   if (WiFi.status() == WL_CONNECTED) {
+    rememberWifi(wifiSsid, wifiPass);
     wifiUi = WifiUi::None;
     showBanner("Wi-Fi OK");
     uiDirty = true;
@@ -2475,9 +2893,19 @@ static void drawLinkTab() {
         break;
       }
       const bool on = i == wifiSel;
+      const bool known = isKnownSsid(wifiList[i].c_str());
       d.fillRect(0, y - 1, d.width(), 12, on ? TFT_WHITE : TFT_BLACK);
-      d.setTextColor(on ? TFT_BLACK : TFT_WHITE, on ? TFT_WHITE : TFT_BLACK);
-      d.setCursor(4, y);
+      if (known) {
+        d.fillRect(0, y - 1, 3, 12, TFT_GREEN);
+      }
+      if (on) {
+        d.setTextColor(TFT_BLACK, TFT_WHITE);
+      } else if (known) {
+        d.setTextColor(TFT_GREEN, TFT_BLACK);
+      } else {
+        d.setTextColor(TFT_WHITE, TFT_BLACK);
+      }
+      d.setCursor(6, y);
       char shown[36];
       snprintf(shown, sizeof(shown), "%.34s", wifiList[i].c_str());
       d.print(shown);
@@ -2517,8 +2945,10 @@ static void drawLinkTab() {
   if (WiFi.status() == WL_CONNECTED) {
     d.print(WiFi.SSID().c_str());
     d.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    d.setCursor(4, kListTop + 16);
+    d.setCursor(4, kListTop + 14);
     d.print(WiFi.localIP().toString().c_str());
+    d.setCursor(4, kListTop + 28);
+    d.print("Btn  disconnect");
     return;
   }
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
@@ -2571,8 +3001,28 @@ static void handleKeyboard() {
   // Joining a network owns Enter, Tab and the vertical arrows. Horizontal
   // arrows already switched tabs above, so a half-typed password survives.
   static bool enterHeld = false;
+  static bool tabHeld = false;
+  const bool tabEdge = keys.tab && !tabHeld;
+  tabHeld = keys.tab;
   if (menuIndex == kTabLink && wifiUi != WifiUi::None) {
     handleWifiKeys();
+  } else if (tabEdge && !isConnected()) {
+    static const uint8_t steps[] = {0, 10, 30, 60, 120, 180, 240};
+    int at = -1;
+    for (int i = 0; i < 7; ++i) {
+      if (steps[i] == scanIntervalSec) {
+        at = i;
+      }
+    }
+    scanIntervalSec = steps[(at + 1) % 7];
+    intervalChanged = true;
+    if (scanIntervalSec == 0) {
+      showBanner("scan off");
+    } else {
+      char msg[16];
+      snprintf(msg, sizeof(msg), "every %us", static_cast<unsigned>(scanIntervalSec));
+      showBanner(msg);
+    }
   } else if (keys.enter && !enterHeld) {
     if (menuIndex == kTabLink) {
       startWifiPick();
@@ -2588,6 +3038,16 @@ static void handleKeyboard() {
 
 static void handleSideButton() {
   if (scanInProgress || otaActive || otaJobBusy || !M5Cardputer.BtnA.wasPressed()) {
+    return;
+  }
+  if (menuIndex == kTabLink) {
+    if (WiFi.status() == WL_CONNECTED || wifiUi == WifiUi::Connecting) {
+      WiFi.disconnect(false, false);
+      WiFi.mode(WIFI_STA);
+      wifiUi = WifiUi::None;
+      showBanner("Wi-Fi off");
+      uiDirty = true;
+    }
     return;
   }
   bool saved = false;
@@ -2639,6 +3099,7 @@ void setup() {
   setupBle();
   loadStored();
   loadWifiCreds();
+  updateInfo();
   if (wifiHaveCreds) {
     // Bring the saved network up in the background so the LAN scan is ready.
     WiFi.begin(wifiSsid, wifiPass);
@@ -2659,8 +3120,33 @@ void loop() {
     serviceWifiUi();
   }
 
+  // The batch lives in BSS. Eighty credential rows do not fit on the loop stack.
+  static WifiOp batch[kWifiOpMax];
+  uint8_t batchCount = 0;
+  taskENTER_CRITICAL(&wifiOpMux);
+  batchCount = wifiOpCount;
+  if (batchCount > 0) {
+    memcpy(batch, wifiOps, batchCount * sizeof(WifiOp));
+    wifiOpCount = 0;
+  }
+  taskEXIT_CRITICAL(&wifiOpMux);
+  for (uint8_t i = 0; i < batchCount; ++i) {
+    if (batch[i].op == 1) {
+      rememberFromPhone(batch[i].ssid, batch[i].pass);
+    } else if (batch[i].op == 2) {
+      forgetWifi(batch[i].ssid);
+    } else if (batch[i].op == 3) {
+      ackPendingWifi();
+    } else if (batch[i].op == 4) {
+      resetPhoneWifi();
+    }
+  }
+  if (resultsSubscribed && isConnected()) {
+    queueKnown();
+  }
   if (intervalChanged) {
     intervalChanged = false;
+    saveInterval();
     updateInfo();
     uiDirty = true;
   }
@@ -2680,6 +3166,13 @@ void loop() {
       for (StoredCapture &cap : stored) {
         cap.queued = false;
       }
+      for (KnownWifi &row : knownWifi) {
+        if (row.epoch == inFlightEpoch) {
+          row.epoch = 0;
+        }
+      }
+      knownQueued = false;
+      inFlightEpoch = 0;
     }
   }
   if (captureFlushPending && resultsSubscribed && isConnected()) {
@@ -2715,10 +3208,9 @@ void loop() {
     uiDirty = true;
   }
 
-  // Linked: the phone chooses the interval and receives each sweep. Alone:
-  // a fixed patrol, with the speaker instead of a notification.
-  const uint32_t everyMs = isConnected() ? static_cast<uint32_t>(scanIntervalSec) * 1000
-                                         : static_cast<uint32_t>(kSoloIntervalSec) * 1000;
+  // The phone's interval drives the sweep whether or not the phone is here.
+  // Zero means wait. Alone, the speaker reports what the sweep finds.
+  const uint32_t everyMs = static_cast<uint32_t>(scanIntervalSec) * 1000;
   const bool due = everyMs > 0 && !otaActive && !otaJobBusy && millis() - lastScanMs >= everyMs;
   bool startScan = false;
   uint8_t kind = 0;

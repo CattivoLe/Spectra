@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -46,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -109,6 +111,7 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     var confirmClear by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var grouping by remember { mutableStateOf(Grouping.DATE) }
+    var importedShelf by rememberSaveable { mutableStateOf(false) }
     // Today starts open. Every other day stays folded until it is tapped.
     var expanded by remember { mutableStateOf(setOf(todayGroupId())) }
     val context = LocalContext.current
@@ -125,7 +128,10 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
         when (val added = history.importDocument(text)) {
             -1 -> notify(tr("Could not read that file."))
             0 -> notify(tr("Nothing new in that file."))
-            else -> notify(tr("Imported %d scans.", added))
+            else -> {
+                importedShelf = true
+                notify(tr("Imported %d scans.", added))
+            }
         }
     }
     if (confirmClear) {
@@ -133,10 +139,15 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
             onDismissRequest = { confirmClear = false },
             icon = { Icon(Icons.Rounded.DeleteSweep, null) },
             title = { Text(tr("Clear history?")) },
-            text = { Text(tr("Saved scans from this phone and the Cardputer are removed.")) },
+            text = {
+                Text(
+                    if (importedShelf) tr("Imported scans are removed. Scans on this phone stay.")
+                    else tr("Saved scans from this phone and the Cardputer are removed."),
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    history.clear()
+                    history.clearShelf(importedShelf)
                     confirmClear = false
                 }) { Text(tr("Clear history"), color = MaterialTheme.colorScheme.error) }
             },
@@ -150,11 +161,12 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
             onDismiss = { showSettings = false },
         )
     }
+    val shown = history.entries.filter { (it.importedFrom != null) == importedShelf }
     val groups = when (grouping) {
-        Grouping.DATE -> byDate(history.entries)
-        Grouping.PLACE -> byPlace(history.entries)
+        Grouping.DATE -> byDate(shown)
+        Grouping.PLACE -> byPlace(shown)
     }
-    val pins = mapPins(history.entries)
+    val pins = mapPins(shown)
     val showMap = grouping == Grouping.PLACE && pins.isNotEmpty()
     SpectraScreen(
         title = tr("History"),
@@ -164,11 +176,11 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
             IconButton(onClick = {
                 importFile.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
             }) { Icon(Icons.Rounded.FileOpen, contentDescription = tr("Import")) }
-            if (history.entries.isNotEmpty()) {
-                ExportMenu(history.entries)
+            if (shown.isNotEmpty()) {
+                ExportMenu(shown)
             }
             IconButton(onClick = { showSettings = true }) { Icon(Icons.Rounded.Settings, contentDescription = tr("History settings")) }
-            if (history.entries.isNotEmpty()) {
+            if (shown.isNotEmpty()) {
                 IconButton(onClick = { confirmClear = true }) { Icon(Icons.Rounded.DeleteSweep, contentDescription = tr("Clear")) }
             }
         },
@@ -183,16 +195,30 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
         },
         fill = if (showMap) {
             {
-                HistoryPlaceMap(history.entries, onOpen = { nav.history(it) })
-                GroupingBar(grouping, Modifier.align(Alignment.TopCenter)) { grouping = it }
+                HistoryPlaceMap(shown, onOpen = { nav.history(it) })
+                Column(Modifier.align(Alignment.TopCenter)) {
+                    ShelfBar(importedShelf) { importedShelf = it }
+                    GroupingBar(grouping) { grouping = it }
+                }
             }
         } else {
             null
         },
     ) {
         if (!showMap && history.entries.isNotEmpty()) {
+            item(key = "shelf") {
+                ShelfBar(importedShelf) { importedShelf = it }
+            }
             item(key = "grouping") {
                 GroupingBar(grouping) { grouping = it }
+            }
+        }
+        if (!showMap && history.entries.isNotEmpty() && shown.isEmpty()) {
+            item(key = "shelf-empty") {
+                SectionFooter(
+                    if (importedShelf) tr("Nothing imported yet.")
+                    else tr("Nothing saved on this phone."),
+                )
             }
         }
         for (group in groups) {
@@ -223,9 +249,17 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
                 }
             }
         }
-        if (history.entries.isNotEmpty()) {
+        if (shown.isNotEmpty()) {
             item(key = "hint") { SectionFooter(tr("Swipe a saved scan to the left to delete it.")) }
         }
+    }
+}
+
+@Composable
+private fun ShelfBar(imported: Boolean, modifier: Modifier = Modifier, onSelect: (Boolean) -> Unit) {
+    ChipRow(modifier) {
+        ToggleChip(tr("On this phone"), !imported, { onSelect(false) })
+        ToggleChip(tr("Imported"), imported, { onSelect(true) })
     }
 }
 
@@ -355,10 +389,15 @@ private fun HistoryRow(entry: HistoryEntry, showPlace: Boolean, onOpen: () -> Un
         },
     ) {
         val place = entry.placeLabel?.takeIf { showPlace }
+        val who = entry.importedFrom ?: sourceName(entry.source)
+        val line = when {
+            place != null && entry.importedFrom != null -> "${ago(entry.savedAt)} · $place · ${entry.importedFrom}"
+            else -> "${ago(entry.savedAt)} · ${place ?: who}"
+        }
         Box(Modifier.background(MaterialTheme.colorScheme.surfaceContainer)) {
             ListRow(
                 title = entry.rowTitle,
-                subtitle = "${ago(entry.savedAt)} · ${place ?: sourceName(entry.source)}",
+                subtitle = line,
                 subtitleLines = 1,
                 leading = { IconTile(if (fromSensor) Icons.Rounded.Memory else kindIcon(iconKind), kindTint(iconKind)) },
                 badges = {
@@ -383,7 +422,8 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
         }) {}
         return
     }
-    val footer = "${sourceName(entry.source)} · ${dateTime(entry.savedAt)}"
+    val who = entry.importedFrom ?: sourceName(entry.source)
+    val footer = "$who · ${dateTime(entry.savedAt)}"
     val context = LocalContext.current
     SpectraScreen(
         title = entry.rowTitle,

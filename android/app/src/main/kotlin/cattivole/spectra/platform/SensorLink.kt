@@ -87,6 +87,7 @@ class SensorLink(
     val isConnected: Boolean get() = state is State.Connected || state is State.Demo
 
     private val app = context.applicationContext
+    private val knownNetworks = KnownNetworks(context)
     private val prefs = app.getSharedPreferences("spectra", Context.MODE_PRIVATE)
     private val adapter: BluetoothAdapter? =
         app.getSystemService(BluetoothManager::class.java)?.adapter
@@ -326,10 +327,20 @@ class SensorLink(
         publish()
     }
 
+    /** The sensor draws this list. Eighty is as many as its screen buffer keeps. */
+    private fun pushKnownNetworks() {
+        val ctrl = control ?: return
+        enqueue(ctrl, SensorProtocol.Command.ResetKnown.data)
+        knownNetworks.all().take(80).forEach { (ssid, password) ->
+            enqueue(ctrl, SensorProtocol.Command.RememberWifi(ssid, password).data)
+        }
+    }
+
     fun setLiveInterval(seconds: Int) {
         liveInterval = seconds
         prefs.edit().putInt(KEY_INTERVAL, seconds).apply()
         enqueue(control, SensorProtocol.Command.SetInterval(seconds).data)
+        enqueue(control, SensorProtocol.Command.SetPeer(phoneName(app)).data)
         demo?.intervalSeconds = seconds
         publish()
     }
@@ -446,7 +457,9 @@ class SensorLink(
         val record = result.scanRecord
         val name = record?.deviceName ?: result.device.name
         val services = record?.serviceUuids?.map { it.uuid } ?: emptyList()
-        val spectra = services.any { it == SensorProtocol.SERVICE } || (name?.startsWith("Spectra-") == true)
+        val spectra = services.any { it == SensorProtocol.SERVICE } ||
+            name == "M5Cardputer" ||
+            (name?.startsWith("Spectra-") == true)
         if (!spectra || state !is State.Searching) return
         val address = result.device.address ?: return
         if (shouldReconnect && address == prefs.getString(KEY_SENSOR, null)) {
@@ -548,6 +561,14 @@ class SensorLink(
             publish()
             return
         }
+        if (message is SensorProtocol.Message.KnownWifi) {
+            knownNetworks.remember(message.ssid, message.password)
+            if (message.index + 1 == message.total) {
+                enqueue(control, SensorProtocol.Command.AckKnown.data)
+                pushKnownNetworks()
+            }
+            return
+        }
         if (message is SensorProtocol.Message.Battery) {
             batteryLevel = message.level
             isCharging = message.isCharging
@@ -627,6 +648,7 @@ class SensorLink(
         firmwareUpdate = FirmwareUpdateProgress(FirmwareUpdateProgress.Stage.Failed(message))
         // The update paused automatic scans; give them back.
         enqueue(control, SensorProtocol.Command.SetInterval(liveInterval).data)
+        enqueue(control, SensorProtocol.Command.SetPeer(phoneName(app)).data)
         publish()
     }
 
@@ -746,8 +768,10 @@ class SensorLink(
                     .apply()
                 state = State.Connected(name ?: "Spectra")
                 radio.setWants(sensor = false, devices = radioKeepsDevices())
-                // The firmware forgets the interval on disconnect, so set it every time.
+                // The sensor keeps the last interval, and the phone sets it again on every connect.
                 enqueue(control, SensorProtocol.Command.SetInterval(liveInterval).data)
+                enqueue(control, SensorProtocol.Command.SetPeer(phoneName(app)).data)
+                pushKnownNetworks()
                 if (liveInterval == 0) enqueue(control, SensorProtocol.Command.ScanOnce.data)
                 publish()
             }

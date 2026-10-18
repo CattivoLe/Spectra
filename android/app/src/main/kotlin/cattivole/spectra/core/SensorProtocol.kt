@@ -56,6 +56,15 @@ object SensorProtocol {
         data class SetInterval(val seconds: Int) : Command()
         data class AckSaved(val captureId: Long) : Command()
         data object ScanLora : Command()
+        /** Store a network the phone already trusts. The sensor also stores one after its own join succeeds. */
+        data class RememberWifi(val ssid: String, val password: String) : Command()
+        data class ForgetWifi(val ssid: String) : Command()
+        /** This phone's system name, shown on the sensor while the link is up. */
+        data class SetPeer(val name: String) : Command()
+        /** The sensor's uploaded batch is stored. The sensor deletes that batch. */
+        data object AckKnown : Command()
+        /** The next RememberWifi commands replace the list on the sensor. */
+        data object ResetKnown : Command()
 
         val data: ByteArray
             get() = when (this) {
@@ -69,7 +78,37 @@ object SensorProtocol {
                     (captureId shr 16).toByte(),
                     (captureId shr 24).toByte(),
                 )
+                is RememberWifi -> wifiCreds(0x05, ssid, password)
+                is ForgetWifi -> wifiCreds(0x06, ssid, null)
+                AckKnown -> byteArrayOf(0x08)
+                ResetKnown -> byteArrayOf(0x09)
+                is SetPeer -> byteArrayOf(0x07) + name.encodeToByteArray().let { bytes ->
+                    val end = utf8Cut(bytes, 31)
+                    bytes.copyOf(end)
+                }
             }
+
+        private fun wifiCreds(command: Int, ssid: String, password: String?): ByteArray {
+            val name = ssid.encodeToByteArray().let { it.copyOf(utf8Cut(it, 32)) }
+            val secret = password?.encodeToByteArray()?.let { it.copyOf(utf8Cut(it, 64)) }
+            val out = ArrayList<Byte>(3 + name.size + (secret?.size ?: 0))
+            out.add(command.toByte())
+            out.add(name.size.toByte())
+            name.forEach { out.add(it) }
+            if (secret != null) {
+                out.add(secret.size.toByte())
+                secret.forEach { out.add(it) }
+            }
+            return out.toByteArray()
+        }
+
+        /** End index of a UTF-8 prefix that fits in [max] bytes. */
+        private fun utf8Cut(bytes: ByteArray, max: Int): Int {
+            if (bytes.size <= max) return bytes.size
+            var end = max
+            while (end > 0 && (bytes[end].toInt() and 0xC0) == 0x80) end--
+            return end
+        }
     }
 
     sealed class Message {
@@ -110,6 +149,7 @@ object SensorProtocol {
         }
         data class SavedPosition(val captureId: Long, val latitude: Double, val longitude: Double) : Message()
         data class Gps(val valid: Boolean, val latitude: Double, val longitude: Double, val satellites: Int) : Message()
+        data class KnownWifi(val index: Int, val total: Int, val ssid: String, val password: String) : Message()
         data class Saved(
             val kind: Int,
             val captureId: Long,
@@ -142,6 +182,7 @@ object SensorProtocol {
         SAVED_LORA(0x20),
         GPS(0x21),
         LORA_PROGRESS(0x22),
+        KNOWN_WIFI(0x23),
         ;
 
         companion object {
@@ -152,6 +193,7 @@ object SensorProtocol {
     fun decode(data: ByteArray): Message? {
         if (data.isEmpty()) return null
         val type = MessageType.from(data.u8(0)) ?: return null
+        if (type == MessageType.KNOWN_WIFI) return decodeKnownWifi(data)
         if (type == MessageType.SAVED_GPS) return decodeSavedGps(data)
         if (type == MessageType.GPS) return decodeGps(data)
         if (type == MessageType.SAVED_WIFI || type == MessageType.SAVED_BLE ||
@@ -190,7 +232,7 @@ object SensorProtocol {
                 Message.LoraProgress(scanId, data.u32le(3), data.u8(7), data.u16le(8), data.u16le(10))
             }
             MessageType.SAVED_WIFI, MessageType.SAVED_BLE, MessageType.SAVED_LAN, MessageType.SAVED_LORA -> decodeSaved(data)
-            MessageType.SAVED_GPS, MessageType.GPS -> null
+            MessageType.SAVED_GPS, MessageType.GPS, MessageType.KNOWN_WIFI -> null
         }
     }
 
@@ -199,6 +241,20 @@ object SensorProtocol {
     private fun i16(data: ByteArray, index: Int): Int {
         val v = data.u16le(index)
         return if (v >= 0x8000) v - 0x10000 else v
+    }
+
+    private fun decodeKnownWifi(data: ByteArray): Message.KnownWifi? {
+        if (data.size < 5) return null
+        val index = data.u8(1)
+        val total = data.u8(2)
+        val ssidLen = data.u8(3)
+        if (ssidLen == 0 || ssidLen > 32 || data.size < 5 + ssidLen) return null
+        val ssid = String(data, 4, ssidLen, Charsets.UTF_8)
+        val passLen = data.u8(4 + ssidLen)
+        if (passLen > 64 || data.size < 5 + ssidLen + passLen) return null
+        val password = if (passLen == 0) "" else String(data, 5 + ssidLen, passLen, Charsets.UTF_8)
+        if (total == 0 || index >= total) return null
+        return Message.KnownWifi(index, total, ssid, password)
     }
 
     private fun decodeSavedGps(data: ByteArray): Message.SavedPosition? {
@@ -409,6 +465,17 @@ object SensorProtocol {
                 out.u8(message.satellites)
                 out.u8(if (message.valid) 1 else 0)
             }
+            is Message.KnownWifi -> {
+                val name = message.ssid.encodeToByteArray().let { it.copyOf(it.size.coerceAtMost(32)) }
+                val secret = message.password.encodeToByteArray().let { it.copyOf(it.size.coerceAtMost(64)) }
+                out.u8(MessageType.KNOWN_WIFI.raw)
+                out.u8(message.index)
+                out.u8(message.total)
+                out.u8(name.size)
+                name.forEach { out.u8(it.toInt() and 0xFF) }
+                out.u8(secret.size)
+                secret.forEach { out.u8(it.toInt() and 0xFF) }
+            }
             is Message.Saved -> Unit
         }
         return out.toByteArray()
@@ -549,6 +616,10 @@ data class SensorInfo(
     val latitude: Double? = null,
     val longitude: Double? = null,
     val satellites: Int? = null,
+    /** Firmware's fixed name, such as M5Cardputer. Absent on older firmware. */
+    val name: String? = null,
+    /** SSIDs the sensor will rejoin. Passwords are not on this characteristic. */
+    val known: List<String> = emptyList(),
 ) {
     companion object {
         fun decode(json: String): SensorInfo? {
@@ -571,6 +642,8 @@ data class SensorInfo(
                 latitude = if (lat != null && lon != null) lat / 1e7 else null,
                 longitude = if (lat != null && lon != null) lon / 1e7 else null,
                 satellites = jsonInt(json, "sats"),
+                name = jsonString(json, "name"),
+                known = jsonStrings(json, "known"),
             )
         }
 

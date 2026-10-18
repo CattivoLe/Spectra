@@ -17,6 +17,15 @@ nonisolated enum SensorProtocol {
         case setInterval(seconds: Int)
         case ackSaved(captureID: UInt32)
         case scanLoRa
+        /// Store a network the phone already trusts. The sensor also stores one after its own join succeeds.
+        case rememberWifi(ssid: String, password: String)
+        case forgetWifi(ssid: String)
+        /// This phone's system name, shown on the sensor while the link is up.
+        case setPeer(name: String)
+        /// The sensor's uploaded batch is stored. The sensor deletes that batch.
+        case ackKnown
+        /// The next rememberWifi commands replace the list on the sensor.
+        case resetKnown
 
         var data: Data {
             switch self {
@@ -34,7 +43,31 @@ nonisolated enum SensorProtocol {
                     UInt8((captureID >> 16) & 0xFF),
                     UInt8((captureID >> 24) & 0xFF),
                 ])
+            case .rememberWifi(let ssid, let password):
+                Self.wifiCreds(0x05, ssid: ssid, password: password)
+            case .forgetWifi(let ssid):
+                Self.wifiCreds(0x06, ssid: ssid, password: nil)
+            case .setPeer(let name):
+                var data = Data([0x07])
+                data.append(contentsOf: name.utf8.prefix(31))
+                return data
+            case .ackKnown:
+                Data([0x08])
+            case .resetKnown:
+                Data([0x09])
             }
+        }
+
+        private static func wifiCreds(_ command: UInt8, ssid: String, password: String?) -> Data {
+            let name = Data(ssid.utf8.prefix(32))
+            var data = Data([command, UInt8(name.count)])
+            data.append(name)
+            if let password {
+                let secret = Data(password.utf8.prefix(64))
+                data.append(UInt8(secret.count))
+                data.append(secret)
+            }
+            return data
         }
     }
 
@@ -74,6 +107,7 @@ nonisolated enum SensorProtocol {
         case savedPosition(captureID: UInt32, latitude: Double, longitude: Double)
         case gps(valid: Bool, latitude: Double, longitude: Double, satellites: Int)
         case saved(SavedRecord)
+        case knownWifi(index: Int, total: Int, ssid: String, password: String)
     }
 
     struct LoRaDevice: Equatable {
@@ -128,6 +162,7 @@ nonisolated enum SensorProtocol {
         case savedLora = 0x20
         case gps = 0x21
         case loraProgress = 0x22
+        case knownWifi = 0x23
     }
 
     /// Decodes one Results notification, or returns nil for anything malformed
@@ -146,6 +181,9 @@ nonisolated enum SensorProtocol {
         }
         if first == MessageType.gps.rawValue {
             return decodeGps(bytes)
+        }
+        if first == MessageType.knownWifi.rawValue {
+            return decodeKnownWifi(bytes)
         }
         guard let type = MessageType(rawValue: first), bytes.count >= 3 else {
             return nil
@@ -311,7 +349,27 @@ nonisolated enum SensorProtocol {
 
         case .savedGps, .gps:
             return nil
+
+        case .knownWifi:
+            return decodeKnownWifi(bytes)
         }
+    }
+
+    private static func decodeKnownWifi(_ bytes: [UInt8]) -> Message? {
+        guard bytes.count >= 5 else { return nil }
+        let index = Int(bytes[1])
+        let total = Int(bytes[2])
+        let ssidLen = Int(bytes[3])
+        guard ssidLen > 0, ssidLen <= 32, bytes.count >= 5 + ssidLen else { return nil }
+        let ssid = String(bytes: bytes[4..<(4 + ssidLen)], encoding: .utf8) ?? ""
+        let passLen = Int(bytes[4 + ssidLen])
+        guard passLen <= 64, bytes.count >= 5 + ssidLen + passLen, total > 0, index < total, !ssid.isEmpty else {
+            return nil
+        }
+        let password = passLen == 0
+            ? ""
+            : (String(bytes: bytes[(5 + ssidLen)..<(5 + ssidLen + passLen)], encoding: .utf8) ?? "")
+        return .knownWifi(index: index, total: total, ssid: ssid, password: password)
     }
 
     private static func decodeSavedGps(_ bytes: [UInt8]) -> Message? {
@@ -487,6 +545,17 @@ nonisolated enum SensorProtocol {
             // The phone never sends a stored capture. The arm exists so the
             // switch stays exhaustive.
             break
+
+        case .knownWifi(let index, let total, let ssid, let password):
+            bytes.append(MessageType.knownWifi.rawValue)
+            bytes.append(UInt8(clamping: index))
+            bytes.append(UInt8(clamping: total))
+            let name = Data(ssid.utf8.prefix(32))
+            let secret = Data(password.utf8.prefix(64))
+            bytes.append(UInt8(name.count))
+            bytes.append(contentsOf: name)
+            bytes.append(UInt8(secret.count))
+            bytes.append(contentsOf: secret)
         }
         return Data(bytes)
     }
@@ -596,10 +665,15 @@ nonisolated struct SensorInfo: Equatable {
     var latitude: Double?
     var longitude: Double?
     var satellites: Int?
+    /// Firmware's fixed name, such as M5Cardputer. Absent on older firmware.
+    var name: String?
+    /// SSIDs the sensor will rejoin. Passwords are not on this characteristic.
+    var known: [String]
 
     init(proto: Int, fw: String, chip: String, bands: [String], interval: Int, ota: Bool = false,
          batteryLevel: Int? = nil, isCharging: Bool? = nil, lora: Bool = false,
-         latitude: Double? = nil, longitude: Double? = nil, satellites: Int? = nil) {
+         latitude: Double? = nil, longitude: Double? = nil, satellites: Int? = nil,
+         name: String? = nil, known: [String] = []) {
         self.proto = proto
         self.fw = fw
         self.chip = chip
@@ -612,12 +686,14 @@ nonisolated struct SensorInfo: Equatable {
         self.latitude = latitude
         self.longitude = longitude
         self.satellites = satellites
+        self.name = name
+        self.known = known
     }
 }
 
 extension SensorInfo: Decodable {
     private enum CodingKeys: String, CodingKey {
-        case proto, fw, chip, bands, interval, ota, bat, chg, lora, lat, lon, sats
+        case proto, fw, chip, bands, interval, ota, bat, chg, lora, lat, lon, sats, name, known
     }
 
     init(from decoder: Decoder) throws {
@@ -640,5 +716,7 @@ extension SensorInfo: Decodable {
             longitude = nil
         }
         satellites = try container.decodeIfPresent(Int.self, forKey: .sats)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        known = try container.decodeIfPresent([String].self, forKey: .known) ?? []
     }
 }

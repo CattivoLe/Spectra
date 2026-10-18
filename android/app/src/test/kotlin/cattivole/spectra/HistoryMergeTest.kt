@@ -111,7 +111,7 @@ class HistoryMergeTest {
     }
 
     @Test
-    fun wifiAndInternetFromTheSamePlaceBecomeOneSession() {
+    fun wifiAndLanFromTheSamePlaceStaySeparate() {
         val day = 1_700_000_000_000L
         val wifi = HistoryEntry(
             id = "wifi", kind = "networks", savedAt = day, source = "This phone", captureId = null,
@@ -124,12 +124,44 @@ class HistoryMergeTest {
             latitude = 55.7512, longitude = 37.6181,
         )
         val joined = HistoryStore.coalesce(listOf(wifi, internet))
+        assertEquals(2, joined.size)
+        assertEquals(setOf("networks", "lan"), joined.map { it.kind }.toSet())
+    }
+
+    @Test
+    fun lanVisitsOfTheSameNetworkStayOneSession() {
+        val day = 1_700_000_000_000L
+        val hosts = HistoryEntry(
+            id = "hosts", kind = "lan", savedAt = day, source = "This phone", captureId = null,
+            placeKey = "lan:gw:aa", lan = listOf(lan("192.168.1.1", day, day, "router")),
+            latitude = 55.7510, longitude = 37.6180,
+        )
+        val later = HistoryEntry(
+            id = "later", kind = "lan", savedAt = day + 1_000, source = "This phone", captureId = null,
+            placeKey = "lan:gw:aa", lan = listOf(lan("192.168.1.20", day, day, "tv")),
+            latitude = 55.7512, longitude = 37.6181,
+        )
+        val joined = HistoryStore.coalesce(listOf(hosts, later))
         assertEquals(1, joined.size)
-        assertEquals(listOf("networks", "lan"), joined[0].shownKinds())
-        assertEquals(1, joined[0].networks.size)
-        assertEquals(1, joined[0].lan.size)
-        assertEquals("lan:gw:aa", joined[0].placeKey)
-        assertEquals(2, joined[0].itemCount)
+        assertEquals(2, joined[0].lan.size)
+        assertEquals("lan", joined[0].kind)
+    }
+
+    @Test
+    fun aStoredWifiAndLanCardSplitsApart() {
+        val day = 1_700_000_000_000L
+        val mixed = HistoryEntry(
+            id = "mix", kind = "networks", savedAt = day, source = "This phone", captureId = null,
+            placeKey = "geo:1_2",
+            networks = listOf(network(1, day, day)),
+            lan = listOf(lan("192.168.1.1", day, day, "router")),
+        )
+        val split = HistoryStore.coalesce(listOf(mixed))
+        assertEquals(2, split.size)
+        assertEquals(1, split.first { it.kind == "networks" }.networks.size)
+        assertTrue(split.first { it.kind == "networks" }.lan.isEmpty())
+        assertEquals(1, split.first { it.kind == "lan" }.lan.size)
+        assertTrue(split.first { it.kind == "lan" }.networks.isEmpty())
     }
 
     @Test
@@ -160,13 +192,35 @@ class HistoryMergeTest {
             id = "wifi", kind = "networks", savedAt = day, source = "This phone", captureId = null,
             networks = listOf(network(1, day, day)),
         )
-        val document = HistoryStore.encodeDocument(listOf(wifi))
+        val document = HistoryStore.encodeDocument(listOf(wifi), "Pixel 8")
         val again = HistoryStore.mergeImport(listOf(wifi), document)
         assertEquals(0, again!!.second)
         val fresh = HistoryStore.mergeImport(emptyList(), document)
         assertEquals(1, fresh!!.second)
         assertEquals(1, fresh.first.single().networks.size)
+        assertEquals("Pixel 8", fresh.first.single().importedFrom)
         assertEquals(null, HistoryStore.mergeImport(emptyList(), "not a history"))
+    }
+
+    @Test
+    fun importStaysOffThisPhonesShelf() {
+        val day = 1_700_000_000_000L
+        val local = HistoryEntry(
+            id = "local", kind = "networks", savedAt = day, source = "This phone", captureId = null,
+            placeKey = "geo:1_2", networks = listOf(network(1, day, day)),
+            latitude = 55.7510, longitude = 37.6180,
+        )
+        val incoming = HistoryEntry(
+            id = "other", kind = "networks", savedAt = day + 1_000, source = "This phone", captureId = null,
+            placeKey = "geo:1_2", networks = listOf(network(1, day, day)),
+            latitude = 55.7512, longitude = 37.6181,
+        )
+        val document = HistoryStore.encodeDocument(listOf(incoming), "Pixel 8")
+        val merged = HistoryStore.mergeImport(listOf(local), document)!!
+        assertEquals(1, merged.second)
+        assertEquals(2, merged.first.size)
+        assertEquals(null, merged.first.first { it.id == "local" }.importedFrom)
+        assertEquals("Pixel 8", merged.first.first { it.id == "other" }.importedFrom)
     }
 
     @Test

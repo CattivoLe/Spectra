@@ -90,12 +90,14 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(WifiSort.SIGNAL) }
     var showOut by rememberSaveable { mutableStateOf(true) }
+    var openOnly by rememberSaveable { mutableStateOf(false) }
     var band by rememberSaveable { mutableStateOf<Band?>(null) }
     var menu by rememberSaveable { mutableStateOf(false) }
     val all = store.networks().values
     val needle = query.trim()
     val networks = all.filter { network ->
         (showOut || network.isInRange) &&
+            (!openOnly || network.latest.auth.isOpen()) &&
             (band == null || network.latest.band == band) &&
             (
                 needle.isEmpty() ||
@@ -174,6 +176,7 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
                 ToggleChip(tr("Signal"), sort == WifiSort.SIGNAL, { sort = WifiSort.SIGNAL })
                 ToggleChip(tr("Name"), sort == WifiSort.NAME, { sort = WifiSort.NAME })
                 ToggleChip(tr("Channel"), sort == WifiSort.CHANNEL, { sort = WifiSort.CHANNEL })
+                ToggleChip(tr("Open"), openOnly, { openOnly = !openOnly })
                 if (bands.size > 1) {
                     for (shown in Band.entries.filter { it in bands }) {
                         ToggleChip(bandLabel(shown), band == shown, { band = if (band == shown) null else shown })
@@ -658,7 +661,9 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
             header = tr("Observed"),
             key = "observed",
             rows = buildList {
-                add { InfoRow(tr("First seen"), clockTime(network.firstSeen)) }
+                val recorded = model.history.earliestNetworkSeen(network.id)
+                val first = if (recorded != null && recorded < network.firstSeen) recorded else network.firstSeen
+                add { InfoRow(tr("First seen"), clockTime(first)) }
                 add { InfoRow(tr("Last seen"), ago(network.lastSeen, if (snapshot) entry?.savedAt ?: now else now)) }
                 add { InfoRow(tr("Readings"), "${network.samples.size}") }
                 if (network.missedScans > 0) add { InfoRow(tr("Missed scans"), "${network.missedScans}") }

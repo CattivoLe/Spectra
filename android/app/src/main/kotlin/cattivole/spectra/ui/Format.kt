@@ -118,7 +118,7 @@ fun LanDevice.icon(): ImageVector {
         "macOS" -> return Icons.Rounded.Laptop
         "tvOS", "Tizen", "webOS", "Android TV", "Google TV" -> return Icons.Rounded.Tv
         "watchOS" -> return Icons.Rounded.Watch
-        "Android" -> return Icons.Rounded.PhoneAndroid
+        "Android" -> return if (looksLikeTelevision()) Icons.Rounded.Tv else Icons.Rounded.PhoneAndroid
         "Windows" -> return Icons.Rounded.DesktopWindows
     }
     when (notable) {
@@ -151,6 +151,20 @@ fun LanDevice.icon(): ImageVector {
         "synology" in maker || "qnap" in maker -> Icons.Rounded.Storage
         else -> Icons.Rounded.Apps
     }
+}
+
+/** Android TV boxes are often labelled just Android, which would draw a phone. */
+private fun LanDevice.looksLikeTelevision(): Boolean {
+    if (openPorts.any { it.number == 6466 }) return true
+    val title = displayName.lowercase()
+    if (
+        "android tv" in title || "google tv" in title || " tv" in title || title.endsWith("tv") ||
+        "bravia" in title || "chromecast" in title || "shield" in title
+    ) {
+        return true
+    }
+    val servicesBlob = services.joinToString(" ") { "${it.type} ${it.name}" }.lowercase()
+    return "androidtv" in servicesBlob || "googlecast" in servicesBlob || "bravia" in servicesBlob
 }
 
 // Bluetooth

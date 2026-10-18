@@ -1,6 +1,7 @@
 import CoreBluetooth
 import Foundation
 import Observation
+import UIKit
 import os
 
 /// Connection and firmware update trail, readable in Console as subsystem cattivole.spectra.
@@ -41,6 +42,7 @@ final class SensorLink: NSObject {
     /// first step of a scan, and again once the scan ends.
     private(set) var loraTune: (freqKHz: UInt32, spreadingFactor: Int, step: Int, total: Int)?
     private var loraWatch: Task<Void, Never>?
+    private let knownNetworks = KnownNetworks()
     struct CapFix: Equatable {
         var latitude: Double
         var longitude: Double
@@ -56,6 +58,7 @@ final class SensorLink: NSObject {
         didSet {
             UserDefaults.standard.set(liveInterval, forKey: Keys.liveInterval)
             send(.setInterval(seconds: liveInterval))
+            send(.setPeer(name: UIDevice.current.name))
             demo?.interval = liveInterval
         }
     }
@@ -263,6 +266,14 @@ final class SensorLink: NSObject {
 
     // MARK: Plumbing
 
+    /// The sensor draws this list. Eighty is as many as its screen buffer keeps.
+    private func pushKnownNetworks() {
+        send(.resetKnown)
+        for network in knownNetworks.all().prefix(80) {
+            send(.rememberWifi(ssid: network.ssid, password: network.password))
+        }
+    }
+
     private func send(_ command: SensorProtocol.Command) {
         guard let sensor, let control, case .connected = state else { return }
         sensor.writeValue(command.data, for: control, type: .withResponse)
@@ -318,6 +329,14 @@ final class SensorLink: NSObject {
             if case .saved(let record) = message {
                 if history.ingest(record, source: sensorSource) {
                     send(.ackSaved(captureID: record.captureID))
+                }
+                return
+            }
+            if case .knownWifi(let index, let total, let ssid, let password) = message {
+                knownNetworks.remember(ssid: ssid, password: password)
+                if index + 1 == total {
+                    send(.ackKnown)
+                    pushKnownNetworks()
                 }
                 return
             }
@@ -607,6 +626,7 @@ final class SensorLink: NSObject {
                 firmwareUpdate = FirmwareUpdateProgress(stage: .succeeded(version: info?.fw ?? ""))
                 // The reconnect happened while the update still held scans back.
                 send(.setInterval(seconds: liveInterval))
+                send(.setPeer(name: UIDevice.current.name))
                 return
             default:
                 break
@@ -774,13 +794,15 @@ extension SensorLink: CBPeripheralDelegate {
     ) {
         guard characteristic.uuid == SensorProtocol.results, characteristic.isNotifying else { return }
         state = .connected(name: name(of: peripheral))
-        // The firmware forgets the interval on disconnect, so set it every
-        // time. An update in progress keeps the sensor quiet instead.
+        // The sensor keeps the last interval, and the phone sets it again on
+        // every connect. An update in progress keeps the sensor quiet instead.
         if updateHoldsScans {
             send(.setInterval(seconds: 0))
             return
         }
         send(.setInterval(seconds: liveInterval))
+        send(.setPeer(name: UIDevice.current.name))
+        pushKnownNetworks()
         if liveInterval == 0 {
             send(.scanOnce)
         }
@@ -823,5 +845,38 @@ extension SensorLink: CBPeripheralDelegate {
         control = nil
         firmware = nil
         peripheral.discoverServices([SensorProtocol.service])
+    }
+}
+
+/// Every network a linked sensor has joined and handed over. The sensor only
+/// keeps a short unsent buffer; this is the list it draws from.
+private struct KnownNetworks {
+    struct Item {
+        var ssid: String
+        var password: String
+    }
+
+    private let key = "spectra-known-wifi"
+
+    func all() -> [Item] {
+        guard let text = UserDefaults.standard.string(forKey: key),
+              let data = text.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] else {
+            return []
+        }
+        return array.compactMap { row in
+            guard let ssid = row["ssid"], !ssid.isEmpty else { return nil }
+            return Item(ssid: ssid, password: row["pass"] ?? "")
+        }
+    }
+
+    func remember(ssid: String, password: String) {
+        guard !ssid.isEmpty else { return }
+        var rows = all().filter { $0.ssid != ssid }
+        rows.insert(Item(ssid: ssid, password: password), at: 0)
+        let array = rows.map { ["ssid": $0.ssid, "pass": $0.password] }
+        guard let data = try? JSONSerialization.data(withJSONObject: array),
+              let text = String(data: data, encoding: .utf8) else { return }
+        UserDefaults.standard.set(text, forKey: key)
     }
 }

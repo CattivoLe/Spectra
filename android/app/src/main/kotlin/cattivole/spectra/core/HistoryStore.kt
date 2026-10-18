@@ -28,9 +28,13 @@ data class HistoryLine(
  * network, host or Bluetooth device opens the same card as a live one. The
  * Cardputer sends summary [lines] only.
  *
- * A Wi‑Fi sweep and the LAN / internet check from the same day and place share
- * one entry. [placeKey] groups them, and a record is folded in by identity so
+ * One kind from the same day and place shares an entry. Wi‑Fi stays separate
+ * from the LAN session; the internet check belongs to that LAN session.
+ * [placeKey] groups them, and a record is folded in by identity so
  * [firstSeen] keeps the earliest sighting.
+ *
+ * [importedFrom] is the device that exported a received file. Those sessions
+ * stay on their own shelf and are not folded into this phone's history.
  */
 class HistoryEntry(
     val id: String,
@@ -40,7 +44,7 @@ class HistoryEntry(
     val captureId: Long?,
     /**
      * Stable key grouping scans into one session: a geo bucket, or the LAN
-     * network. Wi‑Fi and LAN from the same day and place share one entry.
+     * network. The same kind from the same day and place shares one entry.
      */
     val placeKey: String? = null,
     /** Human label for the place, shown in the by-place view. */
@@ -56,11 +60,13 @@ class HistoryEntry(
     /** Where this scan was saved. The phone's own fix, or the cap's fix on a sensor capture. */
     var latitude: Double? = null,
     var longitude: Double? = null,
+    /** Device that exported this session. Null for a scan saved on this phone. */
+    var importedFrom: String? = null,
 ) {
     val kindTitle: String
         get() = labelFor(kind)
 
-    /** Wi‑Fi and the internet check are one session, so the row names both. */
+    /** The row names the records this session actually holds. */
     fun shownKinds(): List<String> {
         val found = buildList {
             if (networks.isNotEmpty() || probes.isNotEmpty() || deauths.isNotEmpty()) add("networks")
@@ -100,10 +106,12 @@ private fun labelFor(kind: String): String = when (kind) {
 /**
  * Saved scans from the phone and from the Cardputer's side button.
  *
- * One entry collects a whole session. Wi‑Fi and the LAN / internet check from
- * the same day and place share it; other kinds stay separate. A capture id
- * from the sensor is imported once and keeps its own entry. The file is read
- * and written off the main thread; a large history must not stall the UI.
+ * One entry collects a whole session of one kind. Wi‑Fi and the LAN stay
+ * apart; the internet check folds into the LAN session for that network.
+ * A capture id from the sensor is imported once and keeps its own entry.
+ * A file received from someone else is tagged and kept on a separate shelf.
+ * The file is read and written off the main thread; a large history must not
+ * stall the UI.
  */
 class HistoryStore(context: Context) {
     var entries: List<HistoryEntry> = emptyList()
@@ -318,6 +326,12 @@ class HistoryStore(context: Context) {
 
     fun entry(id: String): HistoryEntry? = entries.firstOrNull { it.id == id }
 
+    /** Earliest sighting of this BSSID across every saved session, including imported ones. */
+    fun earliestNetworkSeen(bssid: MacAddress): Long? = entries.asSequence()
+        .flatMap { it.networks.asSequence() }
+        .filter { it.id == bssid }
+        .minOfOrNull { it.firstSeen }
+
     fun delete(id: String) {
         entries = entries.filterNot { it.id == id }
         encoded.remove(id)
@@ -330,6 +344,14 @@ class HistoryStore(context: Context) {
         encoded.clear()
         partials.clear()
         pendingFix.clear()
+        persist()
+        publish()
+    }
+
+    /** Drops one shelf. Imported sessions stay when the phone's own shelf is cleared, and the reverse. */
+    fun clearShelf(imported: Boolean) {
+        entries = entries.filter { (it.importedFrom != null) != imported }
+        encoded.keys.retainAll(entries.map { it.id }.toSet())
         persist()
         publish()
     }
@@ -370,9 +392,10 @@ class HistoryStore(context: Context) {
         longitude: Double? = null,
     ) {
         val now = System.currentTimeMillis()
-        // Wi‑Fi and the LAN / internet check share today's session for this
-        // place. A sensor capture keeps its own entry. A fix a few dozen metres
-        // away still joins, so GPS drift does not start a second card.
+        // The same kind shares today's session for this place. Wi‑Fi and the
+        // LAN stay apart; the internet check uses the LAN kind, so it joins
+        // that session. A sensor capture keeps its own entry. A fix a few
+        // dozen metres away still joins, so GPS drift does not start a second card.
         val index = entries.indexOfFirst { entry ->
             accepts(entry, kind, placeKey, now, latitude, longitude)
         }
@@ -463,32 +486,46 @@ class HistoryStore(context: Context) {
         const val LIMIT = 100
         const val CONNECTION_LIMIT = 12
 
-        /** The history file, so a scan can be handed to someone and opened again. */
-        fun encodeDocument(entries: List<HistoryEntry>): String {
+        /** A history file another Spectra can import. [from] is the device it came from. */
+        fun encodeDocument(entries: List<HistoryEntry>, from: String): String {
             val array = JSONArray()
             entries.forEach { array.put(encodeEntry(it)) }
-            return array.toString()
+            return JSONObject().put("from", from).put("entries", array).toString()
         }
 
         /**
-         * Folds a shared file into [existing]. The pair is the resulting list
-         * and how many sessions were new. Null when the text is not a history.
+         * Folds a shared file into [existing]. Received sessions are tagged with
+         * the exporting device and stay off this phone's shelf. The pair is the
+         * resulting list and how many sessions were new. Null when the text is
+         * not a history.
          */
         fun mergeImport(existing: List<HistoryEntry>, text: String): Pair<List<HistoryEntry>, Int>? {
             val trimmed = text.trim()
-            val array = try {
+            val parsed = try {
                 when {
-                    trimmed.startsWith("[") -> JSONArray(trimmed)
-                    trimmed.startsWith("{") -> JSONArray().put(JSONObject(trimmed))
+                    trimmed.startsWith("[") -> null to JSONArray(trimmed)
+                    trimmed.startsWith("{") -> {
+                        val obj = JSONObject(trimmed)
+                        when {
+                            obj.has("entries") -> obj.optString("from").takeIf { it.isNotBlank() } to (obj.optJSONArray("entries") ?: return null)
+                            obj.has("id") -> null to JSONArray().put(obj)
+                            else -> return null
+                        }
+                    }
                     else -> return null
                 }
             } catch (_: Exception) {
                 return null
             }
+            val (from, array) = parsed
             val decoded = (0 until array.length()).mapNotNull { index ->
                 array.optJSONObject(index)?.let { runCatching { decodeEntry(it) }.getOrNull() }
             }
             if (decoded.isEmpty()) return null
+            val origin = from ?: "Imported"
+            decoded.forEach { entry ->
+                if (entry.importedFrom.isNullOrBlank()) entry.importedFrom = origin
+            }
             val ids = existing.map { it.id }.toMutableSet()
             val captures = existing.mapNotNull { it.captureId }.toMutableSet()
             val fresh = decoded.filter { entry ->
@@ -502,14 +539,65 @@ class HistoryStore(context: Context) {
             return coalesce(fresh + existing).take(LIMIT) to fresh.size
         }
 
-        /** Joins Wi‑Fi and LAN / internet sessions that are the same outing. */
+        /**
+         * Splits a session that holds both Wi‑Fi and LAN records, then joins
+         * sessions of one kind that are the same outing. Imported sessions are
+         * not folded into this phone's history.
+         */
         fun coalesce(entries: List<HistoryEntry>): List<HistoryEntry> {
             val kept = mutableListOf<HistoryEntry>()
-            for (entry in entries.sortedByDescending { it.savedAt }) {
+            val imported = mutableListOf<HistoryEntry>()
+            for (entry in entries.flatMap { separateRadio(it) }.sortedByDescending { it.savedAt }) {
+                if (entry.importedFrom != null) {
+                    imported.add(entry)
+                    continue
+                }
                 val at = kept.indexOfFirst { together(it, entry) }
                 if (at < 0) kept.add(entry) else kept[at] = fold(kept[at], entry)
             }
-            return kept
+            return (kept + imported).sortedByDescending { it.savedAt }
+        }
+
+        /** A file saved while Wi‑Fi and LAN shared a card becomes two sessions. */
+        private fun separateRadio(entry: HistoryEntry): List<HistoryEntry> {
+            val wifi = entry.networks.isNotEmpty() || entry.probes.isNotEmpty() || entry.deauths.isNotEmpty()
+            val local = entry.lan.isNotEmpty() || entry.connections.isNotEmpty()
+            if (!wifi || !local || entry.captureId != null) return listOf(entry)
+            val wifiId = if (entry.kind == "lan") entry.id + ":wifi" else entry.id
+            val lanId = if (entry.kind == "lan") entry.id else entry.id + ":lan"
+            return listOf(
+                HistoryEntry(
+                    id = wifiId,
+                    kind = "networks",
+                    savedAt = entry.savedAt,
+                    source = entry.source,
+                    captureId = null,
+                    placeKey = entry.placeKey,
+                    placeLabel = entry.placeLabel,
+                    lines = entry.lines,
+                    networks = entry.networks,
+                    probes = entry.probes,
+                    deauths = entry.deauths,
+                    bluetooth = entry.bluetooth,
+                    latitude = entry.latitude,
+                    longitude = entry.longitude,
+                    importedFrom = entry.importedFrom,
+                ),
+                HistoryEntry(
+                    id = lanId,
+                    kind = "lan",
+                    savedAt = entry.savedAt,
+                    source = entry.source,
+                    captureId = null,
+                    placeKey = entry.placeKey,
+                    placeLabel = entry.placeLabel,
+                    lan = entry.lan,
+                    connections = entry.connections,
+                    latitude = entry.latitude,
+                    longitude = entry.longitude,
+                    importedFrom = entry.importedFrom,
+                ),
+            )
         }
 
         private fun accepts(
@@ -520,23 +608,20 @@ class HistoryStore(context: Context) {
             latitude: Double?,
             longitude: Double?,
         ): Boolean {
-            if (entry.captureId != null || !isSameDay(entry.savedAt, whenMs)) return false
+            if (entry.importedFrom != null || entry.captureId != null || !isSameDay(entry.savedAt, whenMs)) return false
             if (!sameFamily(entry.kind, kind)) return false
             return sameSpot(entry.placeKey, entry.latitude, entry.longitude, placeKey, latitude, longitude)
         }
 
         private fun together(a: HistoryEntry, b: HistoryEntry): Boolean {
+            if (a.importedFrom != null || b.importedFrom != null) return false
             if (a.captureId != null || b.captureId != null) return false
             if (!isSameDay(a.savedAt, b.savedAt)) return false
             if (!sameFamily(a.kind, b.kind)) return false
             return sameSpot(a.placeKey, a.latitude, a.longitude, b.placeKey ?: "", b.latitude, b.longitude)
         }
 
-        private fun sameFamily(a: String, b: String): Boolean {
-            val net = a == "networks" || a == "lan"
-            val other = b == "networks" || b == "lan"
-            return if (net && other) true else a == b
-        }
+        private fun sameFamily(a: String, b: String): Boolean = a == b
 
         private fun sameSpot(
             keyA: String?,
@@ -571,6 +656,7 @@ class HistoryStore(context: Context) {
             connections = mergeConnections(extra.connections, base.connections),
             latitude = base.latitude ?: extra.latitude,
             longitude = base.longitude ?: extra.longitude,
+            importedFrom = base.importedFrom ?: extra.importedFrom,
         )
 
         private fun preferKey(a: String?, b: String?): String? = when {
@@ -782,6 +868,7 @@ class HistoryStore(context: Context) {
             val lat = entry.latitude
             val lon = entry.longitude
             if (lat != null && lon != null) json.put("latitude", lat).put("longitude", lon)
+            entry.importedFrom?.let { json.put("importedFrom", it) }
             return json
         }
 
@@ -813,6 +900,7 @@ class HistoryStore(context: Context) {
                 connections = list("connections") { SavedConnection.fromJson(it) },
                 latitude = if (obj.has("latitude")) obj.getDouble("latitude") else null,
                 longitude = if (obj.has("longitude")) obj.getDouble("longitude") else null,
+                importedFrom = obj.optString("importedFrom").takeIf { it.isNotBlank() },
             )
         }
     }

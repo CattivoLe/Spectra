@@ -15,8 +15,10 @@ All UUIDs share one base; only the first group differs.
 | Results | `53500004-8F2D-4B6A-9C1E-737065637472` | notify |
 | Firmware | `53500005-8F2D-4B6A-9C1E-737065637472` | write |
 
-The device advertises the service UUID and the name `Spectra-XXXX`, where
-`XXXX` are the last two bytes of its Bluetooth address in hex.
+The device advertises the service UUID and a name fixed in that firmware.
+The Cardputer build advertises `M5Cardputer`. Other boards use their own
+fixed name. Older firmware advertised `Spectra-XXXX` from the Bluetooth
+address; centrals still accept that name.
 
 ## Info (read)
 
@@ -27,6 +29,13 @@ UTF-8 JSON, for example:
 ```
 
 `interval` is the current automatic scan interval in seconds, 0 when off.
+The phone sets it, and the sensor keeps that value across disconnect and
+reboot. While the phone is away, the same interval drives the patrol.
+`name` is the firmware's fixed sensor name, such as `M5Cardputer`.
+`known` is the SSIDs the sensor can rejoin, newest first: the phone's list
+plus any not yet uploaded. Passwords are not included. A long list is cut
+to what fits in this read. Both fields are omitted by firmware that predates
+them.
 `ota` is true when the Firmware characteristic is present. Firmware that
 predates updates omits the field; treat that as false.
 `bat` is the battery level (0–100); absent when the hardware has no battery
@@ -49,6 +58,24 @@ First byte is the command.
 | `0x02` | Set interval | `u8` seconds between scans, 0 stops |
 | `0x03` | Ack saved | `u32` capture id. The sensor deletes that stored capture |
 | `0x04` | Scan LoRa | — |
+| `0x05` | Remember network | `u8` SSID length (1–32), SSID bytes, `u8` password length (0–64), password bytes |
+| `0x06` | Forget network | `u8` SSID length (1–32), SSID bytes |
+| `0x07` | Set central name | UTF-8 device name, the rest of the write, at most 31 bytes |
+| `0x08` | Ack known | — |
+| `0x09` | Reset known list | — |
+
+`0x05` adds one network to the list the sensor shows. Passwords are included
+so a known network can be joined from the picker. `0x09` clears that list;
+the phone sends it, then one `0x05` per network, newest first. The phone
+keeps every network the sensor has ever uploaded. The sensor shows the
+newest 80 of that list and does not upload them back.
+
+The sensor itself remembers at most 8 networks it joined and has not yet
+handed over. On each connection it uploads those (`0x23`). `0x08` means the
+phone stored that batch; the sensor then deletes it. A failed join is not
+stored. `0x07` is the phone's own system name; the sensor shows it while the
+link is up and clears it on disconnect. A central that does not send these
+is unchanged. Firmware that does not know a command ignores it.
 
 `0x04` listens across the EU868 and RU864 channels on a Cap LoRa-1262,
 at spreading factors 7, 9 and 12. It is ignored
@@ -317,6 +344,24 @@ status bar. Older apps ignore the type.
 | 7 | 1 | spreading factor, 7–12 |
 | 8 | 2 | step, 1-based (`u16`) |
 | 10 | 2 | total steps (`u16`) |
+
+### `0x23` Known network
+
+One network the sensor joined and has not yet handed to the phone. Sent on
+each connection while any are waiting, and again after a later successful
+join. The phone stores the SSID and password, and when `index + 1 == total`
+answers with control `0x08`. Until that ack the sensor sends the batch again
+next time. Passwords are not repeated in Info.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x23` |
+| 1 | 1 | index of this network |
+| 2 | 1 | number of networks in the batch |
+| 3 | 1 | SSID length *n* (1–32) |
+| 4 | *n* | SSID |
+| 4+*n* | 1 | password length *m* (0–64) |
+| 5+*n* | *m* | password |
 
 ### `0x20` Saved LoRa device (v7)
 

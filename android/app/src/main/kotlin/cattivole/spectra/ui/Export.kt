@@ -21,6 +21,7 @@ import androidx.core.content.FileProvider
 import cattivole.spectra.core.Exporter
 import cattivole.spectra.core.HistoryEntry
 import cattivole.spectra.core.HistoryStore
+import cattivole.spectra.platform.phoneName
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -58,7 +59,9 @@ fun shareHistory(context: Context, entries: List<HistoryEntry>) {
     val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
     val dir = File(context.cacheDir, "exports").apply { mkdirs() }
     val out = File(dir, "spectra-$stamp.json")
-    out.writeText(HistoryStore.encodeDocument(entries))
+    val origins = entries.mapNotNull { it.importedFrom }.toSet()
+    val from = if (origins.size == 1) origins.first() else phoneName(context)
+    out.writeText(HistoryStore.encodeDocument(entries, from))
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", out)
     val send = Intent(Intent.ACTION_SEND).apply {
         type = "application/json"

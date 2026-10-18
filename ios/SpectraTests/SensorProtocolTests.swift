@@ -238,6 +238,13 @@ struct SensorProtocolTests {
         #expect(SensorProtocol.Command.scanOnce.data == Data([0x01]))
         #expect(SensorProtocol.Command.setInterval(seconds: 5).data == Data([0x02, 5]))
         #expect(SensorProtocol.Command.setInterval(seconds: 900).data == Data([0x02, 255]))
+        #expect(SensorProtocol.Command.rememberWifi(ssid: "Cafe", password: "abc").data == Data([0x05, 4, 0x43, 0x61, 0x66, 0x65, 3, 0x61, 0x62, 0x63]))
+        #expect(SensorProtocol.Command.forgetWifi(ssid: "Cafe").data == Data([0x06, 4, 0x43, 0x61, 0x66, 0x65]))
+        #expect(SensorProtocol.Command.setPeer(name: "Pix").data == Data([0x07, 0x50, 0x69, 0x78]))
+        #expect(SensorProtocol.Command.ackKnown.data == Data([0x08]))
+        #expect(SensorProtocol.Command.resetKnown.data == Data([0x09]))
+        let uploaded = SensorProtocol.Message.knownWifi(index: 0, total: 1, ssid: "Cafe", password: "abc")
+        #expect(SensorProtocol.decode(SensorProtocol.encode(uploaded)) == uploaded)
     }
 }
 

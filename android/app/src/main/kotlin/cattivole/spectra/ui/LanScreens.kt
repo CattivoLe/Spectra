@@ -191,11 +191,11 @@ fun DeviceRow(device: LanDevice, onClick: () -> Unit) {
         }
         val maker = device.manufacturer
         if (maker != null && device.identity.manufacturer == null && device.displayName != maker) add(maker)
-        if (device.openPorts.isNotEmpty()) {
-            val list = device.openPorts.take(4).joinToString(", ") { "${it.number}" }
-            add(tr("ports %s", list + if (device.openPorts.size > 4) "…" else ""))
-        }
     }.joinToString(" · ")
+    val ports = device.openPorts.takeIf { it.isNotEmpty() }?.let { open ->
+        val list = open.take(4).joinToString(", ") { "${it.number}" }
+        tr("ports %s", list + if (open.size > 4) "…" else "")
+    }
     WithCopyMenu(
         listOfNotNull(
             CopyItem(tr("Copy IP"), "IP", device.ipAddress),
@@ -205,6 +205,7 @@ fun DeviceRow(device: LanDevice, onClick: () -> Unit) {
         ListRow(
             title = device.displayName,
             subtitle = subtitle,
+            detail = ports,
             leading = { IconTile(device.icon(), device.tint()) },
             badges = { LanBadges(device) },
             onClick = onClick,
