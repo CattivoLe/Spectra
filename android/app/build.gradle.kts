@@ -16,6 +16,11 @@ android {
         versionName = "1.0.0"
     }
 
+    // The OUI and Bluetooth SIG tables are shared with the iOS app and live in
+    // the top-level data/ directory, loaded from the classpath as spectra/*.tsv.
+    // App-only strings stay under src/main/resources.
+    sourceSets["main"].resources.srcDir("../../data")
+
     buildTypes {
         release {
             isMinifyEnabled = false
