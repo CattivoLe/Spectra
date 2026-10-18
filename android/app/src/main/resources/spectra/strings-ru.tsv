@@ -87,8 +87,17 @@ Clear history	Очистить историю
 Cancel	Отмена
 History	История
 Nothing saved	Ничего не сохранено
-Save what Wi‑Fi, LAN, Bluetooth or LoRa just found. The Cardputer's side button saves its own scan, and it arrives here when the phone connects.	Сохраните то, что нашли Wi‑Fi, LAN, Bluetooth или LoRa. Боковая кнопка Cardputer сохраняет его собственное сканирование — оно появится здесь, когда телефон подключится.
+Scans are saved here automatically. The Cardputer's side button saves its own scan, and it arrives here when the phone connects.	Сканирования сохраняются здесь автоматически. Боковая кнопка Cardputer сохраняет его собственное сканирование — оно появится здесь, когда телефон подключится.
 Swipe a saved scan to the left to delete it.	Смахните сохранённое сканирование влево, чтобы удалить его.
+By date	По дате
+By place	По месту
+No location	Без места
+History settings	Настройки истории
+Save scans automatically	Сохранять сканирования автоматически
+Done	Готово
+Today	Сегодня
+Yesterday	Вчера
+Exposure Notification	Уведомление о контактах
 Delete	Удалить
 Deauth detected	Обнаружен deauth
 Gone	Удалено

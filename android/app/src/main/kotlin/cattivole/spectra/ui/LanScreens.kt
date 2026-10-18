@@ -16,7 +16,6 @@ import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.automirrored.rounded.ManageSearch
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.Shield
@@ -76,7 +75,6 @@ internal fun lanPhase(text: String): String {
 fun LanScreen(model: SpectraModel, nav: Navigator) {
     model.generation
     val lan = model.lan
-    val notify = LocalNotify.current
     var query by rememberSaveable { mutableStateOf("") }
     var menu by rememberSaveable { mutableStateOf(false) }
     val needle = query.trim()
@@ -91,13 +89,6 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
     SpectraScreen(
         title = "LAN",
         actions = {
-            IconButton(
-                onClick = {
-                    model.history.saveLan(lan.devices, tr("This phone"))
-                    notify(tr("Saved to History"))
-                },
-                enabled = lan.devices.isNotEmpty(),
-            ) { Icon(Icons.Rounded.SaveAlt, contentDescription = tr("Save")) }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {

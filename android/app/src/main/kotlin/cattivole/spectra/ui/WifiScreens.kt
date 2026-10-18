@@ -23,7 +23,6 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PhoneAndroid
-import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.SettingsInputAntenna
 import androidx.compose.material.icons.rounded.Shield
@@ -79,7 +78,6 @@ private enum class WifiSort { SIGNAL, NAME, CHANNEL }
 fun NetworksScreen(model: SpectraModel, nav: Navigator) {
     model.generation
     val store = model.store
-    val notify = LocalNotify.current
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(WifiSort.SIGNAL) }
     var showOut by rememberSaveable { mutableStateOf(true) }
@@ -109,13 +107,6 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
     SpectraScreen(
         title = "Wi‑Fi",
         actions = {
-            IconButton(
-                onClick = {
-                    model.history.saveNetworks(store, tr("This phone"))
-                    notify(tr("Saved to History"))
-                },
-                enabled = all.isNotEmpty() || store.probingDevices.isNotEmpty() || store.deauthEvents.isNotEmpty(),
-            ) { Icon(Icons.Rounded.SaveAlt, contentDescription = tr("Save")) }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {

@@ -4,12 +4,17 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
@@ -20,11 +25,13 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Place
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -40,9 +47,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.core.HistoryEntry
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 private fun kindIcon(kind: String): ImageVector = when (kind) {
     "lan" -> Icons.Rounded.Lan
@@ -72,12 +84,29 @@ private fun sourceName(source: String): String = when (source) {
     else -> source
 }
 
+/** How the saved sessions are grouped on screen. */
+private enum class Grouping { DATE, PLACE }
+
+/** One collapsible group of sessions: a day, or a place. */
+private class HistoryGroup(
+    val id: String,
+    val label: String,
+    val entries: List<HistoryEntry>,
+) {
+    /** Which scan types this group holds, for the icon row on the header. */
+    val kinds: List<String> get() = entries.map { it.kind }.distinct()
+    val itemCount: Int get() = entries.sumOf { it.itemCount }
+}
+
 @Composable
 fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     model.generation
     val history = model.history
     var confirmClear by remember { mutableStateOf(false) }
-    var collapsed by remember { mutableStateOf(setOf<String>()) }
+    var showSettings by remember { mutableStateOf(false) }
+    var grouping by remember { mutableStateOf(Grouping.DATE) }
+    // Empty means every group starts collapsed.
+    var expanded by remember { mutableStateOf(setOf<String>()) }
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
@@ -93,9 +122,21 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(tr("Cancel")) } },
         )
     }
+    if (showSettings) {
+        HistorySettingsDialog(
+            autosave = model.autosaveHistory,
+            onAutosave = { model.autosaveHistory = it },
+            onDismiss = { showSettings = false },
+        )
+    }
+    val groups = when (grouping) {
+        Grouping.DATE -> byDate(history.entries)
+        Grouping.PLACE -> byPlace(history.entries)
+    }
     SpectraScreen(
         title = tr("History"),
         actions = {
+            IconButton(onClick = { showSettings = true }) { Icon(Icons.Rounded.Settings, contentDescription = tr("History settings")) }
             if (history.entries.isNotEmpty()) {
                 IconButton(onClick = { confirmClear = true }) { Icon(Icons.Rounded.DeleteSweep, contentDescription = tr("Clear")) }
             }
@@ -105,47 +146,44 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
                 EmptyState(
                     Icons.Rounded.History,
                     tr("Nothing saved"),
-                    tr("Save what Wi‑Fi, LAN, Bluetooth or LoRa just found. The Cardputer's side button saves its own scan, and it arrives here when the phone connects."),
+                    tr("Scans are saved here automatically. The Cardputer's side button saves its own scan, and it arrives here when the phone connects."),
                 )
             }
         },
     ) {
-        for (kind in listOf("networks", "lan", "bluetooth", "lora")) {
-            val rows = history.entries.filter { it.kind == kind }
-            if (rows.isEmpty()) continue
-            val expanded = kind !in collapsed
-            item(key = "head-$kind", contentType = "section-header") {
-                SectionHeader(
-                    kindTitle(kind),
-                    modifier = Modifier
-                        .animateItem()
-                        .clickable { collapsed = if (expanded) collapsed + kind else collapsed - kind },
-                    tint = kindTint(kind),
-                    icon = kindIcon(kind),
-                    trailing = {
-                        Text(
-                            "${rows.size}",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Icon(
-                            if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    },
-                )
+        if (history.entries.isNotEmpty()) {
+            item(key = "grouping") {
+                ChipRow {
+                    ToggleChip(tr("By date"), grouping == Grouping.DATE, { grouping = Grouping.DATE }, Icons.Rounded.CalendarMonth)
+                    ToggleChip(tr("By place"), grouping == Grouping.PLACE, { grouping = Grouping.PLACE }, Icons.Rounded.Place)
+                }
             }
-            if (expanded) {
+        }
+        for (group in groups) {
+            val open = group.id in expanded
+            item(key = "head-${group.id}", contentType = "section-header") {
+                GroupHeader(
+                    group.label,
+                    group.kinds,
+                    group.itemCount,
+                    open,
+                    modifier = Modifier.animateItem(),
+                ) { expanded = if (open) expanded - group.id else expanded + group.id }
+            }
+            if (open) {
                 cardSection(
-                    rows,
+                    group.entries,
                     header = null,
                     key = { it.id },
-                    sectionKey = kind,
+                    sectionKey = group.id,
                     dividerInset = 70.dp,
                 ) { entry ->
-                    HistoryRow(entry, onOpen = { nav.history(entry.id) }, onDelete = { history.delete(entry.id) })
+                    HistoryRow(
+                        entry,
+                        showPlace = grouping == Grouping.DATE,
+                        onOpen = { nav.history(entry.id) },
+                        onDelete = { history.delete(entry.id) },
+                    )
                 }
             }
         }
@@ -155,8 +193,103 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     }
 }
 
+private fun byDate(entries: List<HistoryEntry>): List<HistoryGroup> {
+    val buckets = entries.groupBy { startOfDay(it.savedAt) }
+    return buckets.entries.sortedByDescending { it.key }.map { (day, rows) ->
+        HistoryGroup("date:$day", dayLabel(day), rows.sortedByDescending { it.savedAt })
+    }
+}
+
+private fun byPlace(entries: List<HistoryEntry>): List<HistoryGroup> {
+    val buckets = entries.groupBy { it.placeLabel ?: it.placeKey ?: "" }
+    return buckets.entries
+        .map { (label, rows) ->
+            HistoryGroup(
+                "place:$label",
+                label.ifEmpty { tr("No location") },
+                rows.sortedByDescending { it.savedAt },
+            )
+        }
+        .sortedByDescending { it.entries.firstOrNull()?.savedAt ?: 0 }
+}
+
+private fun startOfDay(millis: Long): Long = Calendar.getInstance().apply {
+    timeInMillis = millis
+    set(Calendar.HOUR_OF_DAY, 0)
+    set(Calendar.MINUTE, 0)
+    set(Calendar.SECOND, 0)
+    set(Calendar.MILLISECOND, 0)
+}.timeInMillis
+
+private fun dayLabel(day: Long): String {
+    val today = startOfDay(System.currentTimeMillis())
+    return when (day) {
+        today -> tr("Today")
+        today - 86_400_000L -> tr("Yesterday")
+        else -> SimpleDateFormat("EEEE, d MMM", Locale.getDefault()).format(Date(day))
+    }
+}
+
+/** A collapsible section header with the group's name and the icons of the scan types inside it. */
 @Composable
-private fun HistoryRow(entry: HistoryEntry, onOpen: () -> Unit, onDelete: () -> Unit) {
+private fun GroupHeader(
+    label: String,
+    kinds: List<String>,
+    count: Int,
+    expanded: Boolean,
+    modifier: Modifier = Modifier,
+    onToggle: () -> Unit,
+) {
+    SectionHeader(
+        label,
+        modifier = modifier.clickable(onClick = onToggle),
+        trailing = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                for (kind in kinds) {
+                    Icon(kindIcon(kind), contentDescription = null, tint = kindTint(kind), modifier = Modifier.size(16.dp))
+                }
+            }
+            Text(
+                "$count",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 6.dp),
+            )
+            Icon(
+                if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+        },
+    )
+}
+
+@Composable
+private fun HistorySettingsDialog(autosave: Boolean, onAutosave: (Boolean) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.Settings, null) },
+        title = { Text(tr("History settings")) },
+        text = {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .toggleable(value = autosave, role = Role.Switch, onValueChange = onAutosave)
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(tr("Save scans automatically"), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                Switch(autosave, null)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(tr("Done")) } },
+    )
+}
+
+@Composable
+private fun HistoryRow(entry: HistoryEntry, showPlace: Boolean, onOpen: () -> Unit, onDelete: () -> Unit) {
     val state = rememberSwipeToDismissBoxState(confirmValueChange = { value ->
         if (value == SwipeToDismissBoxValue.EndToStart) onDelete()
         value == SwipeToDismissBoxValue.EndToStart
@@ -174,10 +307,11 @@ private fun HistoryRow(entry: HistoryEntry, onOpen: () -> Unit, onDelete: () -> 
             }
         },
     ) {
+        val place = entry.placeLabel?.takeIf { showPlace }
         Box(Modifier.background(MaterialTheme.colorScheme.surfaceContainer)) {
             ListRow(
-                title = sourceName(entry.source),
-                subtitle = "${ago(entry.savedAt)} · ${dateTime(entry.savedAt)}",
+                title = entry.kindTitle,
+                subtitle = "${ago(entry.savedAt)} · ${place ?: sourceName(entry.source)}",
                 subtitleLines = 1,
                 leading = { IconTile(if (fromSensor) Icons.Rounded.Memory else kindIcon(entry.kind), kindTint(entry.kind)) },
                 badges = {
