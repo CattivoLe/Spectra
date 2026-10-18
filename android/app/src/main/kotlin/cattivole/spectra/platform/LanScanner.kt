@@ -2,6 +2,7 @@ package cattivole.spectra.platform
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
@@ -31,6 +32,7 @@ import kotlin.coroutines.resume
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.isActive
 import java.io.ByteArrayOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -38,15 +40,27 @@ import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.nio.channels.SelectionKey
+import java.nio.channels.Selector
+import java.nio.channels.SocketChannel
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
+/** The Wi-Fi or Ethernet network a probe should use. VPN tunnels are left out. */
+data class LanRoute(
+    val network: Network,
+    val subnet: SubnetInfo,
+    val validated: Boolean,
+    val captive: Boolean,
+)
+
 /**
  * Walks the Wi-Fi (or Ethernet) subnet the phone is on. Android still fills
  * `/proc/net/arp` with neighbour hardware addresses, which iOS usually hides.
- * ICMP is not available without root, so a host counts as present when a
- * short TCP connect succeeds or the ARP table already has it.
+ * ICMP is not available without root. A host counts as present the same way
+ * it does on iOS: a TCP connect that opens or is refused (the host answered),
+ * an ARP entry left by that probe, or a service advertisement.
  */
 class LanScanner(context: Context) {
     var devices: List<LanDevice> = emptyList()
@@ -88,6 +102,8 @@ class LanScanner(context: Context) {
     private var portJob: Job? = null
     private val listeners = mutableListOf<() -> Unit>()
     private val known = linkedMapOf<String, LanDevice>()
+    /** The Wi-Fi or Ethernet network the sweep is walking, so probes do not leave via a VPN. */
+    private var routeNetwork: Network? = null
 
     fun observe(listener: () -> Unit): () -> Unit {
         listeners.add(listener)
@@ -126,14 +142,15 @@ class LanScanner(context: Context) {
                         val ssdp = async { ssdpSearch() }
                         val poked = async { poke(hosts) }
                         val names = async { discoverMdns() }
-                        poked.await()
-                        val arp = readArp()
+                        val answered = poked.await()
+                        val onLan = hosts.toHashSet().apply { add(info.localIp) }
+                        val arp = readArp().filterKeys { it in onLan }
                         val mdns = names.await()
                         val announced = ssdp.await()
                         val alive = (
-                            poked.await().keys + arp.keys + mdns.names.keys + mdns.services.keys +
+                            answered + arp.keys + mdns.names.keys + mdns.services.keys +
                                 announced.keys + info.localIp
-                            ).distinct()
+                            ).filter { it in onLan }.distinct()
                         progress = "Checking ${alive.size} hosts"
                         fraction = 0.6f
                         publishOnMain()
@@ -270,7 +287,17 @@ class LanScanner(context: Context) {
         )
     }
 
-    private data class SubnetCandidate(val wifi: Boolean, val hasGateway: Boolean, val info: SubnetInfo)
+    private data class SubnetCandidate(
+        val wifi: Boolean,
+        val hasGateway: Boolean,
+        val info: SubnetInfo,
+        val network: Network,
+        val validated: Boolean,
+        val captive: Boolean,
+    )
+
+    /** The joined LAN, for probes that should not escape through a VPN. */
+    fun lanRoute(): LanRoute? = selectRoute()
 
     /**
      * The Wi-Fi or Ethernet subnet the phone shares with the LAN.
@@ -282,8 +309,14 @@ class LanScanner(context: Context) {
      * network is considered instead: VPN transports are dropped, and the one
      * with a real default gateway and the widest subnet wins.
      */
-    @Suppress("DEPRECATION")
     private fun currentSubnet(): SubnetInfo? {
+        val route = selectRoute()
+        routeNetwork = route?.network
+        return route?.subnet
+    }
+
+    @Suppress("DEPRECATION")
+    private fun selectRoute(): LanRoute? {
         val manager = app.getSystemService(ConnectivityManager::class.java) ?: return null
         val candidates = buildList {
             for (network in manager.allNetworks) {
@@ -315,19 +348,23 @@ class LanScanner(context: Context) {
                             gateway = gateway,
                             interfaceName = properties.interfaceName,
                         ),
+                        network,
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL),
                     ),
                 )
             }
         }
         // A real default gateway first, then Wi-Fi, then the widest subnet —
         // a tunnel's /30 with no gateway sinks to the bottom.
-        return candidates
+        val chosen = candidates
             .sortedWith(
                 compareByDescending<SubnetCandidate> { it.hasGateway }
                     .thenByDescending { it.wifi }
                     .thenBy { it.info.prefixLength },
             )
-            .firstOrNull()?.info
+            .firstOrNull() ?: return null
+        return LanRoute(chosen.network, chosen.info, chosen.validated, chosen.captive)
     }
 
     private fun sameSubnet(address: android.net.LinkAddress, gateway: String): Boolean {
@@ -342,41 +379,194 @@ class LanScanner(context: Context) {
     private fun hostAddresses(info: SubnetInfo): List<String> {
         val local = ipv4(info.localIp) ?: return emptyList()
         var prefix = info.prefixLength
-        if (prefix < 24) {
+        // iOS walks any subnet up to /20 (4094 addresses). Wider than that is
+        // almost never the LAN — a tunnel or a carrier net — so stay on the
+        // phone's own /24 instead of pretending the whole range is local.
+        if (prefix < 20) {
             prefix = 24
             widePrefix = true
         }
         if (prefix > 30) return emptyList()
-        val mask = if (prefix == 0) 0L else (-1L shl (32 - prefix)) and 0xFFFF_FFFFL
+        val mask = (-1L shl (32 - prefix)) and 0xFFFF_FFFFL
         val network = local and mask
         val broadcast = network or mask.inv() and 0xFFFF_FFFFL
         val hosts = mutableListOf<String>()
         var cursor = network + 1
-        while (cursor < broadcast && hosts.size < 1024) {
+        while (cursor < broadcast && hosts.size < 4094) {
             hosts.add(formatIp(cursor))
             cursor += 1
         }
         return hosts
     }
 
-    private suspend fun poke(hosts: List<String>): Map<String, Boolean> = coroutineScope {
-        val gate = Semaphore(64)
+    /**
+     * Same discovery ports as iOS. A reset counts: the host is there, the port
+     * is closed. The old probe only kept a successful connect to 80, 443 or
+     * 445, and gave up after about 120 ms, so a phone or a printer that
+     * refuses those ports never appeared.
+     */
+    private suspend fun poke(hosts: List<String>): Set<String> = withContext(Dispatchers.IO) {
+        primeArp(hosts)
+        delay(300)
+        val targets = hosts.flatMap { ip -> discoveryPorts.map { port -> ip to port } }
+        val alive = linkedSetOf<String>()
         var done = 0
-        hosts.map { ip ->
-            async(Dispatchers.IO) {
-                gate.withPermit {
-                    val open = probePort(ip, 80, 120) || probePort(ip, 443, 120) || probePort(ip, 445, 80)
-                    withContext(Dispatchers.Main.immediate) {
-                        done += 1
-                        if (done % 8 == 0 || done == hosts.size) {
-                            fraction = 0.05f + 0.55f * done / hosts.size
-                            publish()
-                        }
-                    }
-                    if (open) ip to true else null
+        for (start in targets.indices step probeBatch) {
+            if (!isActive) break
+            val slice = targets.subList(start, minOf(start + probeBatch, targets.size))
+            val outcomes = probeTcp(slice, discoveryTimeoutMs)
+            for (index in slice.indices) {
+                if (outcomes[index] != HostProbe.SILENT) alive.add(slice[index].first)
+            }
+            done += slice.size
+            withContext(Dispatchers.Main.immediate) {
+                fraction = 0.05f + 0.5f * done / targets.size.coerceAtLeast(1)
+                publish()
+            }
+        }
+        alive
+    }
+
+    /** One UDP datagram per address, so the kernel ARPs hosts that drop TCP. */
+    private fun primeArp(hosts: List<String>) {
+        val socket = try {
+            DatagramSocket()
+        } catch (_: Exception) {
+            return
+        }
+        socket.use {
+            bindToRoute(it)
+            val payload = byteArrayOf(0)
+            for (ip in hosts) {
+                val address = inet4(ip) ?: continue
+                try {
+                    it.send(DatagramPacket(payload, payload.size, address, 7))
+                } catch (_: Exception) {
                 }
             }
-        }.awaitAll().filterNotNull().toMap()
+        }
+    }
+
+    private enum class HostProbe { OPEN, REFUSED, SILENT }
+
+    /**
+     * Non-blocking connects, one timeout for the whole batch, matching the
+     * iOS `poll`. A refused connection is [HostProbe.REFUSED]: the host answered.
+     */
+    private fun probeTcp(targets: List<Pair<String, Int>>, timeoutMs: Int): List<HostProbe> {
+        val results = MutableList(targets.size) { HostProbe.SILENT }
+        val selector = try {
+            Selector.open()
+        } catch (_: Exception) {
+            return results
+        }
+        selector.use { sel ->
+            var pending = 0
+            for ((index, target) in targets.withIndex()) {
+                val address = inet4(target.first) ?: continue
+                val channel = try {
+                    SocketChannel.open()
+                } catch (_: Exception) {
+                    continue
+                }
+                try {
+                    channel.configureBlocking(false)
+                    try {
+                        channel.socket().setSoLinger(true, 0)
+                    } catch (_: Exception) {
+                    }
+                    bindToRoute(channel.socket())
+                    val connected = channel.connect(InetSocketAddress(address, target.second))
+                    if (connected) {
+                        results[index] = HostProbe.OPEN
+                        channel.close()
+                    } else {
+                        channel.register(sel, SelectionKey.OP_CONNECT, index)
+                        pending += 1
+                    }
+                } catch (error: Exception) {
+                    if (hostAnswered(error)) results[index] = HostProbe.REFUSED
+                    try {
+                        channel.close()
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+            while (pending > 0 && System.nanoTime() < deadline) {
+                val leftMs = ((deadline - System.nanoTime()) / 1_000_000L).coerceAtLeast(1)
+                val ready = try {
+                    sel.select(leftMs)
+                } catch (_: Exception) {
+                    break
+                }
+                if (ready == 0) continue
+                val keys = sel.selectedKeys().iterator()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    keys.remove()
+                    if (!key.isValid || !key.isConnectable) continue
+                    val index = key.attachment() as Int
+                    val channel = key.channel() as SocketChannel
+                    var finished = true
+                    try {
+                        if (channel.finishConnect()) results[index] = HostProbe.OPEN else finished = false
+                    } catch (error: Exception) {
+                        if (hostAnswered(error)) results[index] = HostProbe.REFUSED
+                    }
+                    if (!finished) continue
+                    pending -= 1
+                    key.cancel()
+                    try {
+                        channel.close()
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            sel.keys().toList().forEach { key ->
+                try {
+                    key.channel().close()
+                } catch (_: Exception) {
+                }
+            }
+        }
+        return results
+    }
+
+    /** The host sent a reset or closed the socket. Timeouts and "no route" do not count. */
+    private fun hostAnswered(error: Throwable): Boolean {
+        var current: Throwable? = error
+        while (current != null) {
+            val message = current.message.orEmpty()
+            if (message.contains("ECONNREFUSED", ignoreCase = true) ||
+                message.contains("Connection refused", ignoreCase = true) ||
+                message.contains("ECONNRESET", ignoreCase = true)
+            ) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
+    private fun inet4(ip: String): InetAddress? {
+        val value = ipv4(ip) ?: return null
+        val bytes = ByteArray(4) { shift -> ((value shr (24 - shift * 8)) and 0xFF).toByte() }
+        return InetAddress.getByAddress(bytes)
+    }
+
+    private fun bindToRoute(socket: Socket) {
+        try {
+            routeNetwork?.bindSocket(socket)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun bindToRoute(socket: DatagramSocket) {
+        try {
+            routeNetwork?.bindSocket(socket)
+        } catch (_: Exception) {
+        }
     }
 
     private suspend fun scanPorts(ip: String): List<DiscoveredPort> = coroutineScope {
@@ -494,6 +684,7 @@ class LanScanner(context: Context) {
         val found = linkedMapOf<String, LanIdentity.Ssdp>()
         val socket = DatagramSocket()
         socket.soTimeout = 1200
+        bindToRoute(socket)
         try {
             val payload = LanIdentity.ssdpSearch("239.255.255.250")
             val packet = DatagramPacket(payload, payload.size, InetAddress.getByName("239.255.255.250"), 1900)
@@ -541,7 +732,8 @@ class LanScanner(context: Context) {
         val services = linkedMapOf<String, MutableList<ServiceAdvertisement>>()
         val types = listOf(
             "_googlecast._tcp", "_device-info._tcp", "_companion-link._tcp", "_apple-mobdev2._tcp",
-            "_airplay._tcp", "_raop._tcp", "_http._tcp", "_hap._tcp", "_ipp._tcp", "_smb._tcp",
+            "_airplay._tcp", "_raop._tcp", "_hap._tcp", "_spotify-connect._tcp", "_ipp._tcp",
+            "_printer._tcp", "_smb._tcp", "_ssh._tcp", "_http._tcp",
         )
         var resolved = 0
         for (type in types) {
@@ -589,8 +781,8 @@ class LanScanner(context: Context) {
                 }
             }
             val handler = android.os.Handler(android.os.Looper.getMainLooper())
-            handler.postDelayed(stop, 600)
-            handler.postDelayed({ finish(found.toList()) }, 1000)
+            handler.postDelayed(stop, 1000)
+            handler.postDelayed({ finish(found.toList()) }, 1500)
             cont.invokeOnCancellation {
                 handler.removeCallbacks(stop)
                 try {
@@ -693,6 +885,7 @@ class LanScanner(context: Context) {
     private fun probePort(ip: String, port: Int, timeoutMs: Int): Boolean {
         return try {
             Socket().use { socket ->
+                bindToRoute(socket)
                 socket.connect(InetSocketAddress(ip, port), timeoutMs)
                 true
             }
@@ -702,7 +895,10 @@ class LanScanner(context: Context) {
     }
 
     private fun connect(ip: String, port: Int, timeoutMs: Int): Socket? = try {
-        Socket().apply { connect(InetSocketAddress(ip, port), timeoutMs) }
+        Socket().apply {
+            bindToRoute(this)
+            connect(InetSocketAddress(ip, port), timeoutMs)
+        }
     } catch (_: Exception) {
         null
     }
@@ -732,6 +928,7 @@ class LanScanner(context: Context) {
     private fun exchangeUdp(ip: String, port: Int, payload: ByteArray, timeoutMs: Int): List<ByteArray> {
         val socket = DatagramSocket()
         socket.soTimeout = timeoutMs
+        bindToRoute(socket)
         val replies = mutableListOf<ByteArray>()
         try {
             socket.send(DatagramPacket(payload, payload.size, InetAddress.getByName(ip), port))
@@ -810,6 +1007,11 @@ class LanScanner(context: Context) {
     )
 
     companion object {
+        /** Ports tried on every address. Kept in step with iOS `discoveryPorts`. */
+        private val discoveryPorts = intArrayOf(80, 443, 22, 445, 62078, 7000, 554, 8080, 9100)
+        private const val discoveryTimeoutMs = 1200
+        private const val probeBatch = 256
+
         private fun ipv4(text: String): Long? {
             val parts = text.split(".")
             if (parts.size != 4) return null

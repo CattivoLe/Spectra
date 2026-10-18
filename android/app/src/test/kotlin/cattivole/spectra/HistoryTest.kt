@@ -10,8 +10,13 @@ import cattivole.spectra.core.Capabilities
 import cattivole.spectra.core.Cipher
 import cattivole.spectra.core.DeauthEvent
 import cattivole.spectra.core.DiscoveredPort
+import cattivole.spectra.core.ExternalAddress
 import cattivole.spectra.core.HistoryCodec
 import cattivole.spectra.core.HistoryStore
+import cattivole.spectra.core.LinkReport
+import cattivole.spectra.core.LinkStatus
+import cattivole.spectra.core.SavedConnection
+import cattivole.spectra.core.SpeedSample
 import cattivole.spectra.core.HttpBanner
 import cattivole.spectra.core.LanDevice
 import cattivole.spectra.core.LanProfile
@@ -165,6 +170,29 @@ class HistoryTest {
         assertEquals(7L, entry.captureId)
         assertEquals("router", entry.lines.single().title)
         assertTrue(!entry.hasRecords)
+        assertTrue(entry.connections.isEmpty())
+    }
+
+    @Test
+    fun connectionCheckRoundTripsOntoTheLanEntry() {
+        val report = LinkReport().apply {
+            status = LinkStatus.ONLINE
+            external = ExternalAddress(ip = "203.0.113.8", city = "Berlin")
+            speed = SpeedSample(latencyMs = 12, downBps = 8_000_000.0, upBps = null)
+        }
+        val saved = SavedConnection.from(report, viaVpn = true)!!
+        val again = SavedConnection.fromJson(saved.toJson())
+        assertEquals(saved, again)
+        val json = JSONObject(
+            """{"id":"a","kind":"lan","savedAt":42,"source":"This phone","connections":[${saved.toJson()}]}""",
+        )
+        val entry = HistoryStore.decodeEntry(json)
+        assertEquals(1, entry.connections.size)
+        assertEquals("203.0.113.8", entry.connections[0].external?.ip)
+        assertTrue(entry.connections[0].viaVpn)
+        val merged = HistoryStore.mergeConnections(entry.connections, listOf(saved.copy(checkedAt = saved.checkedAt + 1)))
+        assertEquals(2, merged.size)
+        assertEquals(saved.checkedAt + 1, merged[0].checkedAt)
     }
 
     @Test

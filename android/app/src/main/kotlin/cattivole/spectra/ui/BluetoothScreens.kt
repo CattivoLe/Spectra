@@ -8,13 +8,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.BluetoothDisabled
 import androidx.compose.material.icons.automirrored.rounded.BluetoothSearching
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckBox
 import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
@@ -51,7 +54,7 @@ import cattivole.spectra.core.hex
 import cattivole.spectra.platform.DeviceBleScanner
 
 private enum class BleSort { SIGNAL, NAME, RECENT }
-private enum class BleScope { ALL, NAMED }
+private enum class BleScope { ALL, NAMED, CONNECTABLE }
 
 private fun unavailableTitle(why: DeviceBleScanner.Availability): String = when (why) {
     DeviceBleScanner.Availability.STARTING -> tr("Starting Bluetooth…")
@@ -77,6 +80,7 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
             when (scope) {
                 BleScope.ALL -> true
                 BleScope.NAMED -> device.hasOwnName
+                BleScope.CONNECTABLE -> device.isConnectable == true
             } &&
             (
                 needle.isEmpty() ||
@@ -102,6 +106,29 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    MenuLabel(tr("Sort by"))
+                    BleSort.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.label()) },
+                            leadingIcon = { MenuCheck(sort == option) },
+                            onClick = { sort = option },
+                        )
+                    }
+                    HorizontalDivider()
+                    MenuLabel(tr("Show"))
+                    BleScope.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.label()) },
+                            leadingIcon = { MenuCheck(scope == option) },
+                            onClick = { scope = option },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text(tr("Show out of range")) },
+                        leadingIcon = { Icon(if (showOut) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank, null) },
+                        onClick = { showOut = !showOut },
+                    )
+                    HorizontalDivider()
                     DropdownMenuItem(
                         text = { Text(if (ble.isScanning) tr("Stop") else tr("Scan now")) },
                         leadingIcon = { Icon(if (ble.isScanning) Icons.Rounded.Stop else Icons.Rounded.Refresh, null) },
@@ -192,6 +219,7 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
                     ToggleChip(tr("Name"), sort == BleSort.NAME, { sort = BleSort.NAME })
                     ToggleChip(tr("Recently seen"), sort == BleSort.RECENT, { sort = BleSort.RECENT })
                     ToggleChip(tr("With a name"), scope == BleScope.NAMED, { scope = if (scope == BleScope.NAMED) BleScope.ALL else BleScope.NAMED })
+                    ToggleChip(tr("Connectable"), scope == BleScope.CONNECTABLE, { scope = if (scope == BleScope.CONNECTABLE) BleScope.ALL else BleScope.CONNECTABLE })
                     ToggleChip(tr("Out of range"), showOut, { showOut = !showOut })
                 }
             }
@@ -212,6 +240,33 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
     }
 }
 
+private fun BleSort.label(): String = when (this) {
+    BleSort.SIGNAL -> tr("Signal")
+    BleSort.NAME -> tr("Name")
+    BleSort.RECENT -> tr("Recently seen")
+}
+
+private fun BleScope.label(): String = when (this) {
+    BleScope.ALL -> tr("All devices")
+    BleScope.NAMED -> tr("With a name")
+    BleScope.CONNECTABLE -> tr("Connectable")
+}
+
+@Composable
+private fun MenuLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+    )
+}
+
+@Composable
+private fun MenuCheck(selected: Boolean) {
+    if (selected) Icon(Icons.Rounded.Check, contentDescription = null) else Spacer(Modifier.size(24.dp))
+}
+
 @Composable
 fun BleRow(device: BleDevice, now: Long, onClick: () -> Unit) {
     val nearby = device.isNearby(now)
@@ -227,6 +282,14 @@ fun BleRow(device: BleDevice, now: Long, onClick: () -> Unit) {
             dimmed = !nearby,
             leading = { IconTile(device.icon(), if (nearby) signalColor(device.rssi) else MaterialTheme.colorScheme.outline) },
             badges = {
+                if (device.isConnectable == true) {
+                    Icon(
+                        Icons.Rounded.Link,
+                        contentDescription = tr("Connectable"),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
                 if (device.isSpectraSensor) Pill(tr("Sensor"), MaterialTheme.colorScheme.primary)
                 if (device.transport == BleDevice.Transport.CLASSIC) Pill(tr("Classic"), MaterialTheme.colorScheme.secondary)
             },

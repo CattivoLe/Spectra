@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Place
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
@@ -56,7 +57,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-private fun kindIcon(kind: String): ImageVector = when (kind) {
+internal fun kindIcon(kind: String): ImageVector = when (kind) {
     "lan" -> Icons.Rounded.Lan
     "bluetooth" -> Icons.Rounded.Bluetooth
     "lora" -> Icons.Rounded.CellTower
@@ -64,7 +65,7 @@ private fun kindIcon(kind: String): ImageVector = when (kind) {
 }
 
 @Composable
-private fun kindTint(kind: String): Color = when (kind) {
+internal fun kindTint(kind: String): Color = when (kind) {
     "lan" -> Spectra.colors.good
     "bluetooth" -> Spectra.colors.info
     "lora" -> Spectra.colors.revealed
@@ -79,7 +80,7 @@ private fun kindTitle(kind: String): String = when (kind) {
 }
 
 /** The phone saves under its own name; translate it, and leave a Cardputer's name alone. */
-private fun sourceName(source: String): String = when (source) {
+internal fun sourceName(source: String): String = when (source) {
     "This phone", "This iPhone" -> tr("This phone")
     else -> source
 }
@@ -133,6 +134,8 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
         Grouping.DATE -> byDate(history.entries)
         Grouping.PLACE -> byPlace(history.entries)
     }
+    val pins = mapPins(history.entries)
+    val showMap = grouping == Grouping.PLACE && pins.isNotEmpty()
     SpectraScreen(
         title = tr("History"),
         actions = {
@@ -150,13 +153,18 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
                 )
             }
         },
+        fill = if (showMap) {
+            {
+                HistoryPlaceMap(history.entries, onOpen = { nav.history(it) })
+                GroupingBar(grouping, Modifier.align(Alignment.TopCenter)) { grouping = it }
+            }
+        } else {
+            null
+        },
     ) {
-        if (history.entries.isNotEmpty()) {
+        if (!showMap && history.entries.isNotEmpty()) {
             item(key = "grouping") {
-                ChipRow {
-                    ToggleChip(tr("By date"), grouping == Grouping.DATE, { grouping = Grouping.DATE }, Icons.Rounded.CalendarMonth)
-                    ToggleChip(tr("By place"), grouping == Grouping.PLACE, { grouping = Grouping.PLACE }, Icons.Rounded.Place)
-                }
+                GroupingBar(grouping) { grouping = it }
             }
         }
         for (group in groups) {
@@ -190,6 +198,14 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
         if (history.entries.isNotEmpty()) {
             item(key = "hint") { SectionFooter(tr("Swipe a saved scan to the left to delete it.")) }
         }
+    }
+}
+
+@Composable
+private fun GroupingBar(grouping: Grouping, modifier: Modifier = Modifier, onSelect: (Grouping) -> Unit) {
+    ChipRow(modifier) {
+        ToggleChip(tr("By date"), grouping == Grouping.DATE, { onSelect(Grouping.DATE) }, Icons.Rounded.CalendarMonth)
+        ToggleChip(tr("By place"), grouping == Grouping.PLACE, { onSelect(Grouping.PLACE) }, Icons.Rounded.Place)
     }
 }
 
@@ -401,6 +417,24 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
             sectionKey = "probes",
             dividerInset = 70.dp,
         ) { probe -> ProbeRow(probe, null, onClick = { nav.client(probe.mac, entry.id) }) }
+        cardSection(
+            entry.connections,
+            header = tr("Connection"),
+            key = { "c-${it.checkedAt}" },
+            sectionKey = "connection",
+            dividerInset = 70.dp,
+        ) { saved ->
+            val report = saved.toReport()
+            ListRow(
+                title = statusLabel(saved.status),
+                subtitle = connectionSummary(report, saved.viaVpn),
+                leading = { IconTile(Icons.Rounded.Public, statusColor(saved.status)) },
+                trailing = {
+                    Text(ago(saved.checkedAt), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                },
+                onClick = { nav.savedConnection(entry.id, saved.checkedAt) },
+            )
+        }
         cardSection(
             entry.lan,
             header = tr("Devices: %d", entry.lan.size),

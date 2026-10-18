@@ -49,6 +49,8 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
     var deauths: [DeauthEvent] = []
     var lan: [SavedLAN] = []
     var bluetooth: [SavedBLE] = []
+    /// Connection checks of this LAN, newest first.
+    var connections: [SavedConnection] = []
     /// Where this scan was saved. The phone's own fix, or the cap's fix on a sensor capture.
     var latitude: Double?
     var longitude: Double?
@@ -59,7 +61,8 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
             let found = networks.count + probes.count + deauths.count
             return found == 0 ? lines.count : found
         case .lan:
-            return lan.isEmpty ? lines.count : lan.count
+            let found = lan.count + connections.count
+            return found == 0 ? lines.count : found
         case .bluetooth:
             return bluetooth.isEmpty ? lines.count : bluetooth.count
         case .lora:
@@ -80,6 +83,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         deauths: [DeauthEvent] = [],
         lan: [SavedLAN] = [],
         bluetooth: [SavedBLE] = [],
+        connections: [SavedConnection] = [],
         latitude: Double? = nil,
         longitude: Double? = nil
     ) {
@@ -95,13 +99,14 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         self.deauths = deauths
         self.lan = lan
         self.bluetooth = bluetooth
+        self.connections = connections
         self.latitude = latitude
         self.longitude = longitude
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, kind, savedAt, source, captureID, placeKey, placeLabel,
-             lines, networks, probes, deauths, lan, bluetooth, latitude, longitude
+             lines, networks, probes, deauths, lan, bluetooth, connections, latitude, longitude
     }
 
     func encode(to encoder: Encoder) throws {
@@ -119,6 +124,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         try box.encode(deauths, forKey: .deauths)
         try box.encode(lan, forKey: .lan)
         try box.encode(bluetooth, forKey: .bluetooth)
+        try box.encode(connections, forKey: .connections)
         try box.encodeIfPresent(latitude, forKey: .latitude)
         try box.encodeIfPresent(longitude, forKey: .longitude)
     }
@@ -139,6 +145,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         deauths = try box.decodeIfPresent([DeauthEvent].self, forKey: .deauths) ?? []
         lan = try box.decodeIfPresent([SavedLAN].self, forKey: .lan) ?? []
         bluetooth = try box.decodeIfPresent([SavedBLE].self, forKey: .bluetooth) ?? []
+        connections = try box.decodeIfPresent([SavedConnection].self, forKey: .connections) ?? []
         latitude = try box.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try box.decodeIfPresent(Double.self, forKey: .longitude)
     }
@@ -336,6 +343,18 @@ final class HistoryStore {
         )
     }
 
+    /// Folds one finished connection check into today's LAN session for this network.
+    func upsertConnection(_ saved: SavedConnection, networkKey: String?, networkLabel: String?, source: String) {
+        let here = locationProvider?()
+        upsert(
+            kind: .lan, source: source,
+            placeKey: networkKey ?? Self.geoBucket(here),
+            placeLabel: networkLabel ?? Self.geoLabel(here),
+            connections: [saved],
+            latitude: here?.latitude, longitude: here?.longitude
+        )
+    }
+
     func upsertBluetooth(_ devices: [BLEDevice], source: String) {
         let rows = devices.sorted { $0.rssi > $1.rssi }
         guard !rows.isEmpty else { return }
@@ -446,6 +465,7 @@ final class HistoryStore {
         deauths: [DeauthEvent] = [],
         lan: [SavedLAN] = [],
         bluetooth: [SavedBLE] = [],
+        connections: [SavedConnection] = [],
         latitude: Double? = nil,
         longitude: Double? = nil
     ) {
@@ -469,6 +489,7 @@ final class HistoryStore {
             entry.deauths = Self.mergeByID(entry.deauths, deauths)
             entry.lan = Self.mergeLAN(entry.lan, lan)
             entry.bluetooth = Self.mergeBLE(entry.bluetooth, bluetooth)
+            entry.connections = Self.mergeConnections(entry.connections, connections)
             entry.lines = Self.mergeLines(entry.lines, lines)
             entries.remove(at: index)
             entries.insert(entry, at: 0)
@@ -479,7 +500,8 @@ final class HistoryStore {
             kind: kind, savedAt: now, source: source,
             placeKey: placeKey, placeLabel: placeLabel,
             lines: lines, networks: networks, probes: probes, deauths: deauths,
-            lan: lan, bluetooth: bluetooth, latitude: latitude, longitude: longitude
+            lan: lan, bluetooth: bluetooth, connections: connections,
+            latitude: latitude, longitude: longitude
         )
         guard entry.itemCount > 0 else { return }
         entries.insert(entry, at: 0)
@@ -536,6 +558,16 @@ final class HistoryStore {
             if a.isInRange != b.isInRange { return a.isInRange }
             return a.latest.rssi > b.latest.rssi
         }
+    }
+
+    /// Newest first. A later check with the same start time replaces the earlier copy.
+    static func mergeConnections(_ existing: [SavedConnection], _ incoming: [SavedConnection]) -> [SavedConnection] {
+        var seen = Set<Date>()
+        var merged: [SavedConnection] = []
+        for item in incoming + existing where seen.insert(item.snapshot.checkedAt).inserted {
+            merged.append(item)
+        }
+        return Array(merged.prefix(12))
     }
 
     static func mergeLAN(_ existing: [SavedLAN], _ incoming: [SavedLAN]) -> [SavedLAN] {

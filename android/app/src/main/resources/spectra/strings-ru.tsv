@@ -31,6 +31,10 @@ Signal	Сигнал
 Name	Имя
 Recently seen	Недавние
 With a name	С именем
+All devices	Все устройства
+Sort by	Сортировка
+Show	Показывать
+Show out of range	Показывать вне зоны
 Out of range	Вне зоны
 Classic inquiry pauses low-energy scanning on many phones until it finishes.	На многих телефонах классический поиск приостанавливает сканирование BLE, пока не закончится.
 Android reports the hardware address. A resolvable private address still changes, so the same device can reappear under a new one.	Android сообщает аппаратный адрес. Разрешимый приватный адрес всё равно меняется, поэтому одно устройство может появиться снова под новым адресом.
@@ -92,6 +96,7 @@ Swipe a saved scan to the left to delete it.	Смахните сохранённ
 By date	По дате
 By place	По месту
 No location	Без места
+%d without a location	%d без места
 History settings	Настройки истории
 Save scans automatically	Сохранять сканирования автоматически
 Done	Готово
@@ -120,7 +125,7 @@ Find devices, their hardware addresses and open ports on the network this phone 
 Join a network	Подключитесь к сети
 gateway %s	шлюз %s
 Tap to scan	Нажмите для сканирования
-The prefix is wider than /24, so only the local /24 is walked.	Префикс шире /24, поэтому проверяется только своя /24.
+The prefix is wider than /20, so only the local /24 is walked.	Префикс шире /20, поэтому проверяется только своя /24.
 IP, name or MAC	IP, имя или MAC
 ports %s	порты %s
 Copy IP	Скопировать IP
@@ -156,6 +161,8 @@ Bluetooth permission	Разрешение Bluetooth
 No Bluetooth	Нет Bluetooth
 No sensor	Нет сенсора
 %d%%, charging	%d%%, заряжается
+Battery %d%%	Батарея %d%%
+Battery %d%%, charging	Батарея %d%%, заряжается
 Scanning	Сканирование
 Connected	Подключён
 Connecting…	Подключение…
@@ -478,3 +485,64 @@ Human interface device	Устройство ввода
 Glucose meter	Глюкометр
 Running sensor	Датчик бега
 Cycling	Велосипед
+Connection	Подключение
+Check connection	Проверить подключение
+Check again	Проверить снова
+Internet, speed, countries and the path out of this network.	Интернет, скорость, страны и путь из этой сети.
+Checking…	Проверка…
+Reading the network	Чтение сети
+Checking the gateway	Проверка шлюза
+Looking up the external address	Внешний адрес
+Measuring speed	Измерение скорости
+Checking countries	Проверка стран
+Asking other countries	Запрос из других стран
+Tracing the path	Трассировка
+Internet	Интернет
+Online	Есть интернет
+Sign-in required	Нужен вход
+This network wants a sign-in before it allows the internet.	Сеть просит войти, прежде чем пустить в интернет.
+Local only	Только локальная сеть
+The gateway answers, but nothing past it does.	Шлюз отвечает, а дальше сеть не пускает.
+Offline	Нет интернета
+No route to the internet from this network.	Из этой сети нет маршрута в интернет.
+DNS works, but secure web does not. A sign-in page may be blocking it.	DNS работает, а защищённый веб — нет. Возможно, мешает страница входа.
+Connect to a Wi-Fi or Ethernet network first.	Сначала подключитесь к Wi-Fi или Ethernet.
+Unreachable	Недоступен
+DNS	DNS
+Secure web	Защищённый веб
+No reply	Нет ответа
+%s · %d ms	%s · %d мс
+External address	Внешний адрес
+Place	Место
+Provider	Провайдер
+Edge	Узел
+WARP is on	WARP включён
+Speed	Скорость
+Latency	Задержка
+Download	Загрузка
+Upload	Отдача
+A few seconds of traffic to Cloudflare. It is a snapshot, not a full test.	Несколько секунд трафика до Cloudflare. Это снимок, а не полный тест.
+Could not measure the speed.	Не удалось измерить скорость.
+Countries	Страны
+A connection to port 443. A miss can be this network filtering the site, or the site being down.	Соединение с портом 443. Промах может быть фильтром сети или недоступностью самого сайта.
+No route	Нет маршрута
+From abroad	Из других стран
+A phone behind a router usually does not answer pings from the internet. A reply means the public address answered.	Телефон за роутером обычно не отвечает на пинги из интернета. Ответ значит, что публичный адрес ответил.
+The lookup service is busy. Try again in a minute.	Служба проверки занята. Повторите через минуту.
+Could not ask the other countries.	Не удалось спросить другие страны.
+Path from this phone	Путь от этого телефона
+To 1.1.1.1, one probe per hop.	К 1.1.1.1, по одной пробе на хоп.
+This phone blocked the probes a traceroute needs.	Телефон не дал послать пробы, которые нужны для трассировки.
+Paths toward this address	Пути к этому адресу
+Measured by servers in other countries, toward this network's public address.	Измерено серверами в других странах, в сторону публичного адреса этой сети.
+Reaches the address	Доходит до адреса
+Stops at %s	Обрывается на %s
+No hops came back	Хопы не вернулись
+Not checked yet	Ещё не проверялось
+Run a check to see whether this network reaches the internet, how fast it is, which countries answer, and the path out.	Запустите проверку: есть ли интернет, какая скорость, какие страны отвечают и какой путь наружу.
+Checked %s	Проверено %s
+%d ms	%d мс
+Through VPN	Через VPN
+The check follows the VPN.	Проверка идёт через VPN.
+The check stays on Wi-Fi or Ethernet.	Проверка остаётся на Wi-Fi или Ethernet.
+There is no network connection to check.	Нет сети, которую можно проверить.

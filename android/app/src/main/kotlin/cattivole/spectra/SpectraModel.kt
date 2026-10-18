@@ -10,10 +10,13 @@ import cattivole.spectra.platform.BleGattClient
 import cattivole.spectra.platform.BleRadio
 import cattivole.spectra.platform.DeviceBleScanner
 import cattivole.spectra.platform.LanScanner
+import cattivole.spectra.platform.LinkProbe
 import cattivole.spectra.platform.PhoneWifiScanner
 import cattivole.spectra.platform.SensorLink
 import cattivole.spectra.core.HistoryStore
+import cattivole.spectra.core.LinkStatus
 import cattivole.spectra.core.NetworkStore
+import cattivole.spectra.core.SavedConnection
 
 class SpectraModel(app: Application) : AndroidViewModel(app) {
     val store = NetworkStore()
@@ -24,6 +27,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     val ble = DeviceBleScanner(app, radio, link)
     val gatt = BleGattClient(app)
     val lan = LanScanner(app)
+    val connection = LinkProbe(app, lan)
 
     var generation by mutableIntStateOf(0)
         private set
@@ -40,6 +44,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
 
     private var lastWifiScan = 0
     private var lastLanScan: Long? = null
+    private var savedCheckAt = 0L
 
     init {
         val bump = {
@@ -53,6 +58,10 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         ble.observe(bump)
         gatt.observe(bump)
         lan.observe(bump)
+        connection.observe {
+            bump()
+            saveFinishedConnection()
+        }
         radio.onAdapterChange { ble.availabilityChanged() }
         phone.start()
     }
@@ -67,6 +76,18 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         history.upsertNetworks(store, PHONE_SOURCE)
         history.upsertLan(lan.devices, lan.networkKey, lan.networkLabel, PHONE_SOURCE)
         history.upsertBluetooth(ble.devices.values, PHONE_SOURCE)
+    }
+
+    /** A finished connection check joins today's LAN session for this network. */
+    private fun saveFinishedConnection() {
+        if (!autosaveHistory) return
+        if (connection.running) return
+        val report = connection.report ?: return
+        if (report.status == null || report.status == LinkStatus.NO_NETWORK) return
+        if (report.checkedAt == savedCheckAt) return
+        val saved = SavedConnection.from(report, connection.viaVpn) ?: return
+        savedCheckAt = report.checkedAt
+        history.upsertConnection(saved, lan.networkKey, lan.networkLabel, PHONE_SOURCE)
     }
 
     /** Enrich the open sessions when a Wi‑Fi or LAN sweep completes. */
@@ -84,7 +105,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun onForeground() {
-        link.refreshAvailability(connectSaved = true)
+        link.resumeFromForeground()
         ble.resumeIfWanted()
         if (ble.state is cattivole.spectra.platform.DeviceBleScanner.State.Unavailable) ble.availabilityChanged()
         phone.refresh()
@@ -101,6 +122,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     fun onBackground() {
         autosave()
         ble.suspend()
+        link.releaseForBackground()
     }
 
     override fun onCleared() {
@@ -108,6 +130,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         gatt.disconnect()
         ble.shutdown()
         lan.stop()
+        connection.stop()
         link.close()
         radio.stop()
     }

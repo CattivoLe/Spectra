@@ -2,7 +2,10 @@ import SwiftUI
 
 struct LANView: View {
     @Environment(LANScanner.self) private var scanner
+    @Environment(LinkProbe.self) private var probe
+    @AppStorage("probeViaVpn") private var viaVpn = false
     @State private var search = ""
+    @State private var path = NavigationPath()
 
     private var visible: [LANDevice] {
         let query = search.trimmingCharacters(in: .whitespaces)
@@ -17,8 +20,10 @@ struct LANView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
+                connectionSection
+
                 if case .scanning(let progress, let phase) = scanner.state {
                     Section {
                         VStack(alignment: .leading, spacing: 4) {
@@ -34,34 +39,38 @@ struct LANView: View {
                 if !visible.isEmpty {
                     Section {
                         ForEach(visible) { device in
-                            NavigationLink(value: device.ipAddress) {
+                            NavigationLink(value: LANRoute.device(device.ipAddress)) {
                                 DeviceRow(device: device)
                             }
                         }
                     } header: {
                         Text("\(scanner.devices.count) devices")
                     }
+                } else if scanner.devices.isEmpty, !scanner.isScanning, search.isEmpty {
+                    Section {
+                        if case .noNetwork = scanner.state {
+                            ContentUnavailableView(
+                                "No Wi-Fi",
+                                systemImage: "wifi.slash",
+                                description: Text("Connect to a Wi-Fi network to scan devices on it.")
+                            )
+                        } else {
+                            ContentUnavailableView {
+                                Label("Local network", systemImage: "network")
+                            } description: {
+                                Text("Find devices, their MAC addresses and open ports on the network your iPhone is on.")
+                            } actions: {
+                                Button("Scan", action: scanner.scan)
+                                    .buttonStyle(.borderedProminent)
+                            }
+                        }
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 }
             }
             .overlay {
-                if scanner.devices.isEmpty, !scanner.isScanning {
-                    if case .noNetwork = scanner.state {
-                        ContentUnavailableView(
-                            "No Wi-Fi",
-                            systemImage: "wifi.slash",
-                            description: Text("Connect to a Wi-Fi network to scan devices on it.")
-                        )
-                    } else {
-                        ContentUnavailableView {
-                            Label("Local network", systemImage: "network")
-                        } description: {
-                            Text("Find devices, their MAC addresses and open ports on the network your iPhone is on.")
-                        } actions: {
-                            Button("Scan", action: scanner.scan)
-                                .buttonStyle(.borderedProminent)
-                        }
-                    }
-                } else if visible.isEmpty, !search.isEmpty {
+                if visible.isEmpty, !search.isEmpty, !scanner.devices.isEmpty {
                     ContentUnavailableView.search(text: search)
                 }
             }
@@ -69,8 +78,13 @@ struct LANView: View {
             .searchable(text: $search, prompt: Text("IP, name or MAC"))
             .refreshable { await runScan() }
             .navigationTitle("LAN")
-            .navigationDestination(for: String.self) { ip in
-                DeviceDetailView(ip: ip)
+            .navigationDestination(for: LANRoute.self) { route in
+                switch route {
+                case .device(let ip):
+                    DeviceDetailView(ip: ip)
+                case .connection:
+                    LinkView()
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -94,6 +108,36 @@ struct LANView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var connectionSection: some View {
+        Section {
+            NavigationLink(value: LANRoute.connection) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(connectionTitle(probe))
+                        .font(.body.weight(.medium))
+                    Text(connectionDetail(probe))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Toggle("Through VPN", isOn: $viaVpn)
+                .disabled(probe.running)
+            if probe.running {
+                ProgressView(value: probe.fraction)
+                    .tint(.teal)
+            } else {
+                Button {
+                    probe.check()
+                    path.append(LANRoute.connection)
+                } label: {
+                    Label(probe.report == nil ? "Check connection" : "Check again", systemImage: "gauge.with.dots.needle.67percent")
+                }
+            }
+        } header: {
+            Text("Connection")
         }
     }
 

@@ -164,8 +164,9 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
             card(key = "progress", rows = listOf { ProgressRow(lanPhase(lan.progress), lan.fraction) })
         }
         if (lan.widePrefix) {
-            card(key = "wide", rows = listOf { NoteRow(tr("The prefix is wider than /24, so only the local /24 is walked."), warning = false) })
+            card(key = "wide", rows = listOf { NoteRow(tr("The prefix is wider than /20, so only the local /24 is walked."), warning = false) })
         }
+        connectionEntry(model, nav)
         if (lan.devices.isNotEmpty()) {
             item(key = "search") { SearchField(query, { query = it }, tr("IP, name or MAC")) }
         }

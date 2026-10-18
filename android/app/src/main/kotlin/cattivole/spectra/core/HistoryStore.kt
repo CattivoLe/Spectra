@@ -51,6 +51,8 @@ class HistoryEntry(
     val deauths: List<DeauthEvent> = emptyList(),
     val lan: List<LanDevice> = emptyList(),
     val bluetooth: List<BleDevice> = emptyList(),
+    /** Connection checks of this LAN, newest first. */
+    val connections: List<SavedConnection> = emptyList(),
     /** Where this scan was saved. The phone's own fix, or the cap's fix on a sensor capture. */
     var latitude: Double? = null,
     var longitude: Double? = null,
@@ -64,12 +66,13 @@ class HistoryEntry(
         }
 
     val hasRecords: Boolean
-        get() = networks.isNotEmpty() || probes.isNotEmpty() || deauths.isNotEmpty() || lan.isNotEmpty() || bluetooth.isNotEmpty()
+        get() = networks.isNotEmpty() || probes.isNotEmpty() || deauths.isNotEmpty() ||
+            lan.isNotEmpty() || bluetooth.isNotEmpty() || connections.isNotEmpty()
 
     val itemCount: Int
         get() = when (kind) {
             "networks" -> (networks.size + probes.size + deauths.size).takeIf { it > 0 } ?: lines.size
-            "lan" -> lan.size.takeIf { it > 0 } ?: lines.size
+            "lan" -> (lan.size + connections.size).takeIf { it > 0 } ?: lines.size
             "lora" -> lines.size
             else -> bluetooth.size.takeIf { it > 0 } ?: lines.size
         }
@@ -180,6 +183,16 @@ class HistoryStore(context: Context) {
         upsert(
             "lan", source, networkKey ?: geoBucket(here), networkLabel ?: geoLabel(here),
             lan = devices.mapNotNull { snapshot(HistoryCodec.lan(it), HistoryCodec::lan) },
+            latitude = here?.first, longitude = here?.second,
+        )
+    }
+
+    /** Folds one finished connection check into today's LAN session for this network. */
+    fun upsertConnection(saved: SavedConnection, networkKey: String?, networkLabel: String?, source: String) {
+        val here = phoneLocation()
+        upsert(
+            "lan", source, networkKey ?: geoBucket(here), networkLabel ?: geoLabel(here),
+            connections = listOf(saved),
             latitude = here?.first, longitude = here?.second,
         )
     }
@@ -315,6 +328,7 @@ class HistoryStore(context: Context) {
         deauths: List<DeauthEvent> = emptyList(),
         lan: List<LanDevice> = emptyList(),
         bluetooth: List<BleDevice> = emptyList(),
+        connections: List<SavedConnection> = emptyList(),
         latitude: Double? = null,
         longitude: Double? = null,
     ) {
@@ -340,6 +354,7 @@ class HistoryStore(context: Context) {
                 deauths = mergeBy(old.deauths, deauths) { it.id },
                 lan = mergeLan(old.lan, lan),
                 bluetooth = mergeBle(old.bluetooth, bluetooth),
+                connections = mergeConnections(old.connections, connections),
                 latitude = latitude ?: old.latitude,
                 longitude = longitude ?: old.longitude,
             )
@@ -367,6 +382,7 @@ class HistoryStore(context: Context) {
                 deauths = deauths,
                 lan = lan,
                 bluetooth = bluetooth,
+                connections = connections,
                 latitude = latitude,
                 longitude = longitude,
             ),
@@ -404,6 +420,7 @@ class HistoryStore(context: Context) {
 
     companion object {
         const val LIMIT = 100
+        const val CONNECTION_LIMIT = 12
 
         /**
          * ~55 m geo bucket (0.0005°). Empty when there is no fix, so fixless
@@ -479,6 +496,16 @@ class HistoryStore(context: Context) {
             return byId.values.sortedWith(
                 compareByDescending<TrackedNetwork> { it.isInRange }.thenByDescending { it.latest.rssi },
             )
+        }
+
+        /** Newest first. A later check with the same start time replaces the earlier copy. */
+        fun mergeConnections(existing: List<SavedConnection>, incoming: List<SavedConnection>): List<SavedConnection> {
+            val seen = HashSet<Long>()
+            val merged = mutableListOf<SavedConnection>()
+            for (item in incoming + existing) {
+                if (seen.add(item.checkedAt)) merged.add(item)
+            }
+            return merged.take(CONNECTION_LIMIT)
         }
 
         fun mergeLan(existing: List<LanDevice>, incoming: List<LanDevice>): List<LanDevice> {
@@ -580,6 +607,7 @@ class HistoryStore(context: Context) {
             if (entry.deauths.isNotEmpty()) json.put("deauths", JSONArray().apply { entry.deauths.forEach { put(HistoryCodec.deauth(it)) } })
             if (entry.lan.isNotEmpty()) json.put("lan", JSONArray().apply { entry.lan.forEach { put(HistoryCodec.lan(it)) } })
             if (entry.bluetooth.isNotEmpty()) json.put("bluetooth", JSONArray().apply { entry.bluetooth.forEach { put(HistoryCodec.ble(it)) } })
+            if (entry.connections.isNotEmpty()) json.put("connections", JSONArray().apply { entry.connections.forEach { put(it.toJson()) } })
             entry.captureId?.let { json.put("captureId", it) }
             entry.placeKey?.let { json.put("placeKey", it) }
             entry.placeLabel?.let { json.put("placeLabel", it) }
@@ -614,6 +642,7 @@ class HistoryStore(context: Context) {
                 deauths = list("deauths", HistoryCodec::deauth),
                 lan = list("lan", HistoryCodec::lan),
                 bluetooth = list("bluetooth", HistoryCodec::ble),
+                connections = list("connections") { SavedConnection.fromJson(it) },
                 latitude = if (obj.has("latitude")) obj.getDouble("latitude") else null,
                 longitude = if (obj.has("longitude")) obj.getDouble("longitude") else null,
             )

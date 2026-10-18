@@ -155,7 +155,8 @@ fun SpectraScreen(
     onRefresh: (() -> Unit)? = null,
     listState: LazyListState = rememberLazyListState(),
     overlay: @Composable BoxScope.() -> Unit = {},
-    content: LazyListScope.() -> Unit,
+    fill: (@Composable BoxScope.() -> Unit)? = null,
+    content: LazyListScope.() -> Unit = {},
 ) {
     val large = onBack == null
     val behavior = if (large) {
@@ -238,7 +239,9 @@ fun SpectraScreen(
             }
         }
         Box(Modifier.padding(top = padding.calculateTopPadding()).fillMaxSize()) {
-            if (onRefresh != null) {
+            if (fill != null) {
+                Box(Modifier.fillMaxSize(), content = fill)
+            } else if (onRefresh != null) {
                 PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
                     list()
                 }

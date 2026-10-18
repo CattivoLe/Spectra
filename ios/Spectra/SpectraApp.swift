@@ -6,6 +6,7 @@ struct SpectraApp: App {
     @State private var history: HistoryStore
     @State private var link: SensorLink
     @State private var lanScanner = LANScanner()
+    @State private var linkProbe = LinkProbe()
     @State private var bleScanner = BLEScanner()
     @State private var location = LocationService()
 
@@ -24,6 +25,7 @@ struct SpectraApp: App {
                 .environment(history)
                 .environment(link)
                 .environment(lanScanner)
+                .environment(linkProbe)
                 .environment(bleScanner)
                 .environment(location)
                 .task {
@@ -40,6 +42,7 @@ struct RootView: View {
     enum Tab: Hashable { case networks, lan, bluetooth, history, sensor }
 
     @Environment(HistoryStore.self) private var history
+    @Environment(LinkProbe.self) private var linkProbe
     @Environment(SensorLink.self) private var link
     @Environment(NetworkStore.self) private var store
     @Environment(LANScanner.self) private var lanScanner
@@ -62,6 +65,16 @@ struct RootView: View {
             source: "This iPhone"
         )
         history.upsertBluetooth(Array(bleScanner.devices.values), source: "This iPhone")
+    }
+
+    private func keepConnection(_ snapshot: LinkSnapshot, viaVpn: Bool) {
+        guard autosave, snapshot.status != nil, snapshot.status != .noNetwork else { return }
+        history.upsertConnection(
+            SavedConnection(viaVpn: viaVpn, snapshot: snapshot),
+            networkKey: lanScanner.networkKey,
+            networkLabel: lanScanner.networkLabel,
+            source: "This iPhone"
+        )
     }
 
     var body: some View {
@@ -102,6 +115,7 @@ struct RootView: View {
                 autosaveNow()
             }
         }
+        .onAppear { linkProbe.onFinished = keepConnection }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { autosaveNow() }
         }

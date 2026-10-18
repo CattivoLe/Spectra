@@ -22,6 +22,7 @@ import cattivole.spectra.core.FirmwareUpload
 import cattivole.spectra.core.NetworkStore
 import cattivole.spectra.core.SensorInfo
 import cattivole.spectra.core.SensorProtocol
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -89,7 +90,11 @@ class SensorLink(
     private val prefs = app.getSharedPreferences("spectra", Context.MODE_PRIVATE)
     private val adapter: BluetoothAdapter? =
         app.getSystemService(BluetoothManager::class.java)?.adapter
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, _ ->
+            // A binder failure in the Bluetooth stack must not take the process down.
+        },
+    )
     private val found = linkedMapOf<String, Discovered>()
 
     private var gatt: BluetoothGatt? = null
@@ -99,6 +104,14 @@ class SensorLink(
     private var mtu = 23
     private var userDisconnected = false
     private var shouldReconnect = false
+    /**
+     * The activity is not on screen. The GATT client is closed so a later
+     * launch does not meet a half-dead client in the Bluetooth stack — that
+     * is what was crashing the process on the next start after a connection.
+     */
+    private var pausedByBackground = true
+    private var reconnectAttempt = 0
+    private var reconnectJob: Job? = null
     private var writing = false
     /** Each write keeps its own characteristic: a control command can queue behind firmware chunks. */
     private val writes = ArrayDeque<Pair<BluetoothGattCharacteristic, ByteArray>>()
@@ -121,7 +134,36 @@ class SensorLink(
         liveInterval = if (saved in liveIntervals) saved else 30
         radio.addListener { result -> onScan(result) }
         radio.onAdapterChange { adapterChanged() }
-        refreshAvailability(connectSaved = true)
+        refreshAvailability(connectSaved = false)
+    }
+
+    /**
+     * The activity is visible again. Reconnect to the last sensor from here,
+     * not from construction: [connectGatt] during [android.app.Activity.onCreate]
+     * throws on some phones when a previous client was still registered.
+     */
+    fun resumeFromForeground() {
+        pausedByBackground = false
+        reconnectAttempt = 0
+        refreshAvailability(connectSaved = false)
+        if (userDisconnected || demo != null || gatt != null) return
+        if (state is State.Idle) connectSaved()
+    }
+
+    /** Drop the radio client while the app is not visible. The address is kept. */
+    fun releaseForBackground() {
+        if (state is State.Demo || firmwareUpdate?.isRunning == true) return
+        pausedByBackground = true
+        reconnectJob?.cancel()
+        rebootJob?.cancel()
+        shouldReconnect = false
+        radio.setWants(sensor = false, devices = radioKeepsDevices())
+        closeGatt()
+        resetSession()
+        if (state is State.Connected || state is State.Connecting || state is State.Searching) {
+            state = State.Idle
+        }
+        publish()
     }
 
     /** Bluetooth was switched on or off in the system. */
@@ -132,8 +174,10 @@ class SensorLink(
             resetSession()
             state = State.PoweredOff
             publish()
-        } else {
+        } else if (!pausedByBackground) {
             refreshAvailability(connectSaved = true)
+        } else {
+            refreshAvailability(connectSaved = false)
         }
     }
 
@@ -175,7 +219,7 @@ class SensorLink(
      */
     @SuppressLint("MissingPermission")
     fun connect(address: String, name: String = address, background: Boolean = false) {
-        if (!readyForRadio()) return
+        if (pausedByBackground || !readyForRadio()) return
         val device = try {
             adapter?.getRemoteDevice(address)
         } catch (_: IllegalArgumentException) {
@@ -186,13 +230,45 @@ class SensorLink(
         state = State.Connecting(name)
         radio.setWants(sensor = false, devices = radioKeepsDevices())
         publish()
-        gatt = device.connectGatt(app, background, callback, BluetoothDevice.TRANSPORT_LE)
+        gatt = openGatt(device, background)
+        if (gatt == null) scheduleReconnect(address, name)
+        else reconnectAttempt = 0
+    }
+
+    /**
+     * Some stacks throw from inside `registerClient` when the previous GATT
+     * client is still tearing down. That used to escape [android.app.Activity.onCreate]
+     * and the app would not start again after it had connected once.
+     */
+    @SuppressLint("MissingPermission")
+    private fun openGatt(device: BluetoothDevice, autoConnect: Boolean): BluetoothGatt? = try {
+        device.connectGatt(app, autoConnect, callback, BluetoothDevice.TRANSPORT_LE)
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun scheduleReconnect(address: String, name: String) {
+        if (pausedByBackground || userDisconnected || demo != null) return
+        reconnectJob?.cancel()
+        if (reconnectAttempt >= 5) {
+            state = State.Idle
+            publish()
+            return
+        }
+        val waitMs = 600L * (reconnectAttempt + 1)
+        reconnectAttempt += 1
+        reconnectJob = scope.launch {
+            delay(waitMs)
+            if (pausedByBackground || userDisconnected || gatt != null || demo != null) return@launch
+            connect(address, name, background = true)
+        }
     }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
         userDisconnected = true
         shouldReconnect = false
+        reconnectJob?.cancel()
         rebootJob?.cancel()
         prefs.edit().remove(KEY_SENSOR).remove(KEY_SENSOR_NAME).apply()
         closeGatt()
@@ -340,6 +416,7 @@ class SensorLink(
         demo?.stop()
         updateJob?.cancel()
         rebootJob?.cancel()
+        reconnectJob?.cancel()
         scope.coroutineContext[Job]?.cancel()
         closeGatt()
     }
@@ -361,7 +438,7 @@ class SensorLink(
     @SuppressLint("MissingPermission")
     private fun connectSaved() {
         val address = prefs.getString(KEY_SENSOR, null) ?: return
-        if (userDisconnected || demo != null || gatt != null) return
+        if (pausedByBackground || userDisconnected || demo != null || gatt != null) return
         connect(address, prefs.getString(KEY_SENSOR_NAME, null) ?: "Spectra", background = true)
     }
 
@@ -555,13 +632,19 @@ class SensorLink(
 
     @SuppressLint("MissingPermission")
     private fun closeGatt() {
-        gatt?.close()
+        val current = gatt
         gatt = null
         control = null
         firmwareChar = null
         results = null
         writes.clear()
         writing = false
+        if (current == null) return
+        try {
+            current.close()
+        } catch (_: Exception) {
+            // The Bluetooth process has already dropped this client.
+        }
     }
 
     private val callback = object : BluetoothGattCallback() {
@@ -570,29 +653,46 @@ class SensorLink(
             scope.launch {
                 if (gatt != this@SensorLink.gatt) {
                     // A link that was already replaced or closed.
-                    gatt.close()
+                    try {
+                        gatt.close()
+                    } catch (_: Exception) {
+                    }
                     return@launch
                 }
                 if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
-                    gatt.discoverServices()
+                    if (pausedByBackground) {
+                        closeGatt()
+                        return@launch
+                    }
+                    val started = try {
+                        gatt.discoverServices()
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (!started) {
+                        val name = (state as? State.Connecting)?.name ?: "Spectra"
+                        val address = prefs.getString(KEY_SENSOR, null)
+                        closeGatt()
+                        if (address != null) scheduleReconnect(address, name)
+                    }
                     return@launch
                 }
                 val wasConnected = state is State.Connected
-                val device = gatt.device
+                val address = runCatching { gatt.device.address }.getOrNull() ?: prefs.getString(KEY_SENSOR, null)
+                val name = (state as? State.Connected)?.name ?: prefs.getString(KEY_SENSOR_NAME, null) ?: "Spectra"
                 closeGatt()
                 resetSession()
                 when {
-                    state is State.Demo || userDisconnected -> Unit
-                    wasConnected || shouldReconnect -> {
+                    pausedByBackground || state is State.Demo || userDisconnected -> Unit
+                    address != null && (wasConnected || shouldReconnect) -> {
                         // Out of range or rebooting: keep a request pending, which
                         // Android completes whenever the sensor comes back.
-                        val name = (state as? State.Connected)?.name ?: prefs.getString(KEY_SENSOR_NAME, null) ?: "Spectra"
                         state = State.Connecting(name)
                         publish()
                         // A failure can come back at once; do not spin on it.
                         delay(800)
-                        if (state is State.Connecting && this@SensorLink.gatt == null && !userDisconnected) {
-                            connect(device.address, name, background = true)
+                        if (!pausedByBackground && state is State.Connecting && this@SensorLink.gatt == null && !userDisconnected) {
+                            connect(address, name, background = true)
                         }
                     }
                     else -> state = State.Idle

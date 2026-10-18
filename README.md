@@ -97,8 +97,8 @@ language (English or Russian); strings live in
 
 The LAN tab reads `/proc/net/arp`, so neighbour hardware addresses are
 usually visible, and it walks the joined Wi-Fi or Ethernet subnet. A prefix
-wider than /24 is limited to the local /24. There is no raw ICMP, so a host
-counts as present when a short TCP connect succeeds or ARP already has it.
+wider than /20 is limited to the local /24. There is no raw ICMP, so a host
+counts as present when a TCP connect opens or is refused, or ARP already has it.
 
 ## Protocol
 

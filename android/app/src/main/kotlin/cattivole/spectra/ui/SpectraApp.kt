@@ -90,6 +90,11 @@ class Navigator(private val nav: NavHostController) {
     fun host(ip: String, entry: String? = null) =
         nav.navigate(if (entry == null) "host/${Uri.encode(ip)}" else "saved/host/${Uri.encode(entry)}/${Uri.encode(ip)}")
 
+    fun connection() = nav.navigate("connection")
+
+    fun savedConnection(entry: String, checkedAt: Long) =
+        nav.navigate("saved/connection/${Uri.encode(entry)}/$checkedAt")
+
     fun ble(address: String, entry: String? = null) =
         nav.navigate(if (entry == null) "ble/${Uri.encode(address)}" else "saved/ble/${Uri.encode(entry)}/${Uri.encode(address)}")
 
@@ -198,6 +203,7 @@ fun SpectraApp(model: SpectraModel) {
                 navigation(startDestination = Tab.Lan.start, route = Tab.Lan.graph) {
                     composable(Tab.Lan.start) { LanScreen(model, navigator) }
                     composable("host/{ip}") { LanDetail(model, navigator, it.text("ip"), entryId = null) }
+                    composable("connection") { LinkScreen(model, navigator) }
                 }
                 navigation(startDestination = Tab.Bluetooth.start, route = Tab.Bluetooth.graph) {
                     composable(Tab.Bluetooth.start) { BluetoothScreen(model, navigator) }
@@ -210,6 +216,9 @@ fun SpectraApp(model: SpectraModel) {
                     composable("saved/client/{entry}/{mac}") { ClientDetail(model, navigator, it.mac("mac"), it.text("entry")) }
                     composable("saved/host/{entry}/{ip}") { LanDetail(model, navigator, it.text("ip"), it.text("entry")) }
                     composable("saved/ble/{entry}/{address}") { BleDetail(model, navigator, it.text("address"), it.text("entry")) }
+                    composable("saved/connection/{entry}/{at}") {
+                        SavedLinkScreen(model, navigator, it.text("entry"), it.arguments?.getString("at")?.toLongOrNull() ?: 0L)
+                    }
                 }
                 navigation(startDestination = Tab.Sensor.start, route = Tab.Sensor.graph) {
                     composable(Tab.Sensor.start) { SensorScreen(model) }

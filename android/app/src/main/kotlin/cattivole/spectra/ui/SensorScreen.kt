@@ -67,11 +67,15 @@ internal fun sensorHeadline(model: SpectraModel): String = when (val state = mod
 
 internal fun batteryLine(level: Int, charging: Boolean): String = if (charging) tr("%d%%, charging", level) else "$level%"
 
+/** The status line, where a bare percent would not say what it measures. */
+private fun batterySummary(level: Int, charging: Boolean): String =
+    if (charging) tr("Battery %d%%, charging", level) else tr("Battery %d%%", level)
+
 internal fun sensorDetail(model: SpectraModel, showCharging: Boolean = true): String {
     val link = model.link
     val parts = listOfNotNull(
         if (model.store.isScanning) tr("Scanning") else null,
-        link.batteryLevel?.let { batteryLine(it, showCharging && link.isCharging == true) },
+        link.batteryLevel?.let { batterySummary(it, showCharging && link.isCharging == true) },
     )
     if (parts.isNotEmpty()) return parts.joinToString(" · ")
     return when (link.state) {
@@ -281,25 +285,25 @@ fun SensorScreen(model: SpectraModel) {
                 }
             }
         }
-        card(
-            key = "demo",
-            footer = tr("Made-up networks with drifting signal, for trying the app without a Cardputer."),
-            rows = listOf {
-                val demo = link.state is SensorLink.State.Demo
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .toggleable(value = demo, role = Role.Switch, onValueChange = { link.setDemo(it) })
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    IconTile(Icons.Rounded.AutoAwesome, Spectra.colors.revealed, size = 36.dp)
-                    Text(tr("Demo sensor"), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                    Switch(demo, null)
-                }
-            },
-        )
+//        card(
+//            key = "demo",
+//            footer = tr("Made-up networks with drifting signal, for trying the app without a Cardputer."),
+//            rows = listOf {
+//                val demo = link.state is SensorLink.State.Demo
+//                Row(
+//                    Modifier
+//                        .fillMaxWidth()
+//                        .toggleable(value = demo, role = Role.Switch, onValueChange = { link.setDemo(it) })
+//                        .padding(horizontal = 16.dp, vertical = 8.dp),
+//                    verticalAlignment = Alignment.CenterVertically,
+//                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+//                ) {
+//                    IconTile(Icons.Rounded.AutoAwesome, Spectra.colors.revealed, size = 36.dp)
+//                    Text(tr("Demo sensor"), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+//                    Switch(demo, null)
+//                }
+//            },
+//        )
         freeCard("about", header = tr("About the sensor")) {
             Text(
                 tr("Android lists nearby networks by itself, including 5 and 6 GHz. A Cardputer adds what a phone cannot hear: clients, probe requests, deauth frames, hidden names and traffic. Its ESP32-S3 hears the 2.4 GHz band only."),
