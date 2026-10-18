@@ -21,6 +21,7 @@ struct HistoryView: View {
     @State private var selectedPin: HistoryPin?
     @State private var showUnlocated = false
     @State private var camera: MapCameraPosition = .automatic
+    @State private var shareItem: ShareItem?
 
     /// One collapsible group of sessions: a day, or a place.
     private struct Group: Identifiable {
@@ -101,6 +102,7 @@ struct HistoryView: View {
             .sheet(isPresented: $showUnlocated) {
                 pinSheet(title: String(localized: "No location"), entries: unlocated)
             }
+            .shareSheet(item: $shareItem)
             .toolbar { historyToolbar }
         }
     }
@@ -118,6 +120,11 @@ struct HistoryView: View {
                 ToolbarSpacer(.fixed, placement: .topBarTrailing)
             }
         }
+        if !history.entries.isEmpty {
+            ToolbarItem(placement: .topBarTrailing) {
+                exportMenu(entries: history.entries)
+            }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Button("Settings", systemImage: "gearshape") { showSettings = true }
         }
@@ -127,6 +134,19 @@ struct HistoryView: View {
                     confirmClear = true
                 }
             }
+        }
+    }
+
+    private func exportMenu(entries: [HistoryEntry]) -> some View {
+        Menu {
+            ForEach(Exporter.Format.allCases) { format in
+                Button(format.label) {
+                    let file = Exporter.file(format, from: entries)
+                    if let url = writeExport(file) { shareItem = ShareItem(url: url) }
+                }
+            }
+        } label: {
+            Label("Export", systemImage: "square.and.arrow.up")
         }
     }
 
@@ -406,6 +426,7 @@ private struct HistorySettingsView: View {
 struct HistoryDetailView: View {
     var id: UUID
     @Environment(HistoryStore.self) private var history
+    @State private var shareItem: ShareItem?
 
     private var entry: HistoryEntry? { history.entries.first { $0.id == id } }
 
@@ -443,8 +464,21 @@ struct HistoryDetailView: View {
             }
         }
         .navigationTitle(entry?.kind.title ?? "History")
+        .shareSheet(item: $shareItem)
         .toolbar {
-            if entry != nil {
+            if let entry {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        ForEach(Exporter.Format.allCases) { format in
+                            Button(format.label) {
+                                let file = Exporter.file(format, from: [entry])
+                                if let url = writeExport(file) { shareItem = ShareItem(url: url) }
+                            }
+                        }
+                    } label: {
+                        Label("Export", systemImage: "square.and.arrow.up")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Delete", systemImage: "trash", role: .destructive) {
                         history.delete(id)

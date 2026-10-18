@@ -139,6 +139,9 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     SpectraScreen(
         title = tr("History"),
         actions = {
+            if (history.entries.isNotEmpty()) {
+                ExportMenu(history.entries)
+            }
             IconButton(onClick = { showSettings = true }) { Icon(Icons.Rounded.Settings, contentDescription = tr("History settings")) }
             if (history.entries.isNotEmpty()) {
                 IconButton(onClick = { confirmClear = true }) { Icon(Icons.Rounded.DeleteSweep, contentDescription = tr("Clear")) }
@@ -359,6 +362,7 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
         subtitle = footer,
         onBack = nav::back,
         actions = {
+            ExportMenu(listOf(entry))
             IconButton(onClick = {
                 model.history.delete(id)
                 nav.back()
