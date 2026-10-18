@@ -9,6 +9,13 @@ object ChannelAdvisor {
     val candidates = listOf(1, 6, 11)
 
     /**
+     * Common non-DFS 20 MHz channels in the 5 GHz band (UNII-1 and UNII-3).
+     * DFS channels (52–144) are left out: quieter, but a router there must
+     * vacate on radar, so they make a poor fixed recommendation.
+     */
+    val fiveCandidates = listOf(36, 40, 44, 48, 149, 153, 157, 161)
+
+    /**
      * Interference a network on [channel] would meet: received power of every
      * network whose signal overlaps it, weighted by how much it overlaps.
      * Power adds in milliwatts, so one loud neighbour outweighs several faint ones.
@@ -28,8 +35,13 @@ object ChannelAdvisor {
         }
     }
 
+    /** The least crowded of the non-overlapping 2.4 GHz channels. */
     fun recommendation(readings: List<AccessPointReading>): Int =
         candidates.minByOrNull { congestion(it, readings) } ?: 1
+
+    /** The least crowded of the common non-DFS 5 GHz channels. */
+    fun recommendationFive(readings: List<AccessPointReading>): Int =
+        fiveCandidates.minByOrNull { congestion(it, readings) } ?: 36
 
     /** Congestion on a 0..1 scale, where 1 is a loud network (-40 dBm) right on top. */
     fun level(congestion: Double): Double {

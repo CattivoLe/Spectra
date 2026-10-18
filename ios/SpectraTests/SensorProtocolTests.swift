@@ -364,6 +364,12 @@ struct ChannelAdvisorTests {
         #expect(wide.occupiedChannels == 4...12)
         #expect(ChannelAdvisor.congestion(on: 11, from: [wide]) > 0)
     }
+
+    @Test func fiveGHzRecommendationAvoidsTheOccupiedChannel() {
+        let best = ChannelAdvisor.recommendationFiveGHz(from: [on(36, rssi: -38)])
+        #expect(ChannelAdvisor.fiveGHzCandidates.contains(best))
+        #expect(best != 36)
+    }
 }
 
 struct LastScanTests {

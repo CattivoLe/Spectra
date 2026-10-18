@@ -860,6 +860,25 @@ fun ChannelsScreen(model: SpectraModel, nav: Navigator) {
                 val span = wideDomain(five)
                 ChannelSpectrum(five, ticks = listOf(36, 52, 100, 116, 132, 149, 165).filter { it.toDouble() in span }, domain = span)
             }
+            val bestFive = ChannelAdvisor.recommendationFive(five)
+            freeCard("advice-5") {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Box(
+                        Modifier.size(56.dp).clip(RoundedCornerShape(16.dp)).background(Spectra.colors.spectrum, alpha = 0.22f),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("$bestFive", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("Quietest channel here"), style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            tr("Of the non-DFS channels 36–48 and 149–161, this one meets the least interference."),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
         if (six.isNotEmpty()) {
             freeCard(
