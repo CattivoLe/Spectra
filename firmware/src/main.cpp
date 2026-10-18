@@ -4,7 +4,10 @@
 // results to the Spectra iOS app over BLE. The wire format is described in
 // docs/protocol.md.
 
+#include "Bytes.h"
+#include "Crc32.h"
 #include "LoraCap.h"
+#include "Protocol.h"
 
 #include <M5Cardputer.h>
 #include <ESPmDNS.h>
@@ -25,60 +28,9 @@
 // carries. The version below points into it, so the linker keeps the tag.
 static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.9.1";
 static constexpr const char* kFirmwareVersion = kFirmwareTag + 11;
-static constexpr uint8_t kProtocolVersion = 7;
 
-static constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
-static constexpr char kInfoUuid[] = "53500002-8F2D-4B6A-9C1E-737065637472";
-static constexpr char kControlUuid[] = "53500003-8F2D-4B6A-9C1E-737065637472";
-static constexpr char kResultsUuid[] = "53500004-8F2D-4B6A-9C1E-737065637472";
-static constexpr char kFirmwareUuid[] = "53500005-8F2D-4B6A-9C1E-737065637472";
-
-static constexpr uint8_t kCmdScanOnce = 0x01;
-static constexpr uint8_t kCmdSetInterval = 0x02;
-static constexpr uint8_t kCmdAckSaved = 0x03;
-static constexpr uint8_t kCmdScanLora = 0x04;
-
-static constexpr uint8_t kMsgScanStarted = 0x10;
-static constexpr uint8_t kMsgAccessPoint = 0x11;
-static constexpr uint8_t kMsgScanFinished = 0x12;
-static constexpr uint8_t kMsgStation = 0x13;
-static constexpr uint8_t kMsgProbeReq = 0x14;
-static constexpr uint8_t kMsgDeauth = 0x15;
-static constexpr uint8_t kMsgSSIDReveal = 0x16;
-static constexpr uint8_t kMsgTraffic = 0x17;
-static constexpr uint8_t kMsgVendorIE = 0x18;
-static constexpr uint8_t kMsgBattery = 0x19;
-static constexpr uint8_t kMsgSavedWifi = 0x1A;
-static constexpr uint8_t kMsgSavedBle = 0x1B;
-static constexpr uint8_t kMsgSavedLan = 0x1C;
-static constexpr uint8_t kMsgSavedGps = 0x1D;
-static constexpr uint8_t kMsgLoraDevice = 0x1E;
-static constexpr uint8_t kMsgLoraScan = 0x1F;
-static constexpr uint8_t kMsgLoraProgress = 0x22;
-static constexpr uint8_t kMsgSavedLora = 0x20;
-static constexpr uint8_t kMsgGps = 0x21;
-static constexpr uint8_t kMsgUpdate = 0x30;
-
-static constexpr uint8_t kOtaBegin = 0x01;
-static constexpr uint8_t kOtaData = 0x02;
-static constexpr uint8_t kOtaFinish = 0x03;
-static constexpr uint8_t kOtaAbort = 0x04;
-
-static constexpr uint8_t kOtaReady = 1;
-static constexpr uint8_t kOtaProgress = 2;
-static constexpr uint8_t kOtaDone = 3;
-static constexpr uint8_t kOtaFailed = 4;
-
-static constexpr uint8_t kOtaErrNone = 0;
-static constexpr uint8_t kOtaErrBusy = 1;
-static constexpr uint8_t kOtaErrTooLarge = 2;
-static constexpr uint8_t kOtaErrBegin = 3;
-static constexpr uint8_t kOtaErrOffset = 4;
-static constexpr uint8_t kOtaErrWrite = 5;
-static constexpr uint8_t kOtaErrCrc = 6;
-static constexpr uint8_t kOtaErrFinish = 7;
-static constexpr uint8_t kOtaErrAbort = 8;
-static constexpr uint8_t kOtaErrImage = 9;
+// Wire protocol constants (UUIDs, command/message/update bytes) live in
+// Protocol.h; the byte-packing helpers in Bytes.h.
 
 // Time spent on each channel during an active scan. 13 channels at 120 ms
 // keeps a full sweep under two seconds.
@@ -263,9 +215,6 @@ static volatile uint8_t otaJob = 0;
 static volatile bool otaJobBusy = false;
 static uint32_t otaJobSize = 0;
 static uint32_t otaJobCrc = 0;
-static uint32_t crc32Table[256];
-static bool crc32Ready = false;
-
 // Collected during promiscuous-mode capture; accessed only from loop().
 static std::vector<StationEntry> capturedStations;
 static std::vector<ProbeEntry> capturedProbes;
@@ -767,15 +716,6 @@ static void sendLive(const uint8_t *data, size_t length) {
   }
 }
 
-static void putU16(uint8_t *p, uint16_t v) {
-  p[0] = v & 0xFF;
-  p[1] = v >> 8;
-}
-
-static uint16_t readU16(const uint8_t *p) {
-  return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
-}
-
 static void sendScanStarted() {
   uint8_t msg[3] = {kMsgScanStarted};
   putU16(msg + 1, scanId);
@@ -942,34 +882,6 @@ static void sendScanFinished(uint16_t apCount, uint16_t staCount,
 // Firmware update
 // ---------------------------------------------------------------------------
 
-static void crc32Ensure() {
-  if (crc32Ready) {
-    return;
-  }
-  for (uint32_t i = 0; i < 256; ++i) {
-    uint32_t crc = i;
-    for (int bit = 0; bit < 8; ++bit) {
-      crc = (crc & 1) ? (0xEDB88320u ^ (crc >> 1)) : (crc >> 1);
-    }
-    crc32Table[i] = crc;
-  }
-  crc32Ready = true;
-}
-
-static uint32_t crc32Update(uint32_t crc, const uint8_t *data, size_t length) {
-  crc32Ensure();
-  crc = ~crc;
-  for (size_t i = 0; i < length; ++i) {
-    crc = crc32Table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
-  }
-  return ~crc;
-}
-
-static bool otaCrcSelfCheck() {
-  const uint8_t sample[] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
-  return crc32Update(0, sample, sizeof(sample)) == 0xCBF43926u;
-}
-
 // Whether an update can actually be written and booted. The app must run from
 // an OTA app partition (otherwise the bootloader ignores what we flash) and
 // there must be a different slot with room for the image. With a single OTA
@@ -984,18 +896,6 @@ static bool otaAvailable() {
   }
   const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
   return next != nullptr && next != running && next->size >= 32;
-}
-
-static void putU32(uint8_t *p, uint32_t value) {
-  p[0] = value & 0xFF;
-  p[1] = (value >> 8) & 0xFF;
-  p[2] = (value >> 16) & 0xFF;
-  p[3] = (value >> 24) & 0xFF;
-}
-
-static uint32_t getU32(const uint8_t *p) {
-  return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-         (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
 }
 
 static void notifyOta(uint8_t phase, uint8_t error) {
