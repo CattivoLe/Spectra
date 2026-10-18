@@ -2,7 +2,6 @@ import SwiftUI
 
 struct LANView: View {
     @Environment(LANScanner.self) private var scanner
-    @Environment(HistoryStore.self) private var history
     @State private var search = ""
 
     private var visible: [LANDevice] {
@@ -76,15 +75,6 @@ struct LANView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     LANStatusBar()
-                }
-                if #available(iOS 26, *) {
-                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save", systemImage: "square.and.arrow.down") {
-                        history.saveLAN(scanner.sortedDevices, source: "This iPhone")
-                    }
-                    .disabled(scanner.devices.isEmpty)
                 }
                 if #available(iOS 26, *) {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)

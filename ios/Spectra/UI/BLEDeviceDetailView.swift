@@ -136,6 +136,12 @@ struct BLEDeviceDetailView: View {
                                     .font(.caption.monospaced())
                                     .foregroundStyle(.secondary)
                             }
+                            if let beacon = BeaconDecode.decode(uuid: item.uuid, data: item.data) {
+                                Text(beacon.detail.map { "\(beacon.title) · \($0)" } ?? beacon.title)
+                                    .font(.caption)
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                             Text(bleHex(item.data))
                                 .font(.caption.monospaced())
                                 .foregroundStyle(.secondary)
@@ -235,6 +241,12 @@ struct BLEDeviceDetailView: View {
                         }
                     }
                     if let value = characteristic.value, !value.isEmpty {
+                        if let decoded = GATTValue.decode(uuid: characteristic.uuid, bytes: value) {
+                            Text(decoded)
+                                .font(.caption2)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         Text(gattValueText(value))
                             .font(.caption2.monospaced())
                             .foregroundStyle(.secondary)

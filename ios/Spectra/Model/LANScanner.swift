@@ -32,6 +32,10 @@ struct SubnetInfo {
         return ((networkValue + 1)..<broadcastValue).map(formatIP)
     }
 
+    /// Network address and prefix, e.g. `192.168.1.0/24`. Stable across a DHCP
+    /// lease change, unlike `localIP`.
+    var networkLabel: String { "\(formatIP(networkValue))/\(cidr)" }
+
     static func current() -> SubnetInfo? {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
@@ -557,6 +561,20 @@ final class LANScanner {
             return aIP < bIP
         }
     }
+
+    /// Stable identity of the joined network, so a re-scan of the same network
+    /// enriches its history session instead of starting a new one. Prefers the
+    /// gateway's hardware address; falls back to the subnet.
+    var networkKey: String? {
+        if let gateway = devices.values.first(where: { $0.isGateway })?.macAddress {
+            return "lan:gw:\(gateway.description)"
+        }
+        guard let subnet = subnetInfo else { return nil }
+        return "lan:net:\(subnet.networkLabel)"
+    }
+
+    /// Human label for the joined network, shown in History's by-place view.
+    var networkLabel: String? { subnetInfo?.networkLabel }
 
     var isScanning: Bool {
         if case .scanning = state { return true }

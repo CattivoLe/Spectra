@@ -155,6 +155,13 @@ static volatile bool scanRequested = false;
 static volatile uint8_t scanIntervalSec = 0;
 static volatile bool intervalChanged = false;
 static volatile bool linkChanged = true;
+// True once the phone has subscribed to the Results characteristic. A notify
+// before that is dropped by the stack, so stored captures wait for it.
+static volatile bool resultsSubscribed = false;
+// Set when a connection needs its stored captures flushed once the phone is
+// subscribed. Handled in loop(), not the callback, to keep BLE work off the
+// host task.
+static volatile bool captureFlushPending = false;
 // When to tell a newly connected phone that the services may have changed.
 static uint32_t serviceChangedAt = 0;
 
@@ -643,6 +650,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     scanIntervalSec = 0;
     intervalChanged = true;
     linkChanged = true;
+    resultsSubscribed = false;
+    captureFlushPending = false;
     if (otaActive) {
       if (Update.isRunning()) {
         Update.abort();
@@ -652,6 +661,18 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       otaRebootPending = false;
       WiFi.mode(WIFI_STA);
       WiFi.disconnect();
+    }
+  }
+};
+
+// The phone subscribes to Results after it discovers the service, which is a
+// little after the link comes up. Captures queued before that are dropped, so
+// the flush waits for this.
+class ResultsCallbacks : public NimBLECharacteristicCallbacks {
+  void onSubscribe(NimBLECharacteristic *, NimBLEConnInfo &, uint16_t subValue) override {
+    resultsSubscribed = subValue != 0;
+    if (resultsSubscribed) {
+      captureFlushPending = true;
     }
   }
 };
@@ -707,16 +728,18 @@ class ControlCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 // Sends one Results notification, waiting for buffers when the stack is busy.
-static void sendMessage(const uint8_t *data, size_t length) {
+// Returns false when it could not be delivered, so the caller keeps it queued.
+static bool sendMessage(const uint8_t *data, size_t length) {
   if (!isConnected()) {
-    return;
+    return false;
   }
   for (int attempt = 0; attempt < 25; ++attempt) {
     if (resultsChar->notify(data, length)) {
-      return;
+      return true;
     }
     delay(10);
   }
+  return false;
 }
 
 // One try, then the outbox. A LoRa pass blocks the main loop, so a dropped
@@ -1644,8 +1667,11 @@ static void pumpOutbox() {
     return;
   }
   const std::vector<uint8_t> &msg = outbox.front();
-  sendMessage(msg.data(), msg.size());
-  outbox.erase(outbox.begin());
+  // Keep the item queued if it could not be delivered, so a capture is not
+  // lost to a transient failure.
+  if (sendMessage(msg.data(), msg.size())) {
+    outbox.erase(outbox.begin());
+  }
   lastOutMs = millis();
 }
 
@@ -2183,6 +2209,7 @@ static void setupBle() {
       kControlUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   control->setCallbacks(new ControlCallbacks());
   resultsChar = service->createCharacteristic(kResultsUuid, NIMBLE_PROPERTY::NOTIFY);
+  resultsChar->setCallbacks(new ResultsCallbacks());
   NimBLECharacteristic *firmware = service->createCharacteristic(
       kFirmwareUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   firmware->setCallbacks(new FirmwareCallbacks());
@@ -2549,8 +2576,8 @@ void loop() {
     linkChanged = false;
     uiDirty = true;
     if (isConnected()) {
-      queueUnsent();
-      sendGpsFix();
+      // Captures and the GPS fix wait for the Results subscription (see
+      // captureFlushPending); a notify before that is dropped.
       // iOS keeps a copy of the service list per device and reuses it, so a
       // phone that met firmware without the Firmware characteristic never
       // sees it. A Service Changed indication makes it look again; it is sent
@@ -2562,6 +2589,11 @@ void loop() {
         cap.queued = false;
       }
     }
+  }
+  if (captureFlushPending && resultsSubscribed && isConnected()) {
+    captureFlushPending = false;
+    queueUnsent();
+    sendGpsFix();
   }
   if (serviceChangedAt != 0 && static_cast<int32_t>(millis() - serviceChangedAt) >= 0) {
     serviceChangedAt = 0;

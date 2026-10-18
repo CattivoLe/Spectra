@@ -41,8 +41,28 @@ struct RootView: View {
 
     @Environment(HistoryStore.self) private var history
     @Environment(SensorLink.self) private var link
+    @Environment(NetworkStore.self) private var store
+    @Environment(LANScanner.self) private var lanScanner
+    @Environment(BLEScanner.self) private var bleScanner
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("autosaveHistory") private var autosave = true
     @State private var tab: Tab = .networks
     @State private var notice: SaveNotice?
+
+    /// Folds whatever each source has found into its History session. Each
+    /// upsert is silent and no-ops when there is nothing to save, so it is safe
+    /// to call often.
+    private func autosaveNow() {
+        guard autosave else { return }
+        history.upsertNetworks(store, source: "This iPhone")
+        history.upsertLAN(
+            lanScanner.sortedDevices,
+            networkKey: lanScanner.networkKey,
+            networkLabel: lanScanner.networkLabel,
+            source: "This iPhone"
+        )
+        history.upsertBluetooth(Array(bleScanner.devices.values), source: "This iPhone")
+    }
 
     var body: some View {
         TabView(selection: $tab) {
@@ -74,6 +94,19 @@ struct RootView: View {
         .sensoryFeedback(trigger: link.isConnected) { _, connected in
             connected ? .success : .impact(weight: .light)
         }
+        .task {
+            // Enrich the open sessions while scanning; a hard flush also happens
+            // when the app leaves the foreground.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                autosaveNow()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { autosaveNow() }
+        }
+        .onChange(of: store.scanCount) { _, _ in autosaveNow() }
+        .onChange(of: lanScanner.scanCount) { _, _ in autosaveNow() }
         .onChange(of: history.lastSave) { _, saved in
             guard let saved else { return }
             withAnimation(.spring(duration: 0.35)) { notice = saved }

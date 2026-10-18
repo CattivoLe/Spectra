@@ -49,12 +49,6 @@ struct BLEView: View {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    BLESaveButton()
-                }
-                if #available(iOS 26, *) {
-                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
                     BLEOptionsMenu(sort: $sort, scope: $scope, showOutOfRange: $showOutOfRange)
                 }
             }
@@ -246,18 +240,6 @@ private struct BLEOptionsMenu: View {
     private var scannerUnavailable: Bool {
         if case .unavailable = scanner.state { return true }
         return false
-    }
-}
-
-private struct BLESaveButton: View {
-    @Environment(BLEScanner.self) private var scanner
-    @Environment(HistoryStore.self) private var history
-
-    var body: some View {
-        Button("Save", systemImage: "square.and.arrow.down") {
-            history.saveBluetooth(Array(scanner.devices.values), source: "This iPhone")
-        }
-        .disabled(!scanner.hasDevices)
     }
 }
 

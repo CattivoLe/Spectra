@@ -1,55 +1,71 @@
 import MapKit
 import SwiftUI
 
+/// How the saved sessions are grouped on screen.
+enum HistoryGrouping: String, CaseIterable, Identifiable {
+    case date, place
+    var id: String { rawValue }
+    var label: LocalizedStringKey { self == .date ? "By date" : "By place" }
+    var systemImage: String { self == .date ? "calendar" : "mappin.and.ellipse" }
+}
+
 struct HistoryView: View {
     @Environment(HistoryStore.self) private var history
+    @AppStorage("historyGrouping") private var grouping: HistoryGrouping = .date
+    @AppStorage("autosaveHistory") private var autosave = true
     @State private var confirmClear = false
-    @State private var collapsed: Set<HistoryEntry.Kind> = []
+    @State private var showSettings = false
+    /// Expanded group keys. Empty means every group starts collapsed.
+    @State private var expanded: Set<String> = []
+
+    /// One collapsible group of sessions: a day, or a place.
+    private struct Group: Identifiable {
+        var id: String
+        var label: String
+        var entries: [HistoryEntry]
+        /// Which scan types this group holds, for the icon row on the header.
+        var kinds: [HistoryEntry.Kind] {
+            var seen: Set<HistoryEntry.Kind> = []
+            return entries.compactMap { seen.insert($0.kind).inserted ? $0.kind : nil }
+        }
+        var itemCount: Int { entries.reduce(0) { $0 + $1.itemCount } }
+    }
+
+    private var groups: [Group] {
+        switch grouping {
+        case .date: return byDate()
+        case .place: return byPlace()
+        }
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                ForEach(HistoryEntry.Kind.allCases, id: \.self) { kind in
-                    let rows = history.entries.filter { $0.kind == kind }
-                    if !rows.isEmpty {
-                        let isExpanded = !collapsed.contains(kind)
-                        Section {
-                            if isExpanded {
-                                ForEach(rows) { entry in
-                                    NavigationLink(value: entry.id) {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text("\(entry.itemCount) · \(entry.source)")
-                                                .font(.body.weight(.semibold))
-                                            Text(entry.savedAt, style: .relative)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    .swipeActions {
-                                        Button("Delete", role: .destructive) {
-                                            history.delete(entry.id)
-                                        }
+                ForEach(groups) { group in
+                    let isExpanded = expanded.contains(group.id)
+                    Section {
+                        if isExpanded {
+                            ForEach(group.entries) { entry in
+                                NavigationLink(value: entry.id) {
+                                    EntryRow(entry: entry, showPlace: grouping == .date)
+                                }
+                                .swipeActions {
+                                    Button("Delete", role: .destructive) {
+                                        history.delete(entry.id)
                                     }
                                 }
                             }
-                        } header: {
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    if isExpanded { collapsed.insert(kind) } else { collapsed.remove(kind) }
-                                }
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Label(kind.title, systemImage: kind.systemImage)
-                                    Spacer()
-                                    Text("\(rows.count)")
-                                        .foregroundStyle(.secondary)
-                                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                }
-                                .contentShape(Rectangle())
+                        }
+                    } header: {
+                        GroupHeader(
+                            label: group.label,
+                            kinds: group.kinds,
+                            count: group.itemCount,
+                            isExpanded: isExpanded
+                        ) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                if isExpanded { expanded.remove(group.id) } else { expanded.insert(group.id) }
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -59,7 +75,7 @@ struct HistoryView: View {
                     ContentUnavailableView(
                         "Nothing saved",
                         systemImage: "clock.arrow.circlepath",
-                        description: Text("Save what Wi‑Fi, LAN, Bluetooth or LoRa just found. The Cardputer's side button saves its own scan, and it arrives here when the phone connects.")
+                        description: Text("Scans are saved here automatically. The Cardputer's side button saves its own scan, and it arrives here when the phone connects.")
                     )
                 }
             }
@@ -75,7 +91,24 @@ struct HistoryView: View {
             } message: {
                 Text("Saved scans from this iPhone and the Cardputer are removed.")
             }
+            .sheet(isPresented: $showSettings) {
+                HistorySettingsView(autosave: $autosave)
+            }
             .toolbar {
+                if !history.entries.isEmpty {
+                    ToolbarItem(placement: .principal) {
+                        Picker("Group by", selection: $grouping) {
+                            ForEach(HistoryGrouping.allCases) { mode in
+                                Label(mode.label, systemImage: mode.systemImage).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .fixedSize()
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Settings", systemImage: "gearshape") { showSettings = true }
+                }
                 if !history.entries.isEmpty {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Clear", systemImage: "trash", role: .destructive) {
@@ -85,6 +118,128 @@ struct HistoryView: View {
                 }
             }
         }
+    }
+
+    private func byDate() -> [Group] {
+        let calendar = Calendar.current
+        let buckets = Dictionary(grouping: history.entries) { calendar.startOfDay(for: $0.savedAt) }
+        return buckets.keys.sorted(by: >).map { day in
+            Group(
+                id: "date:\(day.timeIntervalSince1970)",
+                label: Self.dayLabel(day),
+                entries: (buckets[day] ?? []).sorted { $0.savedAt > $1.savedAt }
+            )
+        }
+    }
+
+    private func byPlace() -> [Group] {
+        let buckets = Dictionary(grouping: history.entries) { entry in
+            entry.placeLabel ?? entry.placeKey ?? ""
+        }
+        return buckets
+            .map { label, entries in
+                Group(
+                    id: "place:\(label)",
+                    label: label.isEmpty ? String(localized: "No location") : label,
+                    entries: entries.sorted { $0.savedAt > $1.savedAt }
+                )
+            }
+            .sorted { ($0.entries.first?.savedAt ?? .distantPast) > ($1.entries.first?.savedAt ?? .distantPast) }
+    }
+
+    private static func dayLabel(_ day: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(day) { return String(localized: "Today") }
+        if calendar.isDateInYesterday(day) { return String(localized: "Yesterday") }
+        return day.formatted(.dateTime.weekday(.wide).month().day())
+    }
+}
+
+/// A collapsible section header with the group's name and the icons of the scan
+/// types inside it.
+private struct GroupHeader: View {
+    var label: String
+    var kinds: [HistoryEntry.Kind]
+    var count: Int
+    var isExpanded: Bool
+    var toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 8) {
+                Text(label)
+                HStack(spacing: 4) {
+                    ForEach(kinds, id: \.self) { kind in
+                        Image(systemName: kind.systemImage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Text("\(count)")
+                    .foregroundStyle(.secondary)
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// One saved session row.
+private struct EntryRow: View {
+    var entry: HistoryEntry
+    var showPlace: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: entry.kind.systemImage)
+                .font(.title3)
+                .frame(width: 26)
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(entry.kind.title) · \(entry.itemCount)")
+                    .font(.body.weight(.semibold))
+                HStack(spacing: 4) {
+                    Text(entry.savedAt, style: .relative)
+                    if showPlace, let place = entry.placeLabel {
+                        Text("· \(place)")
+                    } else {
+                        Text("· \(entry.source)")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+        }
+    }
+}
+
+private struct HistorySettingsView: View {
+    @Binding var autosave: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Toggle("Save scans automatically", isOn: $autosave)
+                } footer: {
+                    Text("When on, Wi‑Fi, LAN and Bluetooth scans are kept in History on their own. Scans of the same kind, on the same day, in the same place are merged into one session instead of piling up.")
+                }
+            }
+            .navigationTitle("History settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }
 

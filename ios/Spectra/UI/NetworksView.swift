@@ -5,7 +5,6 @@ struct NetworksView: View {
 
     @Environment(NetworkStore.self) private var store
     @Environment(SensorLink.self) private var link
-    @Environment(HistoryStore.self) private var history
     @State private var search = ""
     @State private var showChannels = false
     @AppStorage("networkSort") private var sort: Sort = .signal
@@ -128,15 +127,6 @@ struct NetworksView: View {
                     Button("Channels", systemImage: "chart.bar.xaxis") {
                         showChannels = true
                     }
-                }
-                if #available(iOS 26, *) {
-                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save", systemImage: "square.and.arrow.down") {
-                        history.saveNetworks(store, source: "This iPhone")
-                    }
-                    .disabled(store.networks.isEmpty && store.probingDevices.isEmpty && store.deauthEvents.isEmpty)
                 }
                 if #available(iOS 26, *) {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)

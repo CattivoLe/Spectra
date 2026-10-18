@@ -37,6 +37,11 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
     var source: String
     /// Set when the Cardputer stored the capture. The same id is not imported twice.
     var captureID: UInt32?
+    /// Stable key grouping scans into one session: a geo bucket, or the LAN
+    /// network. Entries with the same (day + kind + placeKey) are merged.
+    var placeKey: String?
+    /// Human label for the place, shown in the by-place view.
+    var placeLabel: String?
     /// Summary rows from the Cardputer. A phone save stores the records themselves.
     var lines: [HistoryLine] = []
     var networks: [TrackedNetwork] = []
@@ -67,6 +72,8 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         savedAt: Date,
         source: String,
         captureID: UInt32? = nil,
+        placeKey: String? = nil,
+        placeLabel: String? = nil,
         lines: [HistoryLine] = [],
         networks: [TrackedNetwork] = [],
         probes: [ProbingDevice] = [],
@@ -80,6 +87,8 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         self.savedAt = savedAt
         self.source = source
         self.captureID = captureID
+        self.placeKey = placeKey
+        self.placeLabel = placeLabel
         self.lines = lines
         self.networks = networks
         self.probes = probes
@@ -91,7 +100,8 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, savedAt, source, captureID, lines, networks, probes, deauths, lan, bluetooth, latitude, longitude
+        case id, kind, savedAt, source, captureID, placeKey, placeLabel,
+             lines, networks, probes, deauths, lan, bluetooth, latitude, longitude
     }
 
     func encode(to encoder: Encoder) throws {
@@ -101,6 +111,8 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         try box.encode(savedAt, forKey: .savedAt)
         try box.encode(source, forKey: .source)
         try box.encodeIfPresent(captureID, forKey: .captureID)
+        try box.encodeIfPresent(placeKey, forKey: .placeKey)
+        try box.encodeIfPresent(placeLabel, forKey: .placeLabel)
         try box.encode(lines, forKey: .lines)
         try box.encode(networks, forKey: .networks)
         try box.encode(probes, forKey: .probes)
@@ -119,6 +131,8 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         savedAt = try box.decode(Date.self, forKey: .savedAt)
         source = try box.decode(String.self, forKey: .source)
         captureID = try box.decodeIfPresent(UInt32.self, forKey: .captureID)
+        placeKey = try box.decodeIfPresent(String.self, forKey: .placeKey)
+        placeLabel = try box.decodeIfPresent(String.self, forKey: .placeLabel)
         lines = try box.decodeIfPresent([HistoryLine].self, forKey: .lines) ?? []
         networks = try box.decodeIfPresent([TrackedNetwork].self, forKey: .networks) ?? []
         probes = try box.decodeIfPresent([ProbingDevice].self, forKey: .probes) ?? []
@@ -242,7 +256,8 @@ struct SavedBLE: Codable, Equatable, Identifiable {
     }
 }
 
-/// What was just saved, for the confirmation the app shows.
+/// What was just saved, for the confirmation the app shows. Phone-side scans
+/// autosave silently; only a sensor capture raises this.
 struct SaveNotice: Equatable {
     let id = UUID()
     var kind: HistoryEntry.Kind
@@ -251,10 +266,16 @@ struct SaveNotice: Equatable {
 }
 
 /// Saved scans from the phone and from the Cardputer's side button.
+///
+/// One entry collects a whole session: scans of the same kind, on the same day,
+/// in the same place are merged into it rather than piling up as duplicates. A
+/// record (network, host, device) is folded in by identity, so `firstSeen`
+/// keeps the earliest sighting and `lastSeen` the most recent.
 @Observable
 final class HistoryStore {
     private(set) var entries: [HistoryEntry] = []
-    /// The latest save, from a button or from the Cardputer.
+    /// The latest sensor capture, for the confirmation toast. Phone autosaves
+    /// are silent.
     private(set) var lastSave: SaveNotice?
     /// Supplies the phone's current coordinate for a phone-side save. Set by the
     /// app from `LocationService`; nil when location is unavailable or denied.
@@ -284,7 +305,9 @@ final class HistoryStore {
         }
     }
 
-    func saveNetworks(_ store: NetworkStore, source: String) {
+    // MARK: Phone-side autosave (upsert)
+
+    func upsertNetworks(_ store: NetworkStore, source: String) {
         let networks = store.networks.values.sorted { a, b in
             if a.isInRange != b.isInRange { return a.isInRange }
             return a.latest.rssi > b.latest.rssi
@@ -293,25 +316,51 @@ final class HistoryStore {
         let deauths = store.deauthEvents
         guard !networks.isEmpty || !probes.isEmpty || !deauths.isEmpty else { return }
         let here = locationProvider?()
-        append(kind: .networks, source: source, networks: networks, probes: probes, deauths: deauths,
-               latitude: here?.latitude, longitude: here?.longitude)
+        upsert(
+            kind: .networks, source: source,
+            placeKey: Self.geoBucket(here), placeLabel: Self.geoLabel(here),
+            networks: networks, probes: probes, deauths: deauths,
+            latitude: here?.latitude, longitude: here?.longitude
+        )
     }
 
-    func saveLAN(_ devices: [LANDevice], source: String) {
+    func upsertLAN(_ devices: [LANDevice], networkKey: String?, networkLabel: String?, source: String) {
         guard !devices.isEmpty else { return }
         let saved = devices.map { SavedLAN($0) }
         let here = locationProvider?()
-        append(kind: .lan, source: source, lan: saved,
-               latitude: here?.latitude, longitude: here?.longitude)
+        upsert(
+            kind: .lan, source: source,
+            placeKey: networkKey ?? Self.geoBucket(here),
+            placeLabel: networkLabel ?? Self.geoLabel(here),
+            lan: saved, latitude: here?.latitude, longitude: here?.longitude
+        )
     }
 
-    func saveBluetooth(_ devices: [BLEDevice], source: String) {
+    func upsertBluetooth(_ devices: [BLEDevice], source: String) {
         let rows = devices.sorted { $0.rssi > $1.rssi }
         guard !rows.isEmpty else { return }
         let saved = rows.map { SavedBLE($0) }
         let here = locationProvider?()
-        append(kind: .bluetooth, source: source, bluetooth: saved,
-               latitude: here?.latitude, longitude: here?.longitude)
+        upsert(
+            kind: .bluetooth, source: source,
+            placeKey: Self.geoBucket(here), placeLabel: Self.geoLabel(here),
+            bluetooth: saved, latitude: here?.latitude, longitude: here?.longitude
+        )
+    }
+
+    /// ~55 m geo bucket (0.0005°). Empty when there is no fix, so fixless scans
+    /// of a kind on a day still merge together.
+    static func geoBucket(_ location: (latitude: Double, longitude: Double)?) -> String {
+        guard let location else { return "" }
+        let scale = 2000.0 // 1 / 0.0005
+        let lat = Int((location.latitude * scale).rounded())
+        let lon = Int((location.longitude * scale).rounded())
+        return "geo:\(lat)_\(lon)"
+    }
+
+    static func geoLabel(_ location: (latitude: Double, longitude: Double)?) -> String? {
+        guard let location else { return nil }
+        return String(format: "%.4f, %.4f", location.latitude, location.longitude)
     }
 
     /// The cap's fix for a capture. It can arrive before the rows, and again
@@ -358,10 +407,17 @@ final class HistoryStore {
         pendingFix[record.captureID] = nil
         let ordered = (0..<partial.total).compactMap { partial.lines[$0] }
         let when = partial.unix == 0 ? Date() : Date(timeIntervalSince1970: TimeInterval(partial.unix))
-        append(
-            kind: partial.kind, savedAt: when, source: source, captureID: record.captureID, lines: ordered,
+        let here = partial.latitude.flatMap { lat in partial.longitude.map { (lat, $0) } }
+        let entry = HistoryEntry(
+            kind: partial.kind, savedAt: when, source: source, captureID: record.captureID,
+            placeKey: Self.geoBucket(here), placeLabel: Self.geoLabel(here), lines: ordered,
             latitude: partial.latitude, longitude: partial.longitude
         )
+        guard entry.itemCount > 0 else { return true }
+        lastSave = SaveNotice(kind: partial.kind, count: entry.itemCount, fromSensor: true)
+        entries.insert(entry, at: 0)
+        trim()
+        persist()
         return true
     }
 
@@ -377,11 +433,13 @@ final class HistoryStore {
         persist()
     }
 
-    private func append(
+    // MARK: - Session upsert
+
+    private func upsert(
         kind: HistoryEntry.Kind,
-        savedAt: Date = .now,
         source: String,
-        captureID: UInt32? = nil,
+        placeKey: String,
+        placeLabel: String?,
         lines: [HistoryLine] = [],
         networks: [TrackedNetwork] = [],
         probes: [ProbingDevice] = [],
@@ -391,32 +449,154 @@ final class HistoryStore {
         latitude: Double? = nil,
         longitude: Double? = nil
     ) {
+        let now = Date()
+        // Merge into today's session for the same kind and place (sensor
+        // captures keep their own entries, matched by captureID).
+        if let index = entries.firstIndex(where: {
+            $0.kind == kind && $0.captureID == nil && ($0.placeKey ?? "") == placeKey
+                && Calendar.current.isDate($0.savedAt, inSameDayAs: now)
+        }) {
+            var entry = entries[index]
+            entry.savedAt = now
+            entry.source = source
+            if placeLabel != nil { entry.placeLabel = placeLabel }
+            if let latitude, let longitude {
+                entry.latitude = latitude
+                entry.longitude = longitude
+            }
+            entry.networks = Self.mergeNetworks(entry.networks, networks)
+            entry.probes = Self.mergeByID(entry.probes, probes)
+            entry.deauths = Self.mergeByID(entry.deauths, deauths)
+            entry.lan = Self.mergeLAN(entry.lan, lan)
+            entry.bluetooth = Self.mergeBLE(entry.bluetooth, bluetooth)
+            entry.lines = Self.mergeLines(entry.lines, lines)
+            entries.remove(at: index)
+            entries.insert(entry, at: 0)
+            persist()
+            return
+        }
         let entry = HistoryEntry(
-            kind: kind,
-            savedAt: savedAt,
-            source: source,
-            captureID: captureID,
-            lines: lines,
-            networks: networks,
-            probes: probes,
-            deauths: deauths,
-            lan: lan,
-            bluetooth: bluetooth,
-            latitude: latitude,
-            longitude: longitude
+            kind: kind, savedAt: now, source: source,
+            placeKey: placeKey, placeLabel: placeLabel,
+            lines: lines, networks: networks, probes: probes, deauths: deauths,
+            lan: lan, bluetooth: bluetooth, latitude: latitude, longitude: longitude
         )
         guard entry.itemCount > 0 else { return }
-        lastSave = SaveNotice(kind: kind, count: entry.itemCount, fromSensor: captureID != nil)
         entries.insert(entry, at: 0)
+        trim()
+        persist()
+    }
+
+    private func trim() {
         if entries.count > 100 {
             entries.removeLast(entries.count - 100)
         }
-        persist()
     }
 
     private func persist() {
         guard let data = try? JSONEncoder().encode(entries) else { return }
         try? data.write(to: file, options: .atomic)
+    }
+
+    // MARK: - Merge helpers (union by identity, min firstSeen / max lastSeen)
+
+    private static func mergeByID<T: Identifiable>(_ existing: [T], _ incoming: [T]) -> [T] where T.ID: Hashable {
+        var result = existing
+        var index = Dictionary(existing.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { a, _ in a })
+        for item in incoming {
+            if let at = index[item.id] {
+                result[at] = item
+            } else {
+                index[item.id] = result.count
+                result.append(item)
+            }
+        }
+        return result
+    }
+
+    static func mergeNetworks(_ existing: [TrackedNetwork], _ incoming: [TrackedNetwork]) -> [TrackedNetwork] {
+        var byID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        for new in incoming {
+            guard var old = byID[new.id] else { byID[new.id] = new; continue }
+            // Keep whichever reading is more recent as the representative one.
+            if new.lastSeen >= old.lastSeen {
+                old.latest = new.latest
+                old.clients = new.clients.isEmpty ? old.clients : new.clients
+                old.missedScans = new.missedScans
+                old.traffic = new.traffic ?? old.traffic
+            }
+            old.firstSeen = min(old.firstSeen, new.firstSeen)
+            old.lastSeen = max(old.lastSeen, new.lastSeen)
+            old.revealedSSID = new.revealedSSID ?? old.revealedSSID
+            old.vendorInfo = new.vendorInfo ?? old.vendorInfo
+            old.samples = mergeSamples(old.samples, new.samples, limit: NetworkStore.samplesKept)
+            byID[new.id] = old
+        }
+        return byID.values.sorted { a, b in
+            if a.isInRange != b.isInRange { return a.isInRange }
+            return a.latest.rssi > b.latest.rssi
+        }
+    }
+
+    static func mergeLAN(_ existing: [SavedLAN], _ incoming: [SavedLAN]) -> [SavedLAN] {
+        var byIP = Dictionary(uniqueKeysWithValues: existing.map { ($0.ipAddress, $0) })
+        for new in incoming {
+            guard var old = byIP[new.ipAddress] else { byIP[new.ipAddress] = new; continue }
+            let newer = new.lastSeen >= old.lastSeen ? new : old
+            var merged = newer
+            merged.firstSeen = min(old.firstSeen, new.firstSeen)
+            merged.lastSeen = max(old.lastSeen, new.lastSeen)
+            merged.hostnames = newer.hostnames.isEmpty ? (old.hostnames.isEmpty ? new.hostnames : old.hostnames) : newer.hostnames
+            merged.openPorts = newer.openPorts.isEmpty ? (old.openPorts.isEmpty ? new.openPorts : old.openPorts) : newer.openPorts
+            merged.services = newer.services.isEmpty ? (old.services.isEmpty ? new.services : old.services) : newer.services
+            merged.macAddress = newer.macAddress ?? old.macAddress ?? new.macAddress
+            byIP[new.ipAddress] = merged
+        }
+        return byIP.values.sorted { a, b in
+            if a.isLocalDevice != b.isLocalDevice { return a.isLocalDevice }
+            if a.isGateway != b.isGateway { return a.isGateway }
+            return (parseIP(a.ipAddress) ?? 0) < (parseIP(b.ipAddress) ?? 0)
+        }
+    }
+
+    static func mergeBLE(_ existing: [SavedBLE], _ incoming: [SavedBLE]) -> [SavedBLE] {
+        var byID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        for new in incoming {
+            guard let old = byID[new.id] else { byID[new.id] = new; continue }
+            var merged = new.lastSeen >= old.lastSeen ? new : old
+            merged.firstSeen = min(old.firstSeen, new.firstSeen)
+            merged.lastSeen = max(old.lastSeen, new.lastSeen)
+            merged.packetCount = old.packetCount + new.packetCount
+            merged.samples = mergeBLESamples(old.samples, new.samples, limit: 120)
+            byID[new.id] = merged
+        }
+        return byID.values.sorted { $0.rssi > $1.rssi }
+    }
+
+    static func mergeLines(_ existing: [HistoryLine], _ incoming: [HistoryLine]) -> [HistoryLine] {
+        var result = existing
+        for line in incoming where !result.contains(where: { $0.title == line.title }) {
+            result.append(line)
+        }
+        return result
+    }
+
+    private static func mergeSamples(_ a: [TrackedNetwork.Sample], _ b: [TrackedNetwork.Sample], limit: Int) -> [TrackedNetwork.Sample] {
+        var seen = Set(a.map(\.date))
+        var merged = a
+        for sample in b where seen.insert(sample.date).inserted { merged.append(sample) }
+        merged.sort { $0.date < $1.date }
+        if merged.count > limit { merged.removeFirst(merged.count - limit) }
+        return merged
+    }
+
+    private static func mergeBLESamples(_ a: [SavedBLE.Sample], _ b: [SavedBLE.Sample], limit: Int) -> [SavedBLE.Sample] {
+        var seen = Set(a.map(\.date))
+        var merged = a
+        for sample in b where seen.insert(sample.date).inserted { merged.append(sample) }
+        merged.sort { $0.date < $1.date }
+        if merged.count > limit { merged.removeFirst(merged.count - limit) }
+        return merged
     }
 }
 
