@@ -70,6 +70,7 @@ import cattivole.spectra.core.Threats
 import cattivole.spectra.core.WatchList
 import cattivole.spectra.core.LanDevice
 import cattivole.spectra.core.MacAddress
+import cattivole.spectra.core.ProbeInsight
 import cattivole.spectra.core.ProbingDevice
 import cattivole.spectra.core.RadioSource
 import cattivole.spectra.core.SecondaryChannel
@@ -762,6 +763,33 @@ fun ClientDetail(model: SpectraModel, nav: Navigator, mac: MacAddress?, entryId:
                     { InfoRow(tr("Looking for"), probe.ssids.ifEmpty { listOf(tr("Broadcast")) }.joinToString(", ")) },
                 ),
             )
+            val insight = ProbeInsight.assess(
+                probe.ssids,
+                model.store.networks().values.filter { it.isInRange }.map { it.latest },
+            )
+            if (insight.rememberedCount > 0) {
+                card(
+                    header = tr("Profile"),
+                    key = "profile",
+                    rows = buildList {
+                        add { InfoRow(tr("Remembered networks"), "${insight.rememberedCount}") }
+                        if (insight.presentHere.isNotEmpty()) {
+                            add { InfoRow(tr("On the air here"), insight.presentHere.joinToString(", ")) }
+                        }
+                        if (insight.autoJoinOpen.isNotEmpty()) {
+                            add {
+                                NoteRow(
+                                    tr("%s: an open network with this name is here now — the device will auto-join, and the name is easy to impersonate.", insight.autoJoinOpen.joinToString(", ")),
+                                    warning = true,
+                                )
+                            }
+                        }
+                        if (insight.trackable) {
+                            add { NoteRow(tr("Enough remembered networks to recognise this device elsewhere."), warning = false) }
+                        }
+                    },
+                )
+            }
         }
         if (host != null) {
             card(header = tr("On the LAN"), key = "lan", rows = listOf {

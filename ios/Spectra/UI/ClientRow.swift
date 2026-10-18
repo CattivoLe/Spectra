@@ -101,12 +101,39 @@ struct ClientDetailView: View {
                 }
             }
             if let probe = savedProbe ?? store.probingDevices.first(where: { $0.mac == client.mac }) {
+                let insight = ProbeInsight.assess(
+                    ssids: probe.ssids,
+                    networksInRange: store.networks.values.filter(\.isInRange).map(\.latest)
+                )
                 Section("Probes") {
                     InfoRow("Channel", value: "\(probe.channel)")
                     if probe.ssids.isEmpty {
                         InfoRow("Looking for", value: String(localized: "Broadcast"))
                     } else {
                         InfoRow("Looking for", value: probe.ssids.joined(separator: ", "))
+                    }
+                }
+                if insight.rememberedCount > 0 {
+                    Section {
+                        InfoRow("Remembered networks", value: "\(insight.rememberedCount)")
+                        if !insight.presentHere.isEmpty {
+                            InfoRow("On the air here", value: insight.presentHere.joined(separator: ", "))
+                        }
+                        if insight.trackable {
+                            Label("Enough remembered networks to recognise this device elsewhere.", systemImage: "figure.walk.motion")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("Profile")
+                    } footer: {
+                        if !insight.autoJoinOpen.isEmpty {
+                            Label(
+                                "\(insight.autoJoinOpen.joined(separator: ", ")): an open network with this name is here now — the device will auto‑join, and the name is easy to impersonate.",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .foregroundStyle(.orange)
+                        }
                     }
                 }
             }

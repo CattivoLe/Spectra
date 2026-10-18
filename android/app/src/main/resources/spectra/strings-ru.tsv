@@ -577,3 +577,8 @@ Watch network	Отслеживать сеть
 Watch device	Отслеживать устройство
 Stop watching	Не отслеживать
 Of the non-DFS channels 36–48 and 149–161, this one meets the least interference.	Среди не-DFS каналов 36–48 и 149–161 этот встречает меньше всего помех.
+Profile	Профиль
+Remembered networks	Запомненные сети
+On the air here	Сейчас в эфире здесь
+%s: an open network with this name is here now — the device will auto-join, and the name is easy to impersonate.	%s: открытая сеть с таким именем сейчас рядом — устройство подключится само, а имя легко подделать.
+Enough remembered networks to recognise this device elsewhere.	Достаточно запомненных сетей, чтобы узнать это устройство в другом месте.
