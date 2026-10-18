@@ -18,6 +18,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.GppBad
+import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.Videocam
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.GppMaybe
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
@@ -60,6 +63,7 @@ import cattivole.spectra.core.Capabilities
 import cattivole.spectra.core.ChannelAdvisor
 import cattivole.spectra.core.Cipher
 import cattivole.spectra.core.DeauthEvent
+import cattivole.spectra.core.Threats
 import cattivole.spectra.core.LanDevice
 import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.ProbingDevice
@@ -103,6 +107,7 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
         }
     }
     val bands = all.map { it.latest.band }.toSet()
+    val threats = Threats.assess(all.toList(), store.deauthEvents)
     val refreshing = store.isScanning || model.phone.status == PhoneWifiScanner.Status.SCANNING
     SpectraScreen(
         title = "Wi‑Fi",
@@ -174,6 +179,15 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
         phoneRadioNote(model)?.takeIf { all.isNotEmpty() }?.let { note ->
             card(key = "phone-note", rows = listOf { NoteRow(note, warning = model.phone.status != PhoneWifiScanner.Status.SCANNING) })
         }
+        cardSection(
+            threats,
+            header = tr("Threats"),
+            key = { it.id },
+            sectionKey = "threats",
+            headerTint = { Spectra.colors.warning },
+            headerIcon = Icons.Rounded.Warning,
+            dividerInset = 70.dp,
+        ) { ThreatRow(it) }
         cardSection(
             store.deauthEvents,
             header = tr("Deauth detected"),
@@ -349,6 +363,34 @@ fun NetworkRow(network: TrackedNetwork, onClick: () -> Unit, now: Long = System.
             onLongClick = open,
         )
     }
+}
+
+@Composable
+fun ThreatRow(finding: Threats.Finding) {
+    val tint = if (finding.severity == Threats.Severity.CRITICAL) Spectra.colors.danger else Spectra.colors.warning
+    val icon = when (finding.kind) {
+        Threats.Kind.DEAUTH_ATTACK -> Icons.Rounded.GppBad
+        Threats.Kind.EVIL_TWIN -> Icons.Rounded.Groups
+        Threats.Kind.STREAMING -> Icons.Rounded.Videocam
+    }
+    val title = when (finding.kind) {
+        Threats.Kind.DEAUTH_ATTACK -> if (finding.broadcast) tr("Deauth attack") else tr("Deauth frames")
+        Threats.Kind.EVIL_TWIN -> tr("Possible evil twin")
+        Threats.Kind.STREAMING -> tr("Steady traffic")
+    }
+    val detail = when (finding.kind) {
+        Threats.Kind.DEAUTH_ATTACK ->
+            tr("%d frames on channel %d — devices are being forced off.", finding.frames, finding.channel)
+        Threats.Kind.EVIL_TWIN ->
+            if (finding.differByAuth) {
+                tr("“%s” is on %d access points with different security.", finding.ssid ?: "", finding.apCount)
+            } else {
+                tr("“%s” is on %d access points with different makers.", finding.ssid ?: "", finding.apCount)
+            }
+        Threats.Kind.STREAMING ->
+            tr("%s is moving data continuously — a camera or microphone may be streaming.", finding.name ?: "")
+    }
+    ListRow(title = title, subtitle = detail, leading = { IconTile(icon, tint) })
 }
 
 @Composable

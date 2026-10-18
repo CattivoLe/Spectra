@@ -23,6 +23,10 @@ struct NetworksView: View {
         }
     }
 
+    private var threats: [Threats.Finding] {
+        Threats.assess(networks: Array(store.networks.values), deauths: store.deauthEvents)
+    }
+
     private var visible: [TrackedNetwork] {
         let query = search.trimmingCharacters(in: .whitespaces)
         let filtered = store.networks.values.filter { network in
@@ -48,6 +52,17 @@ struct NetworksView: View {
     var body: some View {
         NavigationStack {
             List {
+                if !threats.isEmpty {
+                    Section {
+                        ForEach(threats) { finding in
+                            ThreatRow(finding: finding)
+                        }
+                    } header: {
+                        Label("Threats", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                }
                 if !store.deauthEvents.isEmpty {
                     Section {
                         ForEach(store.deauthEvents) { event in
@@ -266,6 +281,40 @@ struct SensorBar: View {
             return String(format: "%d:%02d", seconds / 60, seconds % 60)
         }
         return String(format: "%dh %02dm", seconds / 3600, (seconds % 3600) / 60)
+    }
+}
+
+/// One live security finding, colored by severity.
+struct ThreatRow: View {
+    var finding: Threats.Finding
+
+    private var color: Color {
+        finding.severity == .critical ? .red : .orange
+    }
+
+    private var symbol: String {
+        switch finding.kind {
+        case .deauthAttack: "exclamationmark.shield.fill"
+        case .evilTwin: "person.2.slash.fill"
+        case .streaming: "video.fill"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.title3)
+                .foregroundStyle(color)
+                .frame(width: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(finding.title)
+                    .font(.body.weight(.semibold))
+                Text(finding.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 

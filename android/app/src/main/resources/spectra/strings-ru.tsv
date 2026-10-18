@@ -552,3 +552,12 @@ Record track	Записать трек
 Recording	Запись
 Clear	Очистить
 Location is needed to show your position.	Для показа позиции нужна геолокация.
+Threats	Угрозы
+Deauth attack	Deauth-атака
+Deauth frames	Deauth-кадры
+Possible evil twin	Возможный злой двойник
+Steady traffic	Постоянный трафик
+%d frames on channel %d — devices are being forced off.	%d кадров на канале %d — устройства выбрасывают из сети.
+“%s” is on %d access points with different security.	«%s» на %d точках доступа с разной защитой.
+“%s” is on %d access points with different makers.	«%s» на %d точках доступа от разных производителей.
+%s is moving data continuously — a camera or microphone may be streaming.	%s непрерывно передаёт данные — возможно, стримит камера или микрофон.
