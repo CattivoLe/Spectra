@@ -19,6 +19,7 @@
 #include <time.h>
 #include <esp_mac.h>
 #include <esp_ota_ops.h>
+#include <esp_task_wdt.h>
 #include <esp_wifi.h>
 #include <algorithm>
 #include <cstring>
@@ -39,6 +40,12 @@ static constexpr uint32_t kMsPerChannel = 120;
 // How long promiscuous mode listens on each channel for clients.
 static constexpr uint32_t kSniffMsPerChannel = 250;
 static constexpr uint8_t kSniffChannels[] = {1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
+
+// Task watchdog. loop() and the long scans it runs are fed below. The timeout
+// sits well above the longest legitimate blocking stretch — a full LoRa sweep
+// (~37 s) is fed per channel, a Bluetooth scan blocks ~6 s in one call — so it
+// only trips on a genuine hang, rebooting the sensor instead of leaving it dead.
+static constexpr uint32_t kWatchdogTimeoutMs = 20000;
 
 struct ApSummary {
   String ssid;
@@ -1885,6 +1892,7 @@ static void sniffStations() {
   for (uint8_t ch : kSniffChannels) {
     esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
     delay(kSniffMsPerChannel);
+    esp_task_wdt_reset();
   }
 
   esp_wifi_set_promiscuous(false);
@@ -2013,6 +2021,9 @@ static void sendLoraProgress(uint32_t freqKhz, uint8_t sf, uint16_t index, uint1
 }
 
 static void onLoraProgress(uint32_t freqKhz, uint8_t sf, uint16_t index, uint16_t total) {
+  // A full sweep runs for tens of seconds in one call; feed the watchdog at
+  // every dwell so it only trips on a real hang, not a normal LoRa scan.
+  esp_task_wdt_reset();
   char line[28];
   snprintf(line, sizeof(line), "%lu.%03lu SF%u", static_cast<unsigned long>(freqKhz / 1000),
            static_cast<unsigned long>(freqKhz % 1000), sf);
@@ -2432,6 +2443,20 @@ static void handleSideButton() {
   }
 }
 
+// Subscribes the loop task to the task watchdog. The Arduino core may already
+// have started the watchdog for the idle tasks, so reconfigure if so.
+static void setupWatchdog() {
+  esp_task_wdt_config_t config = {};
+  config.timeout_ms = kWatchdogTimeoutMs;
+  config.idle_core_mask = 0;
+  config.trigger_panic = true;
+  if (esp_task_wdt_init(&config) == ESP_ERR_INVALID_STATE) {
+    esp_task_wdt_reconfigure(&config);
+  }
+  esp_task_wdt_add(nullptr);
+  esp_task_wdt_reset();
+}
+
 void setup() {
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);
@@ -2453,10 +2478,12 @@ void setup() {
     // Bring the saved network up in the background so the LAN scan is ready.
     WiFi.begin(wifiSsid, wifiPass);
   }
+  setupWatchdog();
   uiDirty = true;
 }
 
 void loop() {
+  esp_task_wdt_reset();
   M5Cardputer.update();
   if (otaRebootPending && static_cast<int32_t>(millis() - otaRebootAt) >= 0) {
     ESP.restart();
