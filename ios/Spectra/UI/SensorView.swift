@@ -317,7 +317,10 @@ struct SensorView: View {
     private func loraTitle(_ device: SensorProtocol.LoRaDevice) -> String {
         let hex = String(format: "%08X", device.id)
         if device.join { return String(format: String(localized: "Join %@"), hex) }
-        if device.lorawan { return String(format: String(localized: "DevAddr %@"), hex) }
+        if device.lorawan {
+            let arrow = device.downlink ? "↓" : "↑"
+            return "\(arrow) " + String(format: String(localized: "DevAddr %@"), hex)
+        }
         return String(format: String(localized: "Packet %@"), hex)
     }
 

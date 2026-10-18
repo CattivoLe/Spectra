@@ -15,19 +15,31 @@ data class LoraDevice(
     val id: Long,
 ) {
     val lorawan: Boolean get() = flags and 0x01 != 0
+    val privateNetwork: Boolean get() = flags and 0x02 != 0
     val join: Boolean get() = flags and 0x04 != 0
+    val downlink: Boolean get() = flags and 0x08 != 0
+    val confirmed: Boolean get() = flags and 0x10 != 0
 
     fun title(): String {
         val hex = "%08X".format(id and 0xFFFF_FFFFL)
         return when {
             join -> "Join $hex"
-            lorawan -> "DevAddr $hex"
+            lorawan -> "${if (downlink) "↓" else "↑"} DevAddr $hex"
             else -> "Packet $hex"
         }
     }
 
-    fun detail(): String =
-        String.format(java.util.Locale.US, "%.3f MHz · SF%d · SNR %d dB", freqKhz / 1000.0, spreadingFactor, snr)
+    fun detail(): String {
+        val parts = mutableListOf(
+            String.format(java.util.Locale.US, "%.3f MHz · SF%d · SNR %d dB", freqKhz / 1000.0, spreadingFactor, snr),
+        )
+        if (lorawan && !join) {
+            parts.add(if (downlink) "downlink" else "uplink")
+            if (confirmed) parts.add("confirmed")
+        }
+        if (privateNetwork) parts.add("private")
+        return parts.joinToString(" · ")
+    }
 }
 
 object SensorProtocol {

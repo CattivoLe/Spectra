@@ -85,17 +85,26 @@ nonisolated enum SensorProtocol {
         var id: UInt32
 
         var lorawan: Bool { flags & 0x01 != 0 }
+        var privateNetwork: Bool { flags & 0x02 != 0 }
         var join: Bool { flags & 0x04 != 0 }
+        var downlink: Bool { flags & 0x08 != 0 }
+        var confirmed: Bool { flags & 0x10 != 0 }
 
         var title: String {
             let hex = String(format: "%08X", id)
             if join { return "Join \(hex)" }
-            if lorawan { return "DevAddr \(hex)" }
+            if lorawan { return "\(downlink ? "↓" : "↑") DevAddr \(hex)" }
             return "Packet \(hex)"
         }
 
         var detail: String {
-            String(format: "%.3f MHz · SF%d · SNR %d dB", Double(freqKHz) / 1000, spreadingFactor, snr)
+            var parts = [String(format: "%.3f MHz · SF%d · SNR %d dB", Double(freqKHz) / 1000, spreadingFactor, snr)]
+            if lorawan && !join {
+                parts.append(downlink ? String(localized: "downlink") : String(localized: "uplink"))
+                if confirmed { parts.append(String(localized: "confirmed")) }
+            }
+            if privateNetwork { parts.append(String(localized: "private")) }
+            return parts.joined(separator: " · ")
         }
     }
 

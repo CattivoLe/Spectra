@@ -372,6 +372,33 @@ struct ChannelAdvisorTests {
     }
 }
 
+struct LoRaDeviceFlagTests {
+    private func device(flags: UInt8) -> SensorProtocol.LoRaDevice {
+        SensorProtocol.LoRaDevice(freqKHz: 868_100, spreadingFactor: 7, rssi: -100, snr: 2, flags: flags, id: 0x1234_5678)
+    }
+
+    @Test func decodesDownlinkAndConfirmed() {
+        let d = device(flags: 0x01 | 0x08 | 0x10)
+        #expect(d.lorawan)
+        #expect(d.downlink)
+        #expect(d.confirmed)
+        #expect(!d.join)
+        #expect(d.title.hasPrefix("↓"))
+        #expect(d.detail.contains("confirmed"))
+    }
+
+    @Test func plainUplinkHasNoExtraFlags() {
+        let d = device(flags: 0x01)
+        #expect(!d.downlink)
+        #expect(!d.confirmed)
+        #expect(d.title.hasPrefix("↑"))
+    }
+
+    @Test func privateSyncWordIsShown() {
+        #expect(device(flags: 0x01 | 0x02).privateNetwork)
+    }
+}
+
 struct LastScanTests {
     @Test func heldNetworkIsNotInLastScan() {
         let store = NetworkStore()

@@ -286,8 +286,13 @@ four bytes of a join-request DevEUI, or a fingerprint of an unknown packet.
 | 7 | 1 | spreading factor, 7–12 |
 | 8 | 2 | RSSI, dBm (`i16`) |
 | 10 | 1 | SNR, dB (`i8`) |
-| 11 | 1 | flags: bit0 LoRaWAN, bit1 private sync word, bit2 join request |
+| 11 | 1 | flags: bit0 LoRaWAN, bit1 private sync word, bit2 join request, bit3 downlink, bit4 confirmed |
 | 12 | 4 | id (`u32`) |
+
+Bits 3 (downlink) and 4 (confirmed) are set only for LoRaWAN data frames, from
+the message type in the MAC header. They were added without a version bump:
+firmware that predates them leaves them clear, and an app that does not know
+them ignores them.
 
 ### `0x1F` LoRa scan (v7)
 

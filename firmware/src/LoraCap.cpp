@@ -178,7 +178,11 @@ static uint32_t identify(const uint8_t *data, size_t len, uint8_t &flags) {
   }
   const uint8_t mtype = data[0] >> 5;
   if (len >= 5 && mtype >= 2 && mtype <= 5) {
+    // MType: 2 unconfirmed up, 3 unconfirmed down, 4 confirmed up, 5 confirmed
+    // down. Downlink and confirmed go in spare flag bits; older apps ignore them.
     flags = static_cast<uint8_t>(flags | 0x01);
+    if (mtype == 3 || mtype == 5) flags = static_cast<uint8_t>(flags | 0x08);  // downlink
+    if (mtype == 4 || mtype == 5) flags = static_cast<uint8_t>(flags | 0x10);  // confirmed
     return readU32(data + 1);
   }
   if (mtype == 0 && len >= 17) {
