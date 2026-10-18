@@ -52,6 +52,9 @@ struct RadarView: View {
                         .font(.headline)
                         .foregroundStyle(trendColor(trend))
                         .contentTransition(.symbolEffect(.replace))
+                    Text(distanceLabel(DistanceEstimate.metres(rssi: rssi)))
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 } else {
                     Text("Signal lost — it may be out of range.")
                         .font(.headline)
@@ -76,6 +79,13 @@ struct RadarView: View {
             }
             .sensoryFeedback(.impact(weight: .light), trigger: level)
         }
+    }
+
+    /// A deliberately loose label — the estimate is only a guide.
+    private func distanceLabel(_ metres: Double) -> String {
+        if metres < 1 { return String(localized: "≈ under 1 m away") }
+        if metres < 10 { return String(format: String(localized: "≈ %.1f m away"), metres) }
+        return String(format: String(localized: "≈ %d m away"), Int(metres.rounded()))
     }
 
     private func trendSymbol(_ trend: Proximity.Trend) -> String {

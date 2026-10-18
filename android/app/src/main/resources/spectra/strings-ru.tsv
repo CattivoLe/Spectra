@@ -582,3 +582,6 @@ Remembered networks	Запомненные сети
 On the air here	Сейчас в эфире здесь
 %s: an open network with this name is here now — the device will auto-join, and the name is easy to impersonate.	%s: открытая сеть с таким именем сейчас рядом — устройство подключится само, а имя легко подделать.
 Enough remembered networks to recognise this device elsewhere.	Достаточно запомненных сетей, чтобы узнать это устройство в другом месте.
+≈ under 1 m away	≈ меньше 1 м
+≈ %.1f m away	≈ %.1f м
+≈ %d m away	≈ %d м

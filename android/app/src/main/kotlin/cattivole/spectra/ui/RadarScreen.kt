@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.core.BleDevice
+import cattivole.spectra.core.DistanceEstimate
 import cattivole.spectra.core.Proximity
 import cattivole.spectra.core.SignalQuality
 
@@ -89,6 +90,11 @@ fun RadarScreen(model: SpectraModel, device: BleDevice, onClose: () -> Unit) {
                         Icon(icon, contentDescription = null, tint = tint)
                         Text(trendLabel(trend), style = MaterialTheme.typography.titleMedium, color = tint)
                     }
+                    Text(
+                        distanceLabel(DistanceEstimate.metres(rssi)),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 } else {
                     Text(
                         tr("Signal lost — it may be out of range."),
@@ -107,6 +113,12 @@ fun RadarScreen(model: SpectraModel, device: BleDevice, onClose: () -> Unit) {
             }
         }
     }
+}
+
+private fun distanceLabel(metres: Double): String = when {
+    metres < 1 -> tr("≈ under 1 m away")
+    metres < 10 -> tr("≈ %.1f m away", metres)
+    else -> tr("≈ %d m away", metres.toInt())
 }
 
 private fun levelLabel(level: Proximity.Level): String = when (level) {
