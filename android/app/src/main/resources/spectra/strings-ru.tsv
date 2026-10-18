@@ -561,3 +561,14 @@ Steady traffic	Постоянный трафик
 “%s” is on %d access points with different security.	«%s» на %d точках доступа с разной защитой.
 “%s” is on %d access points with different makers.	«%s» на %d точках доступа от разных производителей.
 %s is moving data continuously — a camera or microphone may be streaming.	%s непрерывно передаёт данные — возможно, стримит камера или микрофон.
+Find	Найти
+Right here	Прямо здесь
+Very close	Очень близко
+Close	Близко
+Nearby	Рядом
+Far	Далеко
+Warmer	Теплее
+Colder	Холоднее
+Steady	Без изменений
+Signal lost — it may be out of range.	Сигнал потерян — возможно, вне зоны.
+Move around. The ring fills and reads “Warmer” as you get closer.	Подвигайтесь: кольцо заполняется и показывает «Теплее» по мере приближения.

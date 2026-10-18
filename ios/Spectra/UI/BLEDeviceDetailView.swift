@@ -15,6 +15,7 @@ struct BLEDeviceDetailView: View {
     }
 
     @Environment(BLEScanner.self) private var scanner
+    @State private var showRadar = false
 
     var body: some View {
         if let device = snapshot ?? lookup.flatMap({ scanner.devices[$0] }) {
@@ -173,6 +174,14 @@ struct BLEDeviceDetailView: View {
         .navigationTitle(device.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear { scanner.disconnectGATT() }
+        .fullScreenCover(isPresented: $showRadar) { RadarView(device: device) }
+        .toolbar {
+            if snapshot == nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Find", systemImage: "dot.radiowaves.left.and.right") { showRadar = true }
+                }
+            }
+        }
     }
 
     @ViewBuilder

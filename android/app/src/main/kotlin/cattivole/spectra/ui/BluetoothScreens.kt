@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.TrackChanges
 import androidx.compose.material.icons.rounded.BluetoothDisabled
 import androidx.compose.material.icons.automirrored.rounded.BluetoothSearching
 import androidx.compose.material.icons.rounded.Check
@@ -312,6 +313,11 @@ fun BleDetail(model: SpectraModel, nav: Navigator, address: String, entryId: Str
         return
     }
     val snapshot = entryId != null
+    var showRadar by rememberSaveable { mutableStateOf(false) }
+    if (showRadar && !snapshot) {
+        RadarScreen(model, device) { showRadar = false }
+        return
+    }
     DisposableEffect(address, snapshot) {
         onDispose { if (!snapshot) model.gatt.disconnect() }
     }
@@ -323,6 +329,13 @@ fun BleDetail(model: SpectraModel, nav: Navigator, address: String, entryId: Str
         title = device.shownName(),
         subtitle = if (snapshot) entry?.let { tr("Saved %s", dateTime(it.savedAt)) } else device.address,
         onBack = nav::back,
+        actions = {
+            if (!snapshot) {
+                IconButton(onClick = { showRadar = true }) {
+                    Icon(Icons.Rounded.TrackChanges, contentDescription = tr("Find"))
+                }
+            }
+        },
     ) {
         freeCard("hero") {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
