@@ -572,3 +572,7 @@ Colder	Холоднее
 Steady	Без изменений
 Signal lost — it may be out of range.	Сигнал потерян — возможно, вне зоны.
 Move around. The ring fills and reads “Warmer” as you get closer.	Подвигайтесь: кольцо заполняется и показывает «Теплее» по мере приближения.
+Watching	Отслеживаются
+Watch network	Отслеживать сеть
+Watch device	Отслеживать устройство
+Stop watching	Не отслеживать

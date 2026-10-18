@@ -42,6 +42,19 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
             generation += 1
         }
 
+    /** BSSIDs and Bluetooth addresses the user is watching for. */
+    val watchedIds: Set<String>
+        get() = prefs.getStringSet(WATCHED, emptySet()) ?: emptySet()
+
+    fun isWatched(id: String): Boolean = watchedIds.contains(id)
+
+    fun toggleWatch(id: String) {
+        val next = watchedIds.toMutableSet()
+        if (!next.add(id)) next.remove(id)
+        prefs.edit().putStringSet(WATCHED, next).apply()
+        generation += 1
+    }
+
     private var lastWifiScan = 0
     private var lastLanScan: Long? = null
     private var savedCheckAt = 0L
@@ -139,5 +152,6 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         /** English key; the UI translates it through `sourceName`, like iOS. */
         const val PHONE_SOURCE = "This phone"
         const val AUTOSAVE_HISTORY = "autosaveHistory"
+        const val WATCHED = "watchedIds"
     }
 }

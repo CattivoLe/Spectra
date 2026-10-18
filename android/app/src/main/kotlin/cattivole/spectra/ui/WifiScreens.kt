@@ -19,6 +19,8 @@ import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.GppBad
 import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.GppMaybe
@@ -37,6 +39,7 @@ import androidx.compose.material.icons.rounded.WifiFind
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -64,6 +67,7 @@ import cattivole.spectra.core.ChannelAdvisor
 import cattivole.spectra.core.Cipher
 import cattivole.spectra.core.DeauthEvent
 import cattivole.spectra.core.Threats
+import cattivole.spectra.core.WatchList
 import cattivole.spectra.core.LanDevice
 import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.ProbingDevice
@@ -108,6 +112,7 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
     }
     val bands = all.map { it.latest.band }.toSet()
     val threats = Threats.assess(all.toList(), store.deauthEvents)
+    val watching = WatchList.presentNetworks(model.watchedIds, all)
     val refreshing = store.isScanning || model.phone.status == PhoneWifiScanner.Status.SCANNING
     SpectraScreen(
         title = "Wi‑Fi",
@@ -199,12 +204,21 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
             dividerInset = 70.dp,
         ) { DeauthRow(it) }
         cardSection(
+            watching,
+            header = tr("Watching"),
+            key = { "watch-" + it.id.text },
+            sectionKey = "watching",
+            headerTint = { Spectra.colors.warning },
+            headerIcon = Icons.Rounded.Star,
+            dividerInset = 70.dp,
+        ) { network -> NetworkRow(network, onClick = { nav.network(network.id) }, watched = true) }
+        cardSection(
             networks,
             header = tr("In the latest pass: %d", all.count { it.wasInLastScan }),
             key = { it.id.text },
             sectionKey = "networks",
             dividerInset = 70.dp,
-        ) { network -> NetworkRow(network, onClick = { nav.network(network.id) }) }
+        ) { network -> NetworkRow(network, onClick = { nav.network(network.id) }, watched = model.isWatched(network.id.text)) }
         cardSection(
             store.probingDevices,
             header = tr("Probing: %d", store.probingDevices.size),
@@ -319,7 +333,7 @@ internal fun networkName(network: TrackedNetwork): String = network.revealedSsid
 }
 
 @Composable
-fun NetworkRow(network: TrackedNetwork, onClick: () -> Unit, now: Long = System.currentTimeMillis()) {
+fun NetworkRow(network: TrackedNetwork, onClick: () -> Unit, now: Long = System.currentTimeMillis(), watched: Boolean = false) {
     val reading = network.latest
     val hidden = reading.ssid == null && network.revealedSsid == null
     val (lock, lockTint) = securityIcon(reading)
@@ -355,6 +369,9 @@ fun NetworkRow(network: TrackedNetwork, onClick: () -> Unit, now: Long = System.
                 Icon(lock, contentDescription = reading.auth.name, tint = lockTint, modifier = Modifier.size(15.dp))
                 if (network.revealedSsid != null) {
                     Icon(Icons.Rounded.Visibility, contentDescription = tr("Revealed"), tint = Spectra.colors.revealed, modifier = Modifier.size(15.dp))
+                }
+                if (watched) {
+                    Icon(Icons.Rounded.Star, contentDescription = tr("Watching"), tint = Spectra.colors.warning, modifier = Modifier.size(15.dp))
                 }
                 if (reading.band != Band.TWO_FOUR) Pill(bandLabel(reading.band), MaterialTheme.colorScheme.secondary)
             },
@@ -496,6 +513,18 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
         title = networkName(network),
         subtitle = if (snapshot) entry?.let { tr("Saved %s", dateTime(it.savedAt)) } else reading.bssid.text,
         onBack = nav::back,
+        actions = {
+            if (!snapshot) {
+                val watched = model.isWatched(reading.bssid.text)
+                IconButton(onClick = { model.toggleWatch(reading.bssid.text) }) {
+                    Icon(
+                        if (watched) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                        contentDescription = if (watched) tr("Stop watching") else tr("Watch network"),
+                        tint = if (watched) Spectra.colors.warning else LocalContentColor.current,
+                    )
+                }
+            }
+        },
     ) {
         freeCard("hero") {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {

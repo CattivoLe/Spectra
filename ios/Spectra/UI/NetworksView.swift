@@ -5,6 +5,7 @@ struct NetworksView: View {
 
     @Environment(NetworkStore.self) private var store
     @Environment(SensorLink.self) private var link
+    @Environment(WatchList.self) private var watchList
     @State private var search = ""
     @State private var showChannels = false
     @AppStorage("networkSort") private var sort: Sort = .signal
@@ -25,6 +26,10 @@ struct NetworksView: View {
 
     private var threats: [Threats.Finding] {
         Threats.assess(networks: Array(store.networks.values), deauths: store.deauthEvents)
+    }
+
+    private var watching: [TrackedNetwork] {
+        WatchList.present(watchList.ids, in: Array(store.networks.values))
     }
 
     private var visible: [TrackedNetwork] {
@@ -60,6 +65,19 @@ struct NetworksView: View {
                     } header: {
                         Label("Threats", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                }
+                if !watching.isEmpty {
+                    Section {
+                        ForEach(watching) { network in
+                            NavigationLink(value: network.id) {
+                                NetworkRow(network: network)
+                            }
+                        }
+                    } header: {
+                        Label("Watching", systemImage: "star.fill")
+                            .foregroundStyle(.yellow)
                             .font(.subheadline.weight(.semibold))
                     }
                 }
@@ -320,6 +338,9 @@ struct ThreatRow: View {
 
 struct NetworkRow: View {
     var network: TrackedNetwork
+    @Environment(WatchList.self) private var watchList
+
+    private var isWatched: Bool { watchList.isWatched(network.latest.bssid.description) }
 
     var body: some View {
         let reading = network.latest
@@ -336,6 +357,11 @@ struct NetworkRow: View {
                         Image(systemName: "eye.fill")
                             .font(.caption2)
                             .foregroundStyle(.purple)
+                    }
+                    if isWatched {
+                        Image(systemName: "star.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.yellow)
                     }
                 }
                 Group {
@@ -386,6 +412,9 @@ struct NetworkRow: View {
             }
             Button("Copy BSSID", systemImage: "number") {
                 UIPasteboard.general.string = reading.bssid.description
+            }
+            Button(isWatched ? "Stop watching" : "Watch network", systemImage: isWatched ? "star.slash" : "star") {
+                watchList.toggle(reading.bssid.description)
             }
         }
     }

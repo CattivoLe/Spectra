@@ -9,6 +9,7 @@ struct SpectraApp: App {
     @State private var linkProbe = LinkProbe()
     @State private var bleScanner = BLEScanner()
     @State private var location = LocationService()
+    @State private var watchList = WatchList()
 
     init() {
         let store = NetworkStore()
@@ -28,6 +29,7 @@ struct SpectraApp: App {
                 .environment(linkProbe)
                 .environment(bleScanner)
                 .environment(location)
+                .environment(watchList)
                 .task {
                     history.locationProvider = { [weak location] in
                         location?.coordinate.map { ($0.latitude, $0.longitude) }

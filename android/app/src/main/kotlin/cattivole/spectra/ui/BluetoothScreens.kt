@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material.icons.rounded.TrackChanges
 import androidx.compose.material.icons.rounded.BluetoothDisabled
 import androidx.compose.material.icons.automirrored.rounded.BluetoothSearching
@@ -28,6 +30,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.material3.MaterialTheme
@@ -51,6 +54,7 @@ import cattivole.spectra.core.BleServiceRef
 import cattivole.spectra.core.BeaconDecode
 import cattivole.spectra.core.GattValue
 import cattivole.spectra.core.SignalQuality
+import cattivole.spectra.core.WatchList
 import cattivole.spectra.core.hex
 import cattivole.spectra.platform.DeviceBleScanner
 
@@ -100,6 +104,7 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
         }
         if (order != 0) order else a.address.compareTo(b.address)
     }
+    val watching = WatchList.presentDevices(model.watchedIds, heard, now)
     val state = ble.state
     SpectraScreen(
         title = "Bluetooth",
@@ -231,13 +236,22 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
             })
         }
         cardSection(
+            watching,
+            header = tr("Watching"),
+            key = { "watch-" + it.address },
+            sectionKey = "watching",
+            headerTint = { Spectra.colors.warning },
+            headerIcon = Icons.Rounded.Star,
+            dividerInset = 70.dp,
+        ) { device -> BleRow(device, now, onClick = { nav.ble(device.address) }, watched = true) }
+        cardSection(
             rows,
             header = tr("Nearby: %d", ble.nearbyCount),
             footer = tr("Android reports the hardware address. A resolvable private address still changes, so the same device can reappear under a new one."),
             key = { it.address },
             sectionKey = "devices",
             dividerInset = 70.dp,
-        ) { device -> BleRow(device, now, onClick = { nav.ble(device.address) }) }
+        ) { device -> BleRow(device, now, onClick = { nav.ble(device.address) }, watched = model.isWatched(device.address)) }
     }
 }
 
@@ -269,7 +283,7 @@ private fun MenuCheck(selected: Boolean) {
 }
 
 @Composable
-fun BleRow(device: BleDevice, now: Long, onClick: () -> Unit) {
+fun BleRow(device: BleDevice, now: Long, onClick: () -> Unit, watched: Boolean = false) {
     val nearby = device.isNearby(now)
     WithCopyMenu(
         listOf(
@@ -293,6 +307,9 @@ fun BleRow(device: BleDevice, now: Long, onClick: () -> Unit) {
                 }
                 if (device.isSpectraSensor) Pill(tr("Sensor"), MaterialTheme.colorScheme.primary)
                 if (device.transport == BleDevice.Transport.CLASSIC) Pill(tr("Classic"), MaterialTheme.colorScheme.secondary)
+                if (watched) {
+                    Icon(Icons.Rounded.Star, contentDescription = tr("Watching"), tint = Spectra.colors.warning, modifier = Modifier.size(14.dp))
+                }
             },
             trailing = { SignalTrailing(device.rssi, nearby, device.samples.map { it.rssi }) },
             onClick = onClick,
@@ -331,6 +348,14 @@ fun BleDetail(model: SpectraModel, nav: Navigator, address: String, entryId: Str
         onBack = nav::back,
         actions = {
             if (!snapshot) {
+                val watched = model.isWatched(device.address)
+                IconButton(onClick = { model.toggleWatch(device.address) }) {
+                    Icon(
+                        if (watched) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                        contentDescription = if (watched) tr("Stop watching") else tr("Watch device"),
+                        tint = if (watched) Spectra.colors.warning else LocalContentColor.current,
+                    )
+                }
                 IconButton(onClick = { showRadar = true }) {
                     Icon(Icons.Rounded.TrackChanges, contentDescription = tr("Find"))
                 }

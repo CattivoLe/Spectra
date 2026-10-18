@@ -70,10 +70,15 @@ struct BLEView: View {
 /// rebuild the options menu, which was dismissing taps while a scan ran.
 private struct BLEDeviceList: View {
     @Environment(BLEScanner.self) private var scanner
+    @Environment(WatchList.self) private var watchList
     @Binding var search: String
     var sort: BLEView.Sort
     var scope: BLEView.Scope
     var showOutOfRange: Bool
+
+    private var watching: [BLEDevice] {
+        WatchList.present(watchList.ids, in: Array(scanner.devices.values), now: scanner.now)
+    }
 
     private var visible: [BLEDevice] {
         let now = scanner.now
@@ -107,6 +112,19 @@ private struct BLEDeviceList: View {
 
     var body: some View {
         List {
+            if !watching.isEmpty {
+                Section {
+                    ForEach(watching) { device in
+                        NavigationLink(value: device.id) {
+                            BLEDeviceRow(device: device, now: scanner.now)
+                        }
+                    }
+                } header: {
+                    Label("Watching", systemImage: "star.fill")
+                        .foregroundStyle(.yellow)
+                        .font(.subheadline.weight(.semibold))
+                }
+            }
             if !visible.isEmpty {
                 Section {
                     ForEach(visible) { device in
@@ -319,8 +337,10 @@ struct BLEStatusBar: View {
 struct BLEDeviceRow: View {
     var device: BLEDevice
     var now: Date
+    @Environment(WatchList.self) private var watchList
 
     private var nearby: Bool { device.isNearby(at: now) }
+    private var isWatched: Bool { watchList.isWatched(device.id.uuidString) }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -344,6 +364,12 @@ struct BLEDeviceRow: View {
                     }
                     if device.isSpectraSensor {
                         badge("Sensor", color: .blue)
+                    }
+                    if isWatched {
+                        Image(systemName: "star.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.yellow)
+                            .fixedSize()
                     }
                 }
                 Group {
@@ -380,6 +406,9 @@ struct BLEDeviceRow: View {
             }
             Button("Copy identifier", systemImage: "number") {
                 UIPasteboard.general.string = device.id.uuidString
+            }
+            Button(isWatched ? "Stop watching" : "Watch device", systemImage: isWatched ? "star.slash" : "star") {
+                watchList.toggle(device.id.uuidString)
             }
         }
     }
