@@ -179,13 +179,7 @@ class LanDevice(
             return shown
         }
 
-        private fun presentable(raw: String): String? {
-            var shown = LanIdentity.presentableName(raw) ?: return null
-            if (shown.endsWith(".local")) {
-                shown = shown.dropLast(6).trim()
-                shown = LanIdentity.presentableName(shown) ?: return null
-            }
-            return shown
-        }
+        private fun presentable(raw: String): String? =
+            LanIdentity.presentableName(LanIdentity.tidyInstanceName(raw))
     }
 }

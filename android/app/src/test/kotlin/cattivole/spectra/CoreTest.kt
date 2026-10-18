@@ -339,6 +339,8 @@ class CoreTest {
         val named = LanDevice("192.168.1.20", hostnames = listOf(""), profile = LanProfile(upnp = UPnPIdentity(friendlyName = "55\" Crystal UHD")))
         assertEquals("55\" Crystal UHD", named.displayName)
         assertEquals("Living-Room", LanDevice.usefulHostname("Living-Room.local", "192.168.1.20"))
+        assertEquals("Living Room", LanDevice.usefulHostname("Living\\032Room._googlecast._tcp.local", "192.168.1.20"))
+        assertEquals("Kitchen", LanDevice.usefulHostname("A1B2C3D4E5F6@Kitchen", "192.168.1.20"))
         assertNull(LanDevice.usefulHostname("192.168.1.20", "192.168.1.20"))
 
         val http = "HTTP/1.0 200 OK\r\nServer: Webs\r\nWWW-Authenticate: Basic realm=\"DS-2CD2043\"\r\n\r\n<html><title>Hikvision</title></html>"

@@ -138,7 +138,7 @@ object Exporter {
             .joinToString("\n") { entry ->
                 val lat = entry.latitude!!
                 val lon = entry.longitude!!
-                val title = "${entry.kindTitle} · ${entry.itemCount}"
+                val title = "${entry.rowTitle} · ${entry.itemCount}"
                 """
                 <Placemark>
                   <name>${xml(title)}</name>

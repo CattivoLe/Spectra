@@ -252,10 +252,7 @@ class LanScanner(context: Context) {
         for ((ip, ports, profile) in found.profiles) {
             val previous = known[ip]
             val mac = found.arp[ip]?.let { MacAddress.parse(it) }
-            val names = buildList {
-                found.mdns[ip]?.let { addAll(it) }
-                found.ssdp[ip]?.server?.let { add(it) }
-            }
+            val names = found.mdns[ip].orEmpty()
             val services = found.services[ip].orEmpty().ifEmpty { previous?.services.orEmpty() }
             val described = describedHosts[ip]
             val withUpnp = if (described == null) {
@@ -822,19 +819,20 @@ class LanScanner(context: Context) {
         services: MutableMap<String, MutableList<ServiceAdvertisement>>,
     ) {
         val host = resolved.host?.hostAddress ?: return
-        val name = LanDevice.usefulHostname(resolved.serviceName, host) ?: resolved.serviceName
+        val tidy = LanIdentity.tidyInstanceName(resolved.serviceName).ifBlank { return }
+        val name = LanDevice.usefulHostname(resolved.serviceName, host)
         fun keep(value: String?) {
             val shown = value?.let { LanDevice.usefulHostname(it, host) } ?: return
             val list = names.getOrPut(host) { mutableListOf() }
-            if (shown !in list) list.add(shown)
+            if (list.none { it.equals(shown, ignoreCase = true) }) list.add(shown)
         }
         keep(name)
         keep(attribute(resolved, "fn"))
         val model = attribute(resolved, "model") ?: attribute(resolved, "md")
-        model?.let { keep(it) }
+        val shown = name ?: tidy
         val list = services.getOrPut(host) { mutableListOf() }
-        if (list.none { it.type == resolved.serviceType && it.name == name }) {
-            list.add(ServiceAdvertisement(resolved.serviceType, name, model))
+        if (list.none { it.type == resolved.serviceType && it.name == shown }) {
+            list.add(ServiceAdvertisement(resolved.serviceType, shown, model))
         }
     }
 

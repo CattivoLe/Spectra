@@ -4,6 +4,7 @@ import cattivole.spectra.core.AccessPointReading
 import cattivole.spectra.core.AuthMode
 import cattivole.spectra.core.BleDevice
 import cattivole.spectra.core.Cipher
+import cattivole.spectra.core.HistoryEntry
 import cattivole.spectra.core.HistoryLine
 import cattivole.spectra.core.HistoryStore
 import cattivole.spectra.core.LanDevice
@@ -107,6 +108,65 @@ class HistoryMergeTest {
         val existing = listOf(HistoryLine("A", "", ""))
         val incoming = listOf(HistoryLine("A", "x", ""), HistoryLine("B", "", ""))
         assertEquals(listOf("A", "B"), HistoryStore.mergeLines(existing, incoming).map { it.title })
+    }
+
+    @Test
+    fun wifiAndInternetFromTheSamePlaceBecomeOneSession() {
+        val day = 1_700_000_000_000L
+        val wifi = HistoryEntry(
+            id = "wifi", kind = "networks", savedAt = day, source = "This phone", captureId = null,
+            placeKey = "geo:1_2", networks = listOf(network(1, day, day)),
+            latitude = 55.7510, longitude = 37.6180,
+        )
+        val internet = HistoryEntry(
+            id = "lan", kind = "lan", savedAt = day + 1_000, source = "This phone", captureId = null,
+            placeKey = "lan:gw:aa", lan = listOf(lan("192.168.1.1", day, day, "router")),
+            latitude = 55.7512, longitude = 37.6181,
+        )
+        val joined = HistoryStore.coalesce(listOf(wifi, internet))
+        assertEquals(1, joined.size)
+        assertEquals(listOf("networks", "lan"), joined[0].shownKinds())
+        assertEquals(1, joined[0].networks.size)
+        assertEquals(1, joined[0].lan.size)
+        assertEquals("lan:gw:aa", joined[0].placeKey)
+        assertEquals(2, joined[0].itemCount)
+    }
+
+    @Test
+    fun aFarVisitAndASensorCaptureStaySeparate() {
+        val day = 1_700_000_000_000L
+        val here = HistoryEntry(
+            id = "here", kind = "networks", savedAt = day, source = "This phone", captureId = null,
+            placeKey = "geo:1", latitude = 55.7510, longitude = 37.6180,
+            networks = listOf(network(1, day, day)),
+        )
+        val away = HistoryEntry(
+            id = "away", kind = "lan", savedAt = day, source = "This phone", captureId = null,
+            placeKey = "lan:gw:bb", latitude = 55.7600, longitude = 37.6180,
+            lan = listOf(lan("10.0.0.1", day, day, "other")),
+        )
+        val sensor = HistoryEntry(
+            id = "sensor", kind = "networks", savedAt = day, source = "Spectra-AB", captureId = 9,
+            placeKey = "geo:1", latitude = 55.7510, longitude = 37.6180,
+            lines = listOf(HistoryLine("Cafe", "", "")),
+        )
+        assertEquals(3, HistoryStore.coalesce(listOf(here, away, sensor)).size)
+    }
+
+    @Test
+    fun importSkipsWhatIsAlreadyStored() {
+        val day = 1_700_000_000_000L
+        val wifi = HistoryEntry(
+            id = "wifi", kind = "networks", savedAt = day, source = "This phone", captureId = null,
+            networks = listOf(network(1, day, day)),
+        )
+        val document = HistoryStore.encodeDocument(listOf(wifi))
+        val again = HistoryStore.mergeImport(listOf(wifi), document)
+        assertEquals(0, again!!.second)
+        val fresh = HistoryStore.mergeImport(emptyList(), document)
+        assertEquals(1, fresh!!.second)
+        assertEquals(1, fresh.first.single().networks.size)
+        assertEquals(null, HistoryStore.mergeImport(emptyList(), "not a history"))
     }
 
     @Test

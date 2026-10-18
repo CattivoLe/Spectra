@@ -18,6 +18,7 @@ import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.FileOpen
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.GppBad
@@ -39,6 +40,8 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,13 +76,6 @@ internal fun kindTint(kind: String): Color = when (kind) {
     else -> MaterialTheme.colorScheme.primary
 }
 
-private fun kindTitle(kind: String): String = when (kind) {
-    "lan" -> "LAN"
-    "bluetooth" -> "Bluetooth"
-    "lora" -> "LoRa"
-    else -> "Wi‑Fi"
-}
-
 /** The phone saves under its own name; translate it, and leave a Cardputer's name alone. */
 internal fun sourceName(source: String): String = when (source) {
     "This phone", "This iPhone" -> tr("This phone")
@@ -96,7 +92,7 @@ private class HistoryGroup(
     val entries: List<HistoryEntry>,
 ) {
     /** Which scan types this group holds, for the icon row on the header. */
-    val kinds: List<String> get() = entries.map { it.kind }.distinct()
+    val kinds: List<String> get() = entries.flatMap { it.shownKinds() }.distinct()
     val itemCount: Int get() = entries.sumOf { it.itemCount }
 }
 
@@ -104,16 +100,34 @@ private class HistoryGroup(
 fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     model.generation
     val history = model.history
-    var showLive by remember { mutableStateOf(false) }
-    if (showLive) {
-        LiveMapScreen(model) { showLive = false }
-        return
-    }
+    // Live map is hidden for now.
+    // var showLive by remember { mutableStateOf(false) }
+    // if (showLive) {
+    //     LiveMapScreen(model) { showLive = false }
+    //     return
+    // }
     var confirmClear by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var grouping by remember { mutableStateOf(Grouping.DATE) }
-    // Empty means every group starts collapsed.
-    var expanded by remember { mutableStateOf(setOf<String>()) }
+    // Today starts open. Every other day stays folded until it is tapped.
+    var expanded by remember { mutableStateOf(setOf(todayGroupId())) }
+    val context = LocalContext.current
+    val notify = LocalNotify.current
+    val importFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { it.reader().readText() }
+        }.getOrNull()
+        if (text == null) {
+            notify(tr("Could not read that file."))
+            return@rememberLauncherForActivityResult
+        }
+        when (val added = history.importDocument(text)) {
+            -1 -> notify(tr("Could not read that file."))
+            0 -> notify(tr("Nothing new in that file."))
+            else -> notify(tr("Imported %d scans.", added))
+        }
+    }
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
@@ -145,7 +159,11 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     SpectraScreen(
         title = tr("History"),
         actions = {
-            IconButton(onClick = { showLive = true }) { Icon(Icons.Rounded.MyLocation, contentDescription = tr("Live map")) }
+            // Live map is hidden for now.
+            // IconButton(onClick = { showLive = true }) { Icon(Icons.Rounded.MyLocation, contentDescription = tr("Live map")) }
+            IconButton(onClick = {
+                importFile.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+            }) { Icon(Icons.Rounded.FileOpen, contentDescription = tr("Import")) }
             if (history.entries.isNotEmpty()) {
                 ExportMenu(history.entries)
             }
@@ -239,6 +257,8 @@ private fun byPlace(entries: List<HistoryEntry>): List<HistoryGroup> {
         .sortedByDescending { it.entries.firstOrNull()?.savedAt ?: 0 }
 }
 
+private fun todayGroupId(): String = "date:${startOfDay(System.currentTimeMillis())}"
+
 private fun startOfDay(millis: Long): Long = Calendar.getInstance().apply {
     timeInMillis = millis
     set(Calendar.HOUR_OF_DAY, 0)
@@ -321,6 +341,7 @@ private fun HistoryRow(entry: HistoryEntry, showPlace: Boolean, onOpen: () -> Un
         value == SwipeToDismissBoxValue.EndToStart
     })
     val fromSensor = entry.captureId != null
+    val iconKind = entry.shownKinds().first()
     SwipeToDismissBox(
         state = state,
         enableDismissFromStartToEnd = false,
@@ -336,16 +357,16 @@ private fun HistoryRow(entry: HistoryEntry, showPlace: Boolean, onOpen: () -> Un
         val place = entry.placeLabel?.takeIf { showPlace }
         Box(Modifier.background(MaterialTheme.colorScheme.surfaceContainer)) {
             ListRow(
-                title = entry.kindTitle,
+                title = entry.rowTitle,
                 subtitle = "${ago(entry.savedAt)} · ${place ?: sourceName(entry.source)}",
                 subtitleLines = 1,
-                leading = { IconTile(if (fromSensor) Icons.Rounded.Memory else kindIcon(entry.kind), kindTint(entry.kind)) },
+                leading = { IconTile(if (fromSensor) Icons.Rounded.Memory else kindIcon(iconKind), kindTint(iconKind)) },
                 badges = {
                     if (entry.deauths.isNotEmpty()) {
                         Icon(Icons.Rounded.GppBad, contentDescription = tr("Deauth detected"), tint = Spectra.colors.danger, modifier = Modifier.padding(start = 2.dp))
                     }
                 },
-                trailing = { Pill("${entry.itemCount}", kindTint(entry.kind)) },
+                trailing = { Pill("${entry.itemCount}", kindTint(iconKind)) },
                 onClick = onOpen,
             )
         }
@@ -365,7 +386,7 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
     val footer = "${sourceName(entry.source)} · ${dateTime(entry.savedAt)}"
     val context = LocalContext.current
     SpectraScreen(
-        title = kindTitle(entry.kind),
+        title = entry.rowTitle,
         subtitle = footer,
         onBack = nav::back,
         actions = {

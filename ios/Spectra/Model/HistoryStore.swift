@@ -382,6 +382,17 @@ final class HistoryStore {
         return String(format: "%.4f, %.4f", location.latitude, location.longitude)
     }
 
+    /// Two scans within this many metres join one session instead of each
+    /// starting its own card.
+    static let mergeDistanceMetres = 75.0
+
+    /// Fast equirectangular distance in metres; exact enough at these ranges.
+    static func metres(_ lat1: Double, _ lon1: Double, _ lat2: Double, _ lon2: Double) -> Double {
+        let dLat = (lat1 - lat2) * 111_320
+        let dLon = (lon1 - lon2) * 111_320 * cos(lat1 * .pi / 180)
+        return (dLat * dLat + dLon * dLon).squareRoot()
+    }
+
     /// The cap's fix for a capture. It can arrive before the rows, and again
     /// on a later connection after the capture is already stored.
     func notePosition(captureID: UInt32, source: String, latitude: Double, longitude: Double) {
@@ -471,10 +482,18 @@ final class HistoryStore {
     ) {
         let now = Date()
         // Merge into today's session for the same kind and place (sensor
-        // captures keep their own entries, matched by captureID).
-        if let index = entries.firstIndex(where: {
-            $0.kind == kind && $0.captureID == nil && ($0.placeKey ?? "") == placeKey
-                && Calendar.current.isDate($0.savedAt, inSameDayAs: now)
+        // captures keep their own entries, matched by captureID). A geo-tagged
+        // session also absorbs a scan a few dozen metres away, so a small GPS
+        // drift across a bucket edge does not start a fresh card.
+        let hereIsGeo = placeKey.isEmpty || placeKey.hasPrefix("geo:")
+        if let index = entries.firstIndex(where: { entry in
+            guard entry.kind == kind, entry.captureID == nil,
+                  Calendar.current.isDate(entry.savedAt, inSameDayAs: now) else { return false }
+            if (entry.placeKey ?? "") == placeKey { return true }
+            guard hereIsGeo, let lat = latitude, let lon = longitude,
+                  (entry.placeKey?.isEmpty ?? true) || entry.placeKey?.hasPrefix("geo:") == true,
+                  let eLat = entry.latitude, let eLon = entry.longitude else { return false }
+            return Self.metres(lat, lon, eLat, eLon) <= Self.mergeDistanceMetres
         }) {
             var entry = entries[index]
             entry.savedAt = now

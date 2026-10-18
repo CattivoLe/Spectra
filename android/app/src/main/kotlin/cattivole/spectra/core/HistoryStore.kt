@@ -28,9 +28,9 @@ data class HistoryLine(
  * network, host or Bluetooth device opens the same card as a live one. The
  * Cardputer sends summary [lines] only.
  *
- * Scans of the same kind, on the same day, in the same place are merged into
- * one entry rather than piling up: [placeKey] groups them, and a record is
- * folded in by identity so [firstSeen] keeps the earliest sighting.
+ * A Wi‑Fi sweep and the LAN / internet check from the same day and place share
+ * one entry. [placeKey] groups them, and a record is folded in by identity so
+ * [firstSeen] keeps the earliest sighting.
  */
 class HistoryEntry(
     val id: String,
@@ -40,7 +40,7 @@ class HistoryEntry(
     val captureId: Long?,
     /**
      * Stable key grouping scans into one session: a geo bucket, or the LAN
-     * network. Entries with the same (day + kind + placeKey) are merged.
+     * network. Wi‑Fi and LAN from the same day and place share one entry.
      */
     val placeKey: String? = null,
     /** Human label for the place, shown in the by-place view. */
@@ -58,23 +58,30 @@ class HistoryEntry(
     var longitude: Double? = null,
 ) {
     val kindTitle: String
-        get() = when (kind) {
-            "lan" -> "LAN"
-            "bluetooth" -> "Bluetooth"
-            "lora" -> "LoRa"
-            else -> "Wi‑Fi"
+        get() = labelFor(kind)
+
+    /** Wi‑Fi and the internet check are one session, so the row names both. */
+    fun shownKinds(): List<String> {
+        val found = buildList {
+            if (networks.isNotEmpty() || probes.isNotEmpty() || deauths.isNotEmpty()) add("networks")
+            if (lan.isNotEmpty() || connections.isNotEmpty()) add("lan")
+            if (bluetooth.isNotEmpty()) add("bluetooth")
+            if (kind == "lora") add("lora")
         }
+        return found.ifEmpty { listOf(kind) }
+    }
+
+    val rowTitle: String
+        get() = shownKinds().joinToString(" · ") { labelFor(it) }
 
     val hasRecords: Boolean
         get() = networks.isNotEmpty() || probes.isNotEmpty() || deauths.isNotEmpty() ||
             lan.isNotEmpty() || bluetooth.isNotEmpty() || connections.isNotEmpty()
 
     val itemCount: Int
-        get() = when (kind) {
-            "networks" -> (networks.size + probes.size + deauths.size).takeIf { it > 0 } ?: lines.size
-            "lan" -> (lan.size + connections.size).takeIf { it > 0 } ?: lines.size
-            "lora" -> lines.size
-            else -> bluetooth.size.takeIf { it > 0 } ?: lines.size
+        get() {
+            val records = networks.size + probes.size + deauths.size + lan.size + connections.size + bluetooth.size
+            return records.takeIf { it > 0 } ?: lines.size
         }
 
     fun network(bssid: MacAddress): TrackedNetwork? = networks.firstOrNull { it.id == bssid }
@@ -83,14 +90,20 @@ class HistoryEntry(
     fun probe(mac: MacAddress): ProbingDevice? = probes.firstOrNull { it.mac == mac }
 }
 
+private fun labelFor(kind: String): String = when (kind) {
+    "lan" -> "LAN"
+    "bluetooth" -> "Bluetooth"
+    "lora" -> "LoRa"
+    else -> "Wi‑Fi"
+}
+
 /**
  * Saved scans from the phone and from the Cardputer's side button.
  *
- * One entry collects a whole session: scans of the same kind, on the same day,
- * in the same place are merged into it rather than piling up as duplicates.
- * A capture id from the sensor is imported once and keeps its own entry. The
- * file is read and written off the main thread; a large history must not stall
- * the UI.
+ * One entry collects a whole session. Wi‑Fi and the LAN / internet check from
+ * the same day and place share it; other kinds stay separate. A capture id
+ * from the sensor is imported once and keeps its own entry. The file is read
+ * and written off the main thread; a large history must not stall the UI.
  */
 class HistoryStore(context: Context) {
     var entries: List<HistoryEntry> = emptyList()
@@ -141,8 +154,14 @@ class HistoryStore(context: Context) {
         merged = true
         val fresh = entries
         loaded.forEach { (entry, json) -> encoded[entry.id] = json }
-        entries = (fresh + loaded.map { it.first }.filter { old -> fresh.none { it.id == old.id } }).take(LIMIT)
-        if (fresh.isNotEmpty()) persist()
+        val combined = (fresh + loaded.map { it.first }.filter { old -> fresh.none { it.id == old.id } }).take(LIMIT)
+        val joined = coalesce(combined)
+        entries = joined
+        if (fresh.isNotEmpty() || joined.map { it.id } != combined.map { it.id }) {
+            encoded.keys.retainAll(joined.map { it.id }.toSet())
+            joined.forEach { encoded[it.id] = encodeEntry(it) }
+            persist()
+        }
         publish()
     }
 
@@ -315,6 +334,24 @@ class HistoryStore(context: Context) {
         publish()
     }
 
+    /**
+     * Adds sessions from a shared history file. An id or sensor capture already
+     * stored is skipped. Returns how many sessions were new, or -1 when the
+     * file is not a history document.
+     */
+    fun importDocument(text: String): Int {
+        ensureLoaded()
+        val merged = mergeImport(entries, text) ?: return -1
+        val (joined, added) = merged
+        if (added == 0) return 0
+        entries = joined
+        encoded.clear()
+        joined.forEach { encoded[it.id] = encodeEntry(it) }
+        persist()
+        publish()
+        return added
+    }
+
     // MARK: - Session upsert
 
     private fun upsert(
@@ -333,30 +370,34 @@ class HistoryStore(context: Context) {
         longitude: Double? = null,
     ) {
         val now = System.currentTimeMillis()
-        // Merge into today's session for the same kind and place (sensor
-        // captures keep their own entries, matched by captureId).
-        val index = entries.indexOfFirst {
-            it.kind == kind && it.captureId == null && (it.placeKey ?: "") == placeKey && isSameDay(it.savedAt, now)
+        // Wi‑Fi and the LAN / internet check share today's session for this
+        // place. A sensor capture keeps its own entry. A fix a few dozen metres
+        // away still joins, so GPS drift does not start a second card.
+        val index = entries.indexOfFirst { entry ->
+            accepts(entry, kind, placeKey, now, latitude, longitude)
         }
         if (index >= 0) {
             val old = entries[index]
-            val mergedEntry = HistoryEntry(
-                id = old.id,
-                kind = kind,
-                savedAt = now,
-                source = source,
-                captureId = null,
-                placeKey = placeKey,
-                placeLabel = placeLabel ?: old.placeLabel,
-                lines = mergeLines(old.lines, lines),
-                networks = mergeNetworks(old.networks, networks),
-                probes = mergeBy(old.probes, probes) { it.mac },
-                deauths = mergeBy(old.deauths, deauths) { it.id },
-                lan = mergeLan(old.lan, lan),
-                bluetooth = mergeBle(old.bluetooth, bluetooth),
-                connections = mergeConnections(old.connections, connections),
-                latitude = latitude ?: old.latitude,
-                longitude = longitude ?: old.longitude,
+            val mergedEntry = fold(
+                HistoryEntry(
+                    id = old.id,
+                    kind = old.kind,
+                    savedAt = now,
+                    source = source,
+                    captureId = null,
+                    placeKey = placeKey,
+                    placeLabel = placeLabel ?: old.placeLabel,
+                    lines = lines,
+                    networks = networks,
+                    probes = probes,
+                    deauths = deauths,
+                    lan = lan,
+                    bluetooth = bluetooth,
+                    connections = connections,
+                    latitude = latitude ?: old.latitude,
+                    longitude = longitude ?: old.longitude,
+                ),
+                old,
             )
             val list = entries.toMutableList()
             list.removeAt(index)
@@ -422,6 +463,123 @@ class HistoryStore(context: Context) {
         const val LIMIT = 100
         const val CONNECTION_LIMIT = 12
 
+        /** The history file, so a scan can be handed to someone and opened again. */
+        fun encodeDocument(entries: List<HistoryEntry>): String {
+            val array = JSONArray()
+            entries.forEach { array.put(encodeEntry(it)) }
+            return array.toString()
+        }
+
+        /**
+         * Folds a shared file into [existing]. The pair is the resulting list
+         * and how many sessions were new. Null when the text is not a history.
+         */
+        fun mergeImport(existing: List<HistoryEntry>, text: String): Pair<List<HistoryEntry>, Int>? {
+            val trimmed = text.trim()
+            val array = try {
+                when {
+                    trimmed.startsWith("[") -> JSONArray(trimmed)
+                    trimmed.startsWith("{") -> JSONArray().put(JSONObject(trimmed))
+                    else -> return null
+                }
+            } catch (_: Exception) {
+                return null
+            }
+            val decoded = (0 until array.length()).mapNotNull { index ->
+                array.optJSONObject(index)?.let { runCatching { decodeEntry(it) }.getOrNull() }
+            }
+            if (decoded.isEmpty()) return null
+            val ids = existing.map { it.id }.toMutableSet()
+            val captures = existing.mapNotNull { it.captureId }.toMutableSet()
+            val fresh = decoded.filter { entry ->
+                if (entry.id in ids) return@filter false
+                val capture = entry.captureId
+                if (capture != null && capture in captures) return@filter false
+                ids.add(entry.id)
+                capture?.let { captures.add(it) }
+                true
+            }
+            return coalesce(fresh + existing).take(LIMIT) to fresh.size
+        }
+
+        /** Joins Wi‑Fi and LAN / internet sessions that are the same outing. */
+        fun coalesce(entries: List<HistoryEntry>): List<HistoryEntry> {
+            val kept = mutableListOf<HistoryEntry>()
+            for (entry in entries.sortedByDescending { it.savedAt }) {
+                val at = kept.indexOfFirst { together(it, entry) }
+                if (at < 0) kept.add(entry) else kept[at] = fold(kept[at], entry)
+            }
+            return kept
+        }
+
+        private fun accepts(
+            entry: HistoryEntry,
+            kind: String,
+            placeKey: String,
+            whenMs: Long,
+            latitude: Double?,
+            longitude: Double?,
+        ): Boolean {
+            if (entry.captureId != null || !isSameDay(entry.savedAt, whenMs)) return false
+            if (!sameFamily(entry.kind, kind)) return false
+            return sameSpot(entry.placeKey, entry.latitude, entry.longitude, placeKey, latitude, longitude)
+        }
+
+        private fun together(a: HistoryEntry, b: HistoryEntry): Boolean {
+            if (a.captureId != null || b.captureId != null) return false
+            if (!isSameDay(a.savedAt, b.savedAt)) return false
+            if (!sameFamily(a.kind, b.kind)) return false
+            return sameSpot(a.placeKey, a.latitude, a.longitude, b.placeKey ?: "", b.latitude, b.longitude)
+        }
+
+        private fun sameFamily(a: String, b: String): Boolean {
+            val net = a == "networks" || a == "lan"
+            val other = b == "networks" || b == "lan"
+            return if (net && other) true else a == b
+        }
+
+        private fun sameSpot(
+            keyA: String?,
+            latA: Double?,
+            lonA: Double?,
+            keyB: String,
+            latB: Double?,
+            lonB: Double?,
+        ): Boolean {
+            if ((keyA ?: "") == keyB) return true
+            if (latA != null && lonA != null && latB != null && lonB != null) {
+                return metres(latA, lonA, latB, lonB) <= MERGE_DISTANCE_METRES
+            }
+            return false
+        }
+
+        /** Keeps [base]'s id and lets its records win a tie. A LAN key outlives a geo bucket. */
+        private fun fold(base: HistoryEntry, extra: HistoryEntry): HistoryEntry = HistoryEntry(
+            id = base.id,
+            kind = base.kind,
+            savedAt = base.savedAt,
+            source = base.source,
+            captureId = null,
+            placeKey = preferKey(base.placeKey, extra.placeKey),
+            placeLabel = base.placeLabel ?: extra.placeLabel,
+            lines = mergeLines(extra.lines, base.lines),
+            networks = mergeNetworks(extra.networks, base.networks),
+            probes = mergeBy(extra.probes, base.probes) { it.mac },
+            deauths = mergeBy(extra.deauths, base.deauths) { it.id },
+            lan = mergeLan(extra.lan, base.lan),
+            bluetooth = mergeBle(extra.bluetooth, base.bluetooth),
+            connections = mergeConnections(extra.connections, base.connections),
+            latitude = base.latitude ?: extra.latitude,
+            longitude = base.longitude ?: extra.longitude,
+        )
+
+        private fun preferKey(a: String?, b: String?): String? = when {
+            a?.startsWith("lan:") == true -> a
+            b?.startsWith("lan:") == true -> b
+            !a.isNullOrEmpty() -> a
+            else -> b
+        }
+
         /**
          * ~55 m geo bucket (0.0005°). Empty when there is no fix, so fixless
          * scans of a kind on a day still merge together.
@@ -435,6 +593,16 @@ class HistoryStore(context: Context) {
 
         fun geoLabel(location: Pair<Double, Double>?): String? =
             location?.let { String.format(Locale.US, "%.4f, %.4f", it.first, it.second) }
+
+        /** Two scans within this many metres join one session. */
+        const val MERGE_DISTANCE_METRES = 75.0
+
+        /** Fast equirectangular distance in metres; exact enough at these ranges. */
+        fun metres(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+            val dLat = (lat1 - lat2) * 111_320
+            val dLon = (lon1 - lon2) * 111_320 * Math.cos(Math.toRadians(lat1))
+            return Math.sqrt(dLat * dLat + dLon * dLon)
+        }
 
         private fun isSameDay(a: Long, b: Long): Boolean {
             val first = Calendar.getInstance().apply { timeInMillis = a }

@@ -37,6 +37,13 @@ static constexpr const char* kFirmwareVersion = kFirmwareTag + 11;
 // keeps a full sweep under two seconds.
 static constexpr uint32_t kMsPerChannel = 120;
 
+// Wi-Fi patrol while the phone is away. The app's default live interval.
+// The phone's own interval is cleared on disconnect and does not drive this.
+static constexpr uint8_t kSoloIntervalSec = 30;
+
+// Same bar the phone uses: bytes on one AP during the sniff window.
+static constexpr uint32_t kStreamingBytes = 120000;
+
 // How long promiscuous mode listens on each channel for clients.
 static constexpr uint32_t kSniffMsPerChannel = 250;
 static constexpr uint8_t kSniffChannels[] = {1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
@@ -602,7 +609,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *, NimBLEConnInfo &) override { linkChanged = true; }
 
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
-    // Automatic scans are for the app; stop them when it goes away.
+    // The phone's interval belongs to the link. Solo patrol keeps its own.
     scanIntervalSec = 0;
     intervalChanged = true;
     linkChanged = true;
@@ -1772,7 +1779,8 @@ static void drawUi() {
   } else if (isConnected()) {
     snprintf(header, sizeof(header), "%s  linked", deviceName);
   } else {
-    snprintf(header, sizeof(header), "%s  waiting", deviceName);
+    snprintf(header, sizeof(header), "%s  every %us", deviceName,
+             static_cast<unsigned>(kSoloIntervalSec));
   }
   drawStatus(header);
   drawTabs();
@@ -1870,6 +1878,132 @@ static void drawUi() {
 // ---------------------------------------------------------------------------
 // Scan
 // ---------------------------------------------------------------------------
+
+static bool isAllFf(const uint8_t *mac) {
+  for (int i = 0; i < 6; ++i) {
+    if (mac[i] != 0xFF) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The name a beacon advertised, or the one a probe response revealed for a
+// hidden AP. Empty when the network is still unnamed.
+static const char *apName(const KeptWifi &ap) {
+  if (ap.ssid[0] != '\0') {
+    return ap.ssid;
+  }
+  for (const RevealEntry &reveal : capturedReveals) {
+    if (macEqual(reveal.bssid, ap.bssid) && reveal.ssid[0] != '\0') {
+      return reveal.ssid;
+    }
+  }
+  return "";
+}
+
+// A deauth the phone would rank as a warning or worse: a broadcast, or a
+// burst of three or more frames with the same signature.
+static bool deauthIsThreat(const DeauthEntry &event) {
+  return isAllFf(event.dst) || event.count >= 3;
+}
+
+// One SSID on several access points is normal for mesh. It is a threat only
+// when those copies differ in security or in maker.
+static bool evilTwinPresent() {
+  const int count = static_cast<int>(keptWifi.size());
+  for (int i = 0; i < count; ++i) {
+    const char *name = apName(keptWifi[i]);
+    if (name[0] == '\0') {
+      continue;
+    }
+    int copies = 1;
+    bool authDiffers = false;
+    bool ouiDiffers = false;
+    for (int j = i + 1; j < count; ++j) {
+      if (std::strcmp(name, apName(keptWifi[j])) != 0) {
+        continue;
+      }
+      ++copies;
+      if (keptWifi[j].auth != keptWifi[i].auth) {
+        authDiffers = true;
+      }
+      if (std::memcmp(keptWifi[j].bssid, keptWifi[i].bssid, 3) != 0) {
+        ouiDiffers = true;
+      }
+    }
+    if (copies >= 2 && (authDiffers || ouiDiffers)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool streamingPresent() {
+  for (const TrafficEntry &traffic : capturedTraffic) {
+    if (traffic.bytes >= kStreamingBytes) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool openNetworkPresent() {
+  for (const KeptWifi &ap : keptWifi) {
+    if (ap.auth == WIFI_AUTH_OPEN) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool playTone(float hz, uint32_t ms) {
+  M5Cardputer.Speaker.setVolume(200);
+  if (!M5Cardputer.Speaker.tone(hz, ms)) {
+    return false;
+  }
+  delay(ms + 50);
+  esp_task_wdt_reset();
+  return true;
+}
+
+// Low pulses for a threat, a higher chirp for an open network. Both play
+// when a sweep finds both. A linked phone already receives the scan, so the
+// speaker stays quiet then.
+static void alertScanFindings() {
+  if (isConnected()) {
+    return;
+  }
+  bool threat = evilTwinPresent() || streamingPresent();
+  if (!threat) {
+    for (const DeauthEntry &event : capturedDeauths) {
+      if (deauthIsThreat(event)) {
+        threat = true;
+        break;
+      }
+    }
+  }
+  const bool open = openNetworkPresent();
+  if (!threat && !open) {
+    return;
+  }
+  if (threat && open) {
+    showBanner("Threat + open");
+  } else if (threat) {
+    showBanner("Threat");
+  } else {
+    showBanner("Open network");
+  }
+  if (threat) {
+    playTone(520, 90);
+    playTone(520, 90);
+    playTone(390, 180);
+  }
+  if (open) {
+    playTone(1568, 70);
+    playTone(2093, 110);
+  }
+}
 
 /// Sniff Wi-Fi frames in promiscuous mode to discover client stations.
 static void sniffStations() {
@@ -1994,6 +2128,7 @@ static void runScan() {
 
   sendScanFinished(apSent, staSent, probeSent,
                    static_cast<uint16_t>(std::min<uint32_t>(lastScanDurationMs, 0xFFFF)));
+  alertScanFindings();
   uiDirty = true;
 }
 
@@ -2184,6 +2319,35 @@ static void startWifiPick() {
   uiDirty = true;
 }
 
+struct NavKeys {
+  bool up;
+  bool down;
+  bool left;
+  bool right;
+};
+
+// Fn maps ; , . / onto the arrows. The same keys move the list without Fn.
+// While a password is being typed they stay characters, so a passphrase can
+// still contain them.
+static NavKeys navKeys(const Keyboard_Class::KeysState &keys, bool bare) {
+  NavKeys nav{keys.up, keys.down, keys.left, keys.right};
+  if (!bare) {
+    return nav;
+  }
+  for (const char c : keys.word) {
+    if (c == ';') {
+      nav.up = true;
+    } else if (c == '.') {
+      nav.down = true;
+    } else if (c == ',') {
+      nav.left = true;
+    } else if (c == '/') {
+      nav.right = true;
+    }
+  }
+  return nav;
+}
+
 // Keyboard handling while the Wi-Fi setup screens are open.
 static void handleWifiKeys() {
   const Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
@@ -2208,7 +2372,8 @@ static void handleWifiKeys() {
   const bool delEdge = keys.del && !prevDel;
 
   if (wifiUi == WifiUi::Pick) {
-    const int dir = (keys.up && !keys.down) ? -1 : (keys.down && !keys.up) ? 1 : 0;
+    const NavKeys nav = navKeys(keys, true);
+    const int dir = (nav.up && !nav.down) ? -1 : (nav.down && !nav.up) ? 1 : 0;
     if (dir != 0 && !wifiList.empty()) {
       const uint32_t now = millis();
       const bool first = dir != heldDir;
@@ -2365,12 +2530,12 @@ static void handleKeyboard() {
     return;
   }
   const Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
-  // Arrows only with Fn held, on the ; , . / legends. A bare key does
-  // nothing, so a stray press in a pocket does not move the list.
-  const bool up = keys.up;
-  const bool down = keys.down;
-  const bool left = keys.left;
-  const bool right = keys.right;
+  const bool typingPass = menuIndex == kTabLink && wifiUi == WifiUi::Pass;
+  const NavKeys nav = navKeys(keys, !typingPass);
+  const bool up = nav.up;
+  const bool down = nav.down;
+  const bool left = nav.left;
+  const bool right = nav.right;
 
   int scroll = 0;
   int mode = 0;
@@ -2550,8 +2715,11 @@ void loop() {
     uiDirty = true;
   }
 
-  const bool due = scanIntervalSec > 0 && isConnected() && !otaActive && !otaJobBusy &&
-                   millis() - lastScanMs >= static_cast<uint32_t>(scanIntervalSec) * 1000;
+  // Linked: the phone chooses the interval and receives each sweep. Alone:
+  // a fixed patrol, with the speaker instead of a notification.
+  const uint32_t everyMs = isConnected() ? static_cast<uint32_t>(scanIntervalSec) * 1000
+                                         : static_cast<uint32_t>(kSoloIntervalSec) * 1000;
+  const bool due = everyMs > 0 && !otaActive && !otaJobBusy && millis() - lastScanMs >= everyMs;
   bool startScan = false;
   uint8_t kind = 0;
   taskENTER_CRITICAL(&radioMux);

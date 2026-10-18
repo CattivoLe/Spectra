@@ -20,7 +20,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
 import cattivole.spectra.core.Exporter
 import cattivole.spectra.core.HistoryEntry
+import cattivole.spectra.core.HistoryStore
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** Device fields for the WiGLE header, read from the running app. */
 private fun exportDevice(context: Context): Exporter.Device {
@@ -49,6 +53,21 @@ fun shareExport(context: Context, format: Exporter.Format, entries: List<History
     context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
+/** The history file another Spectra can import. CSV and the map formats stay for other tools. */
+fun shareHistory(context: Context, entries: List<HistoryEntry>) {
+    val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
+    val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+    val out = File(dir, "spectra-$stamp.json")
+    out.writeText(HistoryStore.encodeDocument(entries))
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", out)
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "application/json"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}
+
 /** A share button that opens a menu of export formats. */
 @Composable
 fun ExportMenu(entries: List<HistoryEntry>) {
@@ -59,6 +78,13 @@ fun ExportMenu(entries: List<HistoryEntry>) {
             Icon(Icons.Rounded.IosShare, contentDescription = tr("Export"))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(tr("Spectra")) },
+                onClick = {
+                    open = false
+                    shareHistory(context, entries)
+                },
+            )
             for (format in Exporter.Format.entries) {
                 DropdownMenuItem(
                     text = { Text(format.label) },

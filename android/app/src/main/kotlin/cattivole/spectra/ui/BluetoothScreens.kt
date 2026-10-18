@@ -20,6 +20,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckBox
 import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.MoreVert
@@ -301,6 +302,14 @@ fun BleRow(device: BleDevice, now: Long, onClick: () -> Unit, watched: Boolean =
                     Icon(
                         Icons.Rounded.Link,
                         contentDescription = tr("Connectable"),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+                if (device.services.isNotEmpty()) {
+                    Icon(
+                        Icons.Rounded.Dns,
+                        contentDescription = tr("Services listed"),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(14.dp),
                     )

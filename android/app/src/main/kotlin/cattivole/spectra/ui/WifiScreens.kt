@@ -248,17 +248,6 @@ private fun WifiStatusChips(model: SpectraModel, nav: Navigator) {
             indicator = if (link.isCharging == true && link.batteryLevel != null) Spectra.colors.success else null,
             onClick = nav::sensorTab,
         )
-        val anchor = scanStart ?: store.lastScanFinished
-        if (link.isConnected && anchor != null) {
-            StatusChip(
-                icon = Icons.Rounded.Timer,
-                title = stopwatch(now - anchor),
-                detail = if (store.isScanning) tr("Scanning") else tr("Since the last scan"),
-                tint = Spectra.colors.info,
-                busy = store.isScanning,
-                onClick = link::scanNow,
-            )
-        }
         val phoneNetworks = store.phoneSightings().filter { it.isInRange }
         val context = LocalContext.current
         val requestPermissions = LocalRequestPermissions.current
@@ -285,6 +274,17 @@ private fun WifiStatusChips(model: SpectraModel, nav: Navigator) {
                 }
             },
         )
+        val anchor = scanStart ?: store.lastScanFinished
+        if (link.isConnected && anchor != null) {
+            StatusChip(
+                icon = Icons.Rounded.Timer,
+                title = stopwatch(now - anchor),
+                detail = if (store.isScanning) tr("Scanning") else tr("Since the last scan"),
+                tint = Spectra.colors.info,
+                busy = store.isScanning,
+                onClick = link::scanNow,
+            )
+        }
         val twoFour = store.networks().values.filter { it.isInRange && it.latest.band == Band.TWO_FOUR }.map { it.latest }
         if (twoFour.isNotEmpty()) {
             StatusChip(

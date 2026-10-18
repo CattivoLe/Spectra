@@ -22,7 +22,8 @@ struct HistoryView: View {
     @State private var showUnlocated = false
     @State private var camera: MapCameraPosition = .automatic
     @State private var shareItem: ShareItem?
-    @State private var showLive = false
+    // Live map is hidden for now.
+    // @State private var showLive = false
 
     /// One collapsible group of sessions: a day, or a place.
     private struct Group: Identifiable {
@@ -104,16 +105,18 @@ struct HistoryView: View {
                 pinSheet(title: String(localized: "No location"), entries: unlocated)
             }
             .shareSheet(item: $shareItem)
-            .fullScreenCover(isPresented: $showLive) { LiveMapView() }
+            // Live map is hidden for now.
+            // .fullScreenCover(isPresented: $showLive) { LiveMapView() }
             .toolbar { historyToolbar }
         }
     }
 
     @ToolbarContentBuilder
     private var historyToolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Button("Live map", systemImage: "location.circle") { showLive = true }
-        }
+        // Live map is hidden for now.
+        // ToolbarItem(placement: .topBarLeading) {
+        //     Button("Live map", systemImage: "location.circle") { showLive = true }
+        // }
         if !history.entries.isEmpty {
             ToolbarItem(placement: .topBarTrailing) {
                 groupingButton(.date)
@@ -156,11 +159,17 @@ struct HistoryView: View {
     }
 
     private func groupingButton(_ mode: HistoryGrouping) -> some View {
-        Button(mode.label, systemImage: mode.systemImage) {
-            grouping = mode
+        let selected = grouping == mode
+        return Button { grouping = mode } label: {
+            Label(mode.label, systemImage: mode.systemImage)
+                .labelStyle(.titleAndIcon)
+                .font(.subheadline.weight(selected ? .semibold : .regular))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(selected ? Color.accentColor.opacity(0.18) : .clear, in: Capsule())
+                .foregroundStyle(selected ? Color.accentColor : .secondary)
         }
-        .foregroundStyle(grouping == mode ? .primary : .secondary)
-        .accessibilityAddTraits(grouping == mode ? .isSelected : [])
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var sessionList: some View {

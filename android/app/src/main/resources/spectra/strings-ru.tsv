@@ -547,6 +547,11 @@ The check follows the VPN.	Проверка идёт через VPN.
 The check stays on Wi-Fi or Ethernet.	Проверка остаётся на Wi-Fi или Ethernet.
 There is no network connection to check.	Нет сети, которую можно проверить.
 Export	Экспорт
+Import	Импорт
+Spectra	Spectra
+Could not read that file.	Не удалось прочитать файл.
+Nothing new in that file.	В файле нет новых сканирований.
+Imported %d scans.	Импортировано сканирований: %d
 Live map	Карта вживую
 Record track	Записать трек
 Recording	Запись
@@ -585,3 +590,4 @@ Enough remembered networks to recognise this device elsewhere.	Достаточ�
 ≈ under 1 m away	≈ меньше 1 м
 ≈ %.1f m away	≈ %.1f м
 ≈ %d m away	≈ %d м
+Services listed	Службы известны

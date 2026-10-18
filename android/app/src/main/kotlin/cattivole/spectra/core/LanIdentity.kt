@@ -352,6 +352,9 @@ enum class NotableDevice(val title: String) {
 
 /** Parsers for the text and SMB packets a host answers with. Sockets live in the scanner. */
 object LanIdentity {
+    private val dnsSdEscapes = Regex("""\\(\d{3})""")
+    private val serviceTypeSuffix = Regex("""(?i)(?:\._[a-z0-9-]+)*\._(?:tcp|udp)(?:\.local)?$""")
+
     private val genericNames = setOf(
         "unknown", "unnamed", "device", "localhost", "windows",
         "mediarenderer", "mediaserver", "basic", "internetgatewaydevice",
@@ -621,6 +624,28 @@ object LanIdentity {
         if (!cleaned.any { it.isLetter() }) return null
         if (cleaned.lowercase() in genericNames) return null
         return cleaned
+    }
+
+    /**
+     * The instance name a person would read. AirPlay audio prefixes a MAC,
+     * Android's resolver sometimes glues on the service type, and DNS-SD
+     * writes a space as `\032`.
+     */
+    fun tidyInstanceName(raw: String): String {
+        var name = dnsSdEscapes.replace(raw) { match ->
+            val code = match.groupValues[1].toInt()
+            if (code in 32..126) code.toChar().toString() else ""
+        }.trim().trim('\u0000')
+        val at = name.indexOf('@')
+        if (at == 12 && name.substring(0, at).all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }) {
+            name = name.substring(at + 1).trim()
+        }
+        name = name.trimEnd('.')
+        name = serviceTypeSuffix.replace(name, "")
+        if (name.endsWith(".local", ignoreCase = true)) {
+            name = name.dropLast(6).trim()
+        }
+        return name.trim().trimEnd('.')
     }
 
     fun decodeXmlEntities(raw: String): String {

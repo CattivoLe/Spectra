@@ -362,6 +362,13 @@ struct BLEDeviceRow: View {
                             .accessibilityLabel("Connectable")
                             .fixedSize()
                     }
+                    if !device.services.isEmpty {
+                        Image(systemName: "list.bullet.rectangle.portrait")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Services listed")
+                            .fixedSize()
+                    }
                     if device.isSpectraSensor {
                         badge("Sensor", color: .blue)
                     }

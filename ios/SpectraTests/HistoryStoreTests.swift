@@ -100,4 +100,25 @@ struct HistoryStoreTests {
         #expect(store.entries.count == 2)
         store.clear()
     }
+
+    @Test func nearbyGeoSessionsMergeButFarOnesDoNot() {
+        let store = HistoryStore()
+        store.clear()
+        store.locationProvider = { (55.7500, 37.6100) }
+        store.upsertBluetooth([BLEDevice(id: UUID(), rssi: -50, seen: .now)], source: "This iPhone")
+        // ~45 m away (0.0004° lat): same session.
+        store.locationProvider = { (55.7504, 37.6100) }
+        store.upsertBluetooth([BLEDevice(id: UUID(), rssi: -50, seen: .now)], source: "This iPhone")
+        #expect(store.entries.count == 1)
+        // ~330 m away: a new card.
+        store.locationProvider = { (55.7530, 37.6100) }
+        store.upsertBluetooth([BLEDevice(id: UUID(), rssi: -50, seen: .now)], source: "This iPhone")
+        #expect(store.entries.count == 2)
+        store.clear()
+    }
+
+    @Test func metresApproximatesDistance() {
+        // 0.001° of latitude is about 111 m.
+        #expect(abs(HistoryStore.metres(55.75, 37.61, 55.751, 37.61) - 111.3) < 1)
+    }
 }
