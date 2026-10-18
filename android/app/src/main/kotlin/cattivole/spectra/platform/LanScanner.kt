@@ -68,6 +68,20 @@ class LanScanner(context: Context) {
     var noNetwork: Boolean = false
         private set
 
+    /**
+     * Stable identity of the joined network, so repeat scans of the same LAN
+     * merge into one saved session: the gateway's hardware address; falls back
+     * to the subnet's network address and prefix.
+     */
+    val networkKey: String?
+        get() {
+            devices.firstOrNull { it.isGateway }?.macAddress?.let { return "lan:gw:${it.text}" }
+            val info = subnet ?: return null
+            return "lan:net:${info.networkLabel}"
+        }
+
+    val networkLabel: String? get() = subnet?.networkLabel
+
     private val app = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var job: Job? = null

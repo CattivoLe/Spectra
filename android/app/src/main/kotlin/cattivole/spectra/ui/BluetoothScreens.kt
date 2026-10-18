@@ -18,7 +18,6 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.DropdownMenu
@@ -45,6 +44,7 @@ import cattivole.spectra.platform.BleGattClient
 import cattivole.spectra.core.BleAdvertisement
 import cattivole.spectra.core.BleDevice
 import cattivole.spectra.core.BleServiceRef
+import cattivole.spectra.core.BeaconDecode
 import cattivole.spectra.core.GattValue
 import cattivole.spectra.core.SignalQuality
 import cattivole.spectra.core.hex
@@ -64,7 +64,6 @@ private fun unavailableTitle(why: DeviceBleScanner.Availability): String = when 
 fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
     model.generation
     val ble = model.ble
-    val notify = LocalNotify.current
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(BleSort.SIGNAL) }
     var scope by rememberSaveable { mutableStateOf(BleScope.ALL) }
@@ -100,13 +99,6 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
     SpectraScreen(
         title = "Bluetooth",
         actions = {
-            IconButton(
-                onClick = {
-                    model.history.saveBluetooth(heard, tr("This phone"))
-                    notify(tr("Saved to History"))
-                },
-                enabled = heard.isNotEmpty(),
-            ) { Icon(Icons.Rounded.SaveAlt, contentDescription = tr("Save")) }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -360,6 +352,14 @@ fun BleDetail(model: SpectraModel, nav: Navigator, address: String, entryId: Str
                 Text(item.name ?: item.uuid, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                 if (item.name != null) {
                     Text(item.uuid, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                val beacon = BeaconDecode.decode(item.uuid, item.data)
+                if (beacon != null) {
+                    Text(
+                        beacon.detail?.let { "${tr(beacon.title)} · $it" } ?: tr(beacon.title),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
                 }
                 Text(hex(item.data), style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

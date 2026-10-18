@@ -10,6 +10,8 @@ import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.Calendar
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -22,9 +24,13 @@ data class HistoryLine(
 )
 
 /**
- * One saved scan. A phone save keeps the records themselves, so a saved
+ * One saved session. A phone save keeps the records themselves, so a saved
  * network, host or Bluetooth device opens the same card as a live one. The
  * Cardputer sends summary [lines] only.
+ *
+ * Scans of the same kind, on the same day, in the same place are merged into
+ * one entry rather than piling up: [placeKey] groups them, and a record is
+ * folded in by identity so [firstSeen] keeps the earliest sighting.
  */
 class HistoryEntry(
     val id: String,
@@ -32,6 +38,13 @@ class HistoryEntry(
     val savedAt: Long,
     val source: String,
     val captureId: Long?,
+    /**
+     * Stable key grouping scans into one session: a geo bucket, or the LAN
+     * network. Entries with the same (day + kind + placeKey) are merged.
+     */
+    val placeKey: String? = null,
+    /** Human label for the place, shown in the by-place view. */
+    val placeLabel: String? = null,
     val lines: List<HistoryLine> = emptyList(),
     val networks: List<TrackedNetwork> = emptyList(),
     val probes: List<ProbingDevice> = emptyList(),
@@ -69,8 +82,12 @@ class HistoryEntry(
 
 /**
  * Saved scans from the phone and from the Cardputer's side button.
- * A capture id from the sensor is imported once. The file is read and
- * written off the main thread; a large history must not stall the UI.
+ *
+ * One entry collects a whole session: scans of the same kind, on the same day,
+ * in the same place are merged into it rather than piling up as duplicates.
+ * A capture id from the sensor is imported once and keeps its own entry. The
+ * file is read and written off the main thread; a large history must not stall
+ * the UI.
  */
 class HistoryStore(context: Context) {
     var entries: List<HistoryEntry> = emptyList()
@@ -138,37 +155,44 @@ class HistoryStore(context: Context) {
         return { listeners.remove(listener) }
     }
 
-    fun saveNetworks(store: NetworkStore, source: String) {
+    // MARK: Phone-side autosave (upsert)
+
+    fun upsertNetworks(store: NetworkStore, source: String) {
         val networks = store.networks().values.sortedWith(
             compareByDescending<TrackedNetwork> { it.isInRange }.thenByDescending { it.latest.rssi },
         )
         val probes = store.probingDevices
         val deauths = store.deauthEvents
         if (networks.isEmpty() && probes.isEmpty() && deauths.isEmpty()) return
-        val json = JSONObject()
-            .put("networks", JSONArray().apply { networks.forEach { put(HistoryCodec.network(it)) } })
-            .put("probes", JSONArray().apply { probes.forEach { put(HistoryCodec.probe(it)) } })
-            .put("deauths", JSONArray().apply { deauths.forEach { put(HistoryCodec.deauth(it)) } })
         val here = phoneLocation()
-        append("networks", System.currentTimeMillis(), source, null, records = json,
-            latitude = here?.first, longitude = here?.second)
+        upsert(
+            "networks", source, geoBucket(here), geoLabel(here),
+            networks = networks.mapNotNull { snapshot(HistoryCodec.network(it), HistoryCodec::network) },
+            probes = probes.mapNotNull { snapshot(HistoryCodec.probe(it), HistoryCodec::probe) },
+            deauths = deauths.mapNotNull { snapshot(HistoryCodec.deauth(it), HistoryCodec::deauth) },
+            latitude = here?.first, longitude = here?.second,
+        )
     }
 
-    fun saveLan(devices: List<LanDevice>, source: String) {
+    fun upsertLan(devices: List<LanDevice>, networkKey: String?, networkLabel: String?, source: String) {
         if (devices.isEmpty()) return
-        val json = JSONObject().put("lan", JSONArray().apply { devices.forEach { put(HistoryCodec.lan(it)) } })
         val here = phoneLocation()
-        append("lan", System.currentTimeMillis(), source, null, records = json,
-            latitude = here?.first, longitude = here?.second)
+        upsert(
+            "lan", source, networkKey ?: geoBucket(here), networkLabel ?: geoLabel(here),
+            lan = devices.mapNotNull { snapshot(HistoryCodec.lan(it), HistoryCodec::lan) },
+            latitude = here?.first, longitude = here?.second,
+        )
     }
 
-    fun saveBluetooth(devices: Collection<BleDevice>, source: String) {
+    fun upsertBluetooth(devices: Collection<BleDevice>, source: String) {
         if (devices.isEmpty()) return
         val rows = devices.sortedByDescending { it.rssi }
-        val json = JSONObject().put("bluetooth", JSONArray().apply { rows.forEach { put(HistoryCodec.ble(it)) } })
         val here = phoneLocation()
-        append("bluetooth", System.currentTimeMillis(), source, null, records = json,
-            latitude = here?.first, longitude = here?.second)
+        upsert(
+            "bluetooth", source, geoBucket(here), geoLabel(here),
+            bluetooth = rows.mapNotNull { snapshot(HistoryCodec.ble(it), HistoryCodec::ble) },
+            latitude = here?.first, longitude = here?.second,
+        )
     }
 
     /** The phone's last known coordinate, or null without location permission or a fix. */
@@ -189,10 +213,6 @@ class HistoryStore(context: Context) {
         return best.latitude to best.longitude
     }
 
-    /**
-     * Folds one record from the sensor. True once the capture is stored, or was
-     * stored already, and the sensor may delete it.
-     */
     /**
      * The cap's fix for a capture, which may arrive before its rows. Applied
      * to a capture that is already stored when the sensor sends it again.
@@ -215,6 +235,11 @@ class HistoryStore(context: Context) {
         publish()
     }
 
+    /**
+     * Folds one record from the sensor. True once the capture is stored, or was
+     * stored already, and the sensor may delete it. Sensor captures keep their
+     * own entries, matched by capture id, and never merge into a phone session.
+     */
     fun ingest(record: SensorProtocol.Message.Saved, source: String): Boolean {
         ensureLoaded()
         if (entries.any { it.captureId == record.captureId && it.source == source }) return true
@@ -241,8 +266,21 @@ class HistoryStore(context: Context) {
         pendingFix.remove(record.captureId)
         val ordered = (0 until partial.total).mapNotNull { partial.lines[it] }
         val whenMs = if (partial.unix == 0L) System.currentTimeMillis() else partial.unix * 1000
-        append(partial.kind, whenMs, source, record.captureId, lines = ordered,
-            latitude = partial.latitude, longitude = partial.longitude)
+        val here = partial.latitude?.let { lat -> partial.longitude?.let { lon -> lat to lon } }
+        insert(
+            HistoryEntry(
+                id = UUID.randomUUID().toString(),
+                kind = partial.kind,
+                savedAt = whenMs,
+                source = source,
+                captureId = record.captureId,
+                placeKey = geoBucket(here),
+                placeLabel = geoLabel(here),
+                lines = ordered,
+                latitude = partial.latitude,
+                longitude = partial.longitude,
+            ),
+        )
         return true
     }
 
@@ -264,30 +302,80 @@ class HistoryStore(context: Context) {
         publish()
     }
 
-    private fun append(
+    // MARK: - Session upsert
+
+    private fun upsert(
         kind: String,
-        savedAt: Long,
         source: String,
-        captureId: Long?,
+        placeKey: String,
+        placeLabel: String?,
         lines: List<HistoryLine> = emptyList(),
-        records: JSONObject? = null,
+        networks: List<TrackedNetwork> = emptyList(),
+        probes: List<ProbingDevice> = emptyList(),
+        deauths: List<DeauthEvent> = emptyList(),
+        lan: List<LanDevice> = emptyList(),
+        bluetooth: List<BleDevice> = emptyList(),
         latitude: Double? = null,
         longitude: Double? = null,
     ) {
-        val json = (records ?: JSONObject())
-            .put("id", UUID.randomUUID().toString())
-            .put("kind", kind)
-            .put("savedAt", savedAt)
-            .put("source", source)
-            .put("lines", JSONArray().apply {
-                lines.forEach { put(JSONObject().put("title", it.title).put("detail", it.detail).put("trailing", it.trailing)) }
-            })
-        if (captureId != null) json.put("captureId", captureId)
-        if (latitude != null && longitude != null) json.put("latitude", latitude).put("longitude", longitude)
-        // Decoding the JSON again is the snapshot: the store keeps mutating its own objects.
-        val entry = decodeEntry(json)
+        val now = System.currentTimeMillis()
+        // Merge into today's session for the same kind and place (sensor
+        // captures keep their own entries, matched by captureId).
+        val index = entries.indexOfFirst {
+            it.kind == kind && it.captureId == null && (it.placeKey ?: "") == placeKey && isSameDay(it.savedAt, now)
+        }
+        if (index >= 0) {
+            val old = entries[index]
+            val mergedEntry = HistoryEntry(
+                id = old.id,
+                kind = kind,
+                savedAt = now,
+                source = source,
+                captureId = null,
+                placeKey = placeKey,
+                placeLabel = placeLabel ?: old.placeLabel,
+                lines = mergeLines(old.lines, lines),
+                networks = mergeNetworks(old.networks, networks),
+                probes = mergeBy(old.probes, probes) { it.mac },
+                deauths = mergeBy(old.deauths, deauths) { it.id },
+                lan = mergeLan(old.lan, lan),
+                bluetooth = mergeBle(old.bluetooth, bluetooth),
+                latitude = latitude ?: old.latitude,
+                longitude = longitude ?: old.longitude,
+            )
+            val list = entries.toMutableList()
+            list.removeAt(index)
+            list.add(0, mergedEntry)
+            entries = list
+            encoded[mergedEntry.id] = encodeEntry(mergedEntry)
+            persist()
+            publish()
+            return
+        }
+        insert(
+            HistoryEntry(
+                id = UUID.randomUUID().toString(),
+                kind = kind,
+                savedAt = now,
+                source = source,
+                captureId = null,
+                placeKey = placeKey,
+                placeLabel = placeLabel,
+                lines = lines,
+                networks = networks,
+                probes = probes,
+                deauths = deauths,
+                lan = lan,
+                bluetooth = bluetooth,
+                latitude = latitude,
+                longitude = longitude,
+            ),
+        )
+    }
+
+    private fun insert(entry: HistoryEntry) {
         if (entry.itemCount == 0) return
-        encoded[entry.id] = json
+        encoded[entry.id] = encodeEntry(entry)
         entries = (listOf(entry) + entries).take(LIMIT)
         encoded.keys.retainAll(entries.map { it.id }.toSet())
         persist()
@@ -317,6 +405,190 @@ class HistoryStore(context: Context) {
     companion object {
         const val LIMIT = 100
 
+        /**
+         * ~55 m geo bucket (0.0005°). Empty when there is no fix, so fixless
+         * scans of a kind on a day still merge together.
+         */
+        fun geoBucket(location: Pair<Double, Double>?): String {
+            if (location == null) return ""
+            val lat = Math.round(location.first * 2000.0) // 1 / 0.0005
+            val lon = Math.round(location.second * 2000.0)
+            return "geo:${lat}_$lon"
+        }
+
+        fun geoLabel(location: Pair<Double, Double>?): String? =
+            location?.let { String.format(Locale.US, "%.4f, %.4f", it.first, it.second) }
+
+        private fun isSameDay(a: Long, b: Long): Boolean {
+            val first = Calendar.getInstance().apply { timeInMillis = a }
+            val second = Calendar.getInstance().apply { timeInMillis = b }
+            return first.get(Calendar.YEAR) == second.get(Calendar.YEAR) &&
+                first.get(Calendar.DAY_OF_YEAR) == second.get(Calendar.DAY_OF_YEAR)
+        }
+
+        // MARK: - Merge helpers (union by identity, min firstSeen / max lastSeen)
+
+        fun mergeLines(existing: List<HistoryLine>, incoming: List<HistoryLine>): List<HistoryLine> {
+            val result = existing.toMutableList()
+            for (line in incoming) {
+                if (result.none { it.title == line.title }) result.add(line)
+            }
+            return result
+        }
+
+        private fun <T> mergeBy(existing: List<T>, incoming: List<T>, key: (T) -> Any): List<T> {
+            val result = existing.toMutableList()
+            val index = HashMap<Any, Int>()
+            existing.forEachIndexed { at, item -> index.putIfAbsent(key(item), at) }
+            for (item in incoming) {
+                val at = index[key(item)]
+                if (at != null) {
+                    result[at] = item
+                } else {
+                    index[key(item)] = result.size
+                    result.add(item)
+                }
+            }
+            return result
+        }
+
+        fun mergeNetworks(existing: List<TrackedNetwork>, incoming: List<TrackedNetwork>): List<TrackedNetwork> {
+            val byId = LinkedHashMap<MacAddress, TrackedNetwork>()
+            existing.forEach { byId[it.id] = it }
+            for (new in incoming) {
+                val old = byId[new.id]
+                if (old == null) {
+                    byId[new.id] = new
+                    continue
+                }
+                // Keep whichever reading is more recent as the representative one.
+                val newer = new.lastSeen >= old.lastSeen
+                byId[new.id] = TrackedNetwork(
+                    latest = if (newer) new.latest else old.latest,
+                    firstSeen = minOf(old.firstSeen, new.firstSeen),
+                    lastSeen = maxOf(old.lastSeen, new.lastSeen),
+                    samples = mergeSamples(old.samples, new.samples, NetworkStore.SAMPLES_KEPT),
+                    missedScans = if (newer) new.missedScans else old.missedScans,
+                    clients = (if (newer) new.clients.ifEmpty { old.clients } else old.clients).toMutableList(),
+                    revealedSsid = new.revealedSsid ?: old.revealedSsid,
+                    vendorInfo = new.vendorInfo ?: old.vendorInfo,
+                    traffic = if (newer) (new.traffic ?: old.traffic) else old.traffic,
+                    source = old.source,
+                )
+            }
+            return byId.values.sortedWith(
+                compareByDescending<TrackedNetwork> { it.isInRange }.thenByDescending { it.latest.rssi },
+            )
+        }
+
+        fun mergeLan(existing: List<LanDevice>, incoming: List<LanDevice>): List<LanDevice> {
+            val byIp = LinkedHashMap<String, LanDevice>()
+            existing.forEach { byIp[it.ipAddress] = it }
+            for (new in incoming) {
+                val old = byIp[new.ipAddress]
+                if (old == null) {
+                    byIp[new.ipAddress] = new
+                    continue
+                }
+                val newer = if (new.lastSeen >= old.lastSeen) new else old
+                byIp[new.ipAddress] = LanDevice(
+                    ipAddress = newer.ipAddress,
+                    macAddress = newer.macAddress ?: old.macAddress ?: new.macAddress,
+                    hostnames = newer.hostnames.ifEmpty { old.hostnames.ifEmpty { new.hostnames } },
+                    openPorts = newer.openPorts.ifEmpty { old.openPorts.ifEmpty { new.openPorts } },
+                    services = newer.services.ifEmpty { old.services.ifEmpty { new.services } },
+                    portsScanned = newer.portsScanned,
+                    isGateway = newer.isGateway,
+                    isLocalDevice = newer.isLocalDevice,
+                    profile = newer.profile,
+                    firstSeen = minOf(old.firstSeen, new.firstSeen),
+                    lastSeen = maxOf(old.lastSeen, new.lastSeen),
+                )
+            }
+            return byIp.values.sortedWith(
+                compareByDescending<LanDevice> { it.isLocalDevice }
+                    .thenByDescending { it.isGateway }
+                    .thenBy { ipOrder(it.ipAddress) },
+            )
+        }
+
+        fun mergeBle(existing: List<BleDevice>, incoming: List<BleDevice>): List<BleDevice> {
+            val byAddress = LinkedHashMap<String, BleDevice>()
+            existing.forEach { byAddress[it.address] = it }
+            for (new in incoming) {
+                val old = byAddress[new.address]
+                if (old == null) {
+                    byAddress[new.address] = new
+                    continue
+                }
+                // Rebuild from the newer advertisement, with the spans joined.
+                val base = if (new.lastSeen >= old.lastSeen) new else old
+                val json = HistoryCodec.ble(base)
+                    .put("firstSeen", minOf(old.firstSeen, new.firstSeen))
+                    .put("lastSeen", maxOf(old.lastSeen, new.lastSeen))
+                    .put("packets", old.packetCount + new.packetCount)
+                val samples = mergeBleSamples(old.samples, new.samples, 120)
+                json.put("samples", JSONArray().apply { samples.forEach { put(JSONArray().put(it.date).put(it.rssi)) } })
+                byAddress[new.address] = HistoryCodec.ble(json) ?: base
+            }
+            return byAddress.values.sortedByDescending { it.rssi }
+        }
+
+        private fun mergeSamples(a: List<TrackedNetwork.Sample>, b: List<TrackedNetwork.Sample>, limit: Int): MutableList<TrackedNetwork.Sample> {
+            val seen = HashSet<Long>()
+            val merged = mutableListOf<TrackedNetwork.Sample>()
+            for (sample in a + b) if (seen.add(sample.date)) merged.add(sample)
+            merged.sortBy { it.date }
+            if (merged.size > limit) merged.subList(0, merged.size - limit).clear()
+            return merged
+        }
+
+        private fun mergeBleSamples(a: List<BleDevice.Sample>, b: List<BleDevice.Sample>, limit: Int): List<BleDevice.Sample> {
+            val seen = HashSet<Long>()
+            val merged = mutableListOf<BleDevice.Sample>()
+            for (sample in a + b) if (seen.add(sample.date)) merged.add(sample)
+            merged.sortBy { it.date }
+            if (merged.size > limit) merged.subList(0, merged.size - limit).clear()
+            return merged
+        }
+
+        private fun ipOrder(ip: String): Long {
+            val parts = ip.split(".")
+            if (parts.size != 4) return 0
+            var value = 0L
+            for (part in parts) {
+                val octet = part.toIntOrNull() ?: return 0
+                value = (value shl 8) or (octet.toLong() and 0xFF)
+            }
+            return value
+        }
+
+        private fun <T> snapshot(json: JSONObject, decode: (JSONObject) -> T?): T? =
+            decode(JSONObject(json.toString()))
+
+        private fun encodeEntry(entry: HistoryEntry): JSONObject {
+            val json = JSONObject()
+                .put("id", entry.id)
+                .put("kind", entry.kind)
+                .put("savedAt", entry.savedAt)
+                .put("source", entry.source)
+                .put("lines", JSONArray().apply {
+                    entry.lines.forEach { put(JSONObject().put("title", it.title).put("detail", it.detail).put("trailing", it.trailing)) }
+                })
+            if (entry.networks.isNotEmpty()) json.put("networks", JSONArray().apply { entry.networks.forEach { put(HistoryCodec.network(it)) } })
+            if (entry.probes.isNotEmpty()) json.put("probes", JSONArray().apply { entry.probes.forEach { put(HistoryCodec.probe(it)) } })
+            if (entry.deauths.isNotEmpty()) json.put("deauths", JSONArray().apply { entry.deauths.forEach { put(HistoryCodec.deauth(it)) } })
+            if (entry.lan.isNotEmpty()) json.put("lan", JSONArray().apply { entry.lan.forEach { put(HistoryCodec.lan(it)) } })
+            if (entry.bluetooth.isNotEmpty()) json.put("bluetooth", JSONArray().apply { entry.bluetooth.forEach { put(HistoryCodec.ble(it)) } })
+            entry.captureId?.let { json.put("captureId", it) }
+            entry.placeKey?.let { json.put("placeKey", it) }
+            entry.placeLabel?.let { json.put("placeLabel", it) }
+            val lat = entry.latitude
+            val lon = entry.longitude
+            if (lat != null && lon != null) json.put("latitude", lat).put("longitude", lon)
+            return json
+        }
+
         /** Older files have only `lines`. Missing keys stay empty. */
         fun decodeEntry(obj: JSONObject): HistoryEntry {
             val linesJson = obj.optJSONArray("lines") ?: JSONArray()
@@ -334,6 +606,8 @@ class HistoryStore(context: Context) {
                 savedAt = obj.getLong("savedAt"),
                 source = obj.optString("source"),
                 captureId = if (obj.has("captureId")) obj.getLong("captureId") else null,
+                placeKey = if (obj.has("placeKey")) obj.optString("placeKey") else null,
+                placeLabel = if (obj.has("placeLabel")) obj.optString("placeLabel") else null,
                 lines = lines,
                 networks = list("networks", HistoryCodec::network),
                 probes = list("probes", HistoryCodec::probe),

@@ -33,6 +33,35 @@ data class SubnetInfo(
             val hosts = (1 shl (32 - prefixLength)) - 2
             return hosts.coerceAtLeast(0)
         }
+
+    /**
+     * Network address and prefix, e.g. `192.168.1.0/24`. Stable across a DHCP
+     * lease change, unlike [localIp], so it keys a saved LAN session.
+     */
+    val networkLabel: String
+        get() {
+            val ip = parseIpv4(localIp) ?: return "$localIp/$prefixLength"
+            val mask = if (prefixLength <= 0) 0L else (-1L shl (32 - prefixLength)) and 0xFFFF_FFFFL
+            val network = ip and mask
+            return "${formatIpv4(network)}/$prefixLength"
+        }
+
+    private companion object {
+        fun parseIpv4(text: String): Long? {
+            val parts = text.split(".")
+            if (parts.size != 4) return null
+            var value = 0L
+            for (part in parts) {
+                val octet = part.toIntOrNull() ?: return null
+                if (octet !in 0..255) return null
+                value = (value shl 8) or octet.toLong()
+            }
+            return value
+        }
+
+        fun formatIpv4(value: Long): String =
+            "${(value shr 24) and 0xFF}.${(value shr 16) and 0xFF}.${(value shr 8) and 0xFF}.${value and 0xFF}"
+    }
 }
 
 class LanDevice(

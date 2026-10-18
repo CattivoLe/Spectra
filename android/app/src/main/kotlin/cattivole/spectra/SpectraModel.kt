@@ -1,6 +1,7 @@
 package cattivole.spectra
 
 import android.app.Application
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
@@ -27,8 +28,24 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     var generation by mutableIntStateOf(0)
         private set
 
+    private val prefs = app.getSharedPreferences("spectra", Context.MODE_PRIVATE)
+
+    /** When on, finished Wi‑Fi/LAN/Bluetooth scans are kept in History on their own. */
+    var autosaveHistory: Boolean
+        get() = prefs.getBoolean(AUTOSAVE_HISTORY, true)
+        set(value) {
+            prefs.edit().putBoolean(AUTOSAVE_HISTORY, value).apply()
+            generation += 1
+        }
+
+    private var lastWifiScan = 0
+    private var lastLanScan: Long? = null
+
     init {
-        val bump = { generation += 1 }
+        val bump = {
+            generation += 1
+            autosaveOnScanFinish()
+        }
         store.observe(bump)
         history.observe(bump)
         link.observe(bump)
@@ -38,6 +55,32 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         lan.observe(bump)
         radio.onAdapterChange { ble.availabilityChanged() }
         phone.start()
+    }
+
+    /**
+     * Folds whatever each source has found into its History session. Each
+     * upsert is silent and no-ops when there is nothing to save, so it is safe
+     * to call often.
+     */
+    fun autosave() {
+        if (!autosaveHistory) return
+        history.upsertNetworks(store, PHONE_SOURCE)
+        history.upsertLan(lan.devices, lan.networkKey, lan.networkLabel, PHONE_SOURCE)
+        history.upsertBluetooth(ble.devices.values, PHONE_SOURCE)
+    }
+
+    /** Enrich the open sessions when a Wi‑Fi or LAN sweep completes. */
+    private fun autosaveOnScanFinish() {
+        var finished = false
+        if (store.scanCount != lastWifiScan) {
+            lastWifiScan = store.scanCount
+            finished = true
+        }
+        if (lan.lastScanDate != lastLanScan) {
+            lastLanScan = lan.lastScanDate
+            finished = true
+        }
+        if (finished) autosave()
     }
 
     fun onForeground() {
@@ -56,6 +99,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun onBackground() {
+        autosave()
         ble.suspend()
     }
 
@@ -66,5 +110,11 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         lan.stop()
         link.close()
         radio.stop()
+    }
+
+    private companion object {
+        /** English key; the UI translates it through `sourceName`, like iOS. */
+        const val PHONE_SOURCE = "This phone"
+        const val AUTOSAVE_HISTORY = "autosaveHistory"
     }
 }
