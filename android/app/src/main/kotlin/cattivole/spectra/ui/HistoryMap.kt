@@ -81,7 +81,7 @@ private fun pinKey(latitude: Double, longitude: Double): String {
  * The same OpenStreetMap tiles, passed through the usual night-mode matrix
  * (invert, then hue-rotate 180 so water stays blue and parks stay green).
  */
-private val darkMapFilter = ColorMatrixColorFilter(
+internal val darkMapFilter = ColorMatrixColorFilter(
     ColorMatrix(
         floatArrayOf(
             -1f, 0f, 0f, 0f, 255f,
@@ -292,7 +292,7 @@ private fun PinCard(title: String, entries: List<HistoryEntry>, onOpen: (String)
     }
 }
 
-private fun prepareOsm(context: Context) {
+internal fun prepareOsm(context: Context) {
     val config = Configuration.getInstance()
     val base = File(context.cacheDir, "osmdroid")
     config.osmdroidBasePath = base

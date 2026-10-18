@@ -22,6 +22,7 @@ struct HistoryView: View {
     @State private var showUnlocated = false
     @State private var camera: MapCameraPosition = .automatic
     @State private var shareItem: ShareItem?
+    @State private var showLive = false
 
     /// One collapsible group of sessions: a day, or a place.
     private struct Group: Identifiable {
@@ -103,12 +104,16 @@ struct HistoryView: View {
                 pinSheet(title: String(localized: "No location"), entries: unlocated)
             }
             .shareSheet(item: $shareItem)
+            .fullScreenCover(isPresented: $showLive) { LiveMapView() }
             .toolbar { historyToolbar }
         }
     }
 
     @ToolbarContentBuilder
     private var historyToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button("Live map", systemImage: "location.circle") { showLive = true }
+        }
         if !history.entries.isEmpty {
             ToolbarItem(placement: .topBarTrailing) {
                 groupingButton(.date)

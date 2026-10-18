@@ -22,6 +22,7 @@ import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.GppBad
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Place
@@ -103,6 +104,11 @@ private class HistoryGroup(
 fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     model.generation
     val history = model.history
+    var showLive by remember { mutableStateOf(false) }
+    if (showLive) {
+        LiveMapScreen(model) { showLive = false }
+        return
+    }
     var confirmClear by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var grouping by remember { mutableStateOf(Grouping.DATE) }
@@ -139,6 +145,7 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     SpectraScreen(
         title = tr("History"),
         actions = {
+            IconButton(onClick = { showLive = true }) { Icon(Icons.Rounded.MyLocation, contentDescription = tr("Live map")) }
             if (history.entries.isNotEmpty()) {
                 ExportMenu(history.entries)
             }
