@@ -243,8 +243,74 @@ struct SensorProtocolTests {
         #expect(SensorProtocol.Command.setPeer(name: "Pix").data == Data([0x07, 0x50, 0x69, 0x78]))
         #expect(SensorProtocol.Command.ackKnown.data == Data([0x08]))
         #expect(SensorProtocol.Command.resetKnown.data == Data([0x09]))
+        #expect(SensorProtocol.Command.startRawCapture(channel: 6, bssid: nil).data
+            == Data([0x0A, 6, 0, 0, 0, 0, 0, 0, 0]))
+        #expect(SensorProtocol.Command.startRawCapture(channel: 11, bssid: BSSID(bytes: [0xAA, 0xBB, 0xCC, 0x01, 0x02, 0x03])).data
+            == Data([0x0A, 11, 1, 0xAA, 0xBB, 0xCC, 0x01, 0x02, 0x03]))
+        #expect(SensorProtocol.Command.stopRawCapture.data == Data([0x0B]))
         let uploaded = SensorProtocol.Message.knownWifi(index: 0, total: 1, ssid: "Cafe", password: "abc")
         #expect(SensorProtocol.decode(SensorProtocol.encode(uploaded)) == uploaded)
+    }
+
+    @Test func rawFrameFragmentRoundTrips() throws {
+        let fragment = SensorProtocol.RawFrameFragment(
+            seq: 258, fragmentIndex: 0, fragmentCount: 1,
+            timestampMicros: 123_456_789, channel: 6, rssi: -58,
+            originalLength: 4, payload: [0x80, 0x00, 0x11, 0x22]
+        )
+        let decoded = try #require(SensorProtocol.decode(SensorProtocol.encode(.rawFrame(fragment))))
+        #expect(decoded == .rawFrame(fragment))
+    }
+
+    @Test func rawFrameContinuationCarriesNoMetadata() throws {
+        let tail = SensorProtocol.RawFrameFragment(
+            seq: 7, fragmentIndex: 1, fragmentCount: 2,
+            timestampMicros: 0, channel: 0, rssi: 0, originalLength: 0,
+            payload: [0xDE, 0xAD, 0xBE, 0xEF]
+        )
+        let decoded = try #require(SensorProtocol.decode(SensorProtocol.encode(.rawFrame(tail))))
+        #expect(decoded == .rawFrame(tail))
+    }
+
+    @Test func rawFrameAssemblerStitchesFragments() throws {
+        var assembler = RawFrameAssembler()
+        let whole: [UInt8] = Array(0..<120).map { UInt8($0) }
+        let head = SensorProtocol.RawFrameFragment(
+            seq: 42, fragmentIndex: 0, fragmentCount: 2,
+            timestampMicros: 9_000, channel: 3, rssi: -70,
+            originalLength: whole.count, payload: Array(whole[0..<80])
+        )
+        let tail = SensorProtocol.RawFrameFragment(
+            seq: 42, fragmentIndex: 1, fragmentCount: 2,
+            timestampMicros: 0, channel: 0, rssi: 0, originalLength: 0,
+            payload: Array(whole[80...])
+        )
+        let partial = assembler.ingest(head)
+        #expect(partial == nil)
+        let finished = assembler.ingest(tail)
+        let completed = try #require(finished)
+        #expect(completed.bytes == whole)
+        #expect(completed.channel == 3)
+        #expect(completed.rssi == -70)
+        #expect(completed.originalLength == 120)
+        #expect(assembler.dropped == 0)
+    }
+
+    @Test func rawFrameAssemblerDropsBrokenFrame() {
+        var assembler = RawFrameAssembler()
+        let head = SensorProtocol.RawFrameFragment(
+            seq: 1, fragmentIndex: 0, fragmentCount: 2,
+            timestampMicros: 0, channel: 1, rssi: -40, originalLength: 8, payload: [1, 2, 3, 4]
+        )
+        _ = assembler.ingest(head)
+        // A fragment from a different frame arrives before the tail.
+        let stray = SensorProtocol.RawFrameFragment(
+            seq: 2, fragmentIndex: 1, fragmentCount: 2,
+            timestampMicros: 0, channel: 0, rssi: 0, originalLength: 0, payload: [9]
+        )
+        let result = assembler.ingest(stray)
+        #expect(result == nil)
+        #expect(assembler.dropped == 1)
     }
 }
 

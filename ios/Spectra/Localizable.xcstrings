@@ -1,6 +1,106 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Capture again" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Захватить снова"
+          }
+        }
+      }
+    },
+    "Capture traffic → save .pcap" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Захватить трафик → сохранить .pcap"
+          }
+        }
+      }
+    },
+    "Captured" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Захвачено"
+          }
+        }
+      }
+    },
+    "Capturing on channel %lld…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Захват на канале %lld…"
+          }
+        }
+      }
+    },
+    "Pins the sensor to channel %lld and streams the frames it hears into a .pcap for Wireshark. Bluetooth is narrow, so this is a short, thinned sample — not a full capture — and it stops on its own near %lld frames." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Закрепляет сенсор на канале %1$lld и передаёт услышанные кадры в .pcap для Wireshark. Канал Bluetooth узкий, поэтому это короткая прореженная выборка, а не полный дамп; захват сам останавливается примерно на %2$lld кадрах."
+          }
+        }
+      }
+    },
+    "Save .pcap" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранить .pcap"
+          }
+        }
+      }
+    },
+    "Some frames were dropped on the way over Bluetooth, so there are gaps." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Часть кадров потерялась при передаче по Bluetooth, поэтому в записи есть пропуски."
+          }
+        }
+      }
+    },
+    "Stop capture" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Остановить захват"
+          }
+        }
+      }
+    },
+    "Traffic capture" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Захват трафика"
+          }
+        }
+      }
+    },
+    "%lld frames · %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld кадров · %2$@"
+          }
+        }
+      }
+    },
     "Already connected to this network." : {
       "localizations" : {
         "ru" : {

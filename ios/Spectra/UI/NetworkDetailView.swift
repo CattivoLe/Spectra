@@ -15,9 +15,11 @@ struct NetworkDetailView: View {
     }
 
     @Environment(NetworkStore.self) private var store
+    @Environment(SensorLink.self) private var link
     @State private var joiner = WiFiJoiner()
     @State private var pendingJoin: PendingJoin?
     @State private var passphrase = ""
+    @State private var captureShare: ShareItem?
 
     /// A secured network waiting for its password before the join is applied.
     private struct PendingJoin: Identifiable {
@@ -132,6 +134,10 @@ struct NetworkDetailView: View {
                 }
             }
 
+            if snapshot == nil, link.isConnected {
+                captureSection(channel: reading.channel)
+            }
+
             Section("Security") {
                 InfoRow("Authentication", value: reading.auth.name)
                 InfoRow("Pairwise cipher", value: reading.pairwiseCipher.name)
@@ -187,6 +193,8 @@ struct NetworkDetailView: View {
         }
         .navigationTitle(network.revealedSSID ?? reading.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .shareSheet(item: $captureShare)
+        .onDisappear { link.stopRawCapture() }
         .task { await joiner.refreshCurrent() }
         .alert(
             pendingJoin.map { String(localized: "Join “\($0.ssid)”") } ?? "",
@@ -266,6 +274,83 @@ struct NetworkDetailView: View {
             }
         }
     }
+
+    // MARK: Capture traffic → .pcap
+
+    @ViewBuilder
+    private func captureSection(channel: Int) -> some View {
+        Section {
+            if link.rawCapturing {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Capturing on channel \(channel)…")
+                        Text("\(link.rawFrameCount) frames · \(captureBytes(link.rawByteCount))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Button(role: .destructive) {
+                    link.stopRawCapture()
+                } label: {
+                    Label("Stop capture", systemImage: "stop.circle")
+                }
+            } else if link.rawFrameCount > 0 {
+                InfoRow("Captured") {
+                    Text("\(link.rawFrameCount) frames · \(captureBytes(link.rawByteCount))")
+                }
+                Button {
+                    saveCapture()
+                } label: {
+                    Label("Save .pcap", systemImage: "square.and.arrow.up")
+                }
+                Button {
+                    link.startRawCapture(channel: channel)
+                } label: {
+                    Label("Capture again", systemImage: "arrow.clockwise")
+                }
+            } else {
+                Button {
+                    link.startRawCapture(channel: channel)
+                } label: {
+                    Label("Capture traffic → save .pcap", systemImage: "dot.radiowaves.left.and.right")
+                }
+            }
+        } header: {
+            Text("Traffic capture")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Pins the sensor to channel \(channel) and streams the frames it hears into a .pcap for Wireshark. Bluetooth is narrow, so this is a short, thinned sample — not a full capture — and it stops on its own near \(SensorLink.rawFrameCap) frames.")
+                if link.rawDropped {
+                    Text("Some frames were dropped on the way over Bluetooth, so there are gaps.")
+                }
+            }
+        }
+    }
+
+    private func captureBytes(_ count: Int) -> String {
+        Int64(count).formatted(.byteCount(style: .file))
+    }
+
+    private func saveCapture() {
+        let data = link.rawCapturePcap()
+        let stamp = Self.fileStamp.string(from: .now)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("spectra-capture-\(stamp).pcap")
+        do {
+            try data.write(to: url, options: .atomic)
+            captureShare = ShareItem(url: url)
+        } catch {
+            // Writing to the temporary directory should not fail; nothing to show if it does.
+        }
+    }
+
+    private static let fileStamp: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter
+    }()
 
     private func widthDescription(_ reading: AccessPointReading) -> String {
         switch reading.secondaryChannel {

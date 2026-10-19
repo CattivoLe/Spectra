@@ -52,6 +52,26 @@ final class SensorLink: NSObject {
     /// Set while an application image is being sent to the sensor.
     private(set) var firmwareUpdate: FirmwareUpdateProgress?
 
+    // MARK: Raw frame capture
+
+    /// A short, thinned sniff of one channel, collected from `0x24` frames and
+    /// written to a `.pcap` on the phone.
+    private(set) var rawCapturing = false
+    private(set) var rawFrameCount = 0
+    private(set) var rawByteCount = 0
+    /// True once any frame was lost — the capture has gaps, which is expected
+    /// over BLE and worth saying in the UI.
+    private(set) var rawDropped = false
+    private var rawFrames: [PcapWriter.Frame] = []
+    private var rawAssembler = RawFrameAssembler()
+    private var rawCaptureStart: Date?
+    private var rawFirstDeviceTs: UInt32?
+    private var demoRawTask: Task<Void, Never>?
+    /// Stop on our own once a capture reaches these, so a run cannot grow without
+    /// bound on the narrow BLE link.
+    static let rawFrameCap = 2000
+    static let rawByteCap = 1_000_000
+
     /// Seconds between automatic scans while connected; 0 means scan only on
     /// request. Remembered across launches.
     var liveInterval: Int {
@@ -197,6 +217,112 @@ final class SensorLink: NSObject {
         }
     }
 
+    /// Begin a raw-frame capture on `channel`. `bssid` is an optional filter;
+    /// left nil, the sensor sends every frame on the channel.
+    func startRawCapture(channel: Int, bssid: BSSID? = nil) {
+        guard isConnected, !rawCapturing else { return }
+        rawFrames.removeAll(keepingCapacity: true)
+        rawAssembler = RawFrameAssembler()
+        rawFrameCount = 0
+        rawByteCount = 0
+        rawDropped = false
+        rawCaptureStart = .now
+        rawFirstDeviceTs = nil
+        rawCapturing = true
+        if demo != nil {
+            startDemoRawCapture(channel: channel)
+        } else {
+            send(.startRawCapture(channel: channel, bssid: bssid))
+        }
+    }
+
+    func stopRawCapture() {
+        guard rawCapturing else { return }
+        rawCapturing = false
+        demoRawTask?.cancel()
+        demoRawTask = nil
+        if demo == nil {
+            send(.stopRawCapture)
+        }
+    }
+
+    /// The captured frames as a `.pcap` (radiotap link type), ready to share.
+    func rawCapturePcap() -> Data {
+        PcapWriter.pcap(rawFrames)
+    }
+
+    /// Drop a capture in progress because the link or the demo went away. The
+    /// frames already collected stay, so a finished capture can still be saved.
+    private func endRawCapture() {
+        rawCapturing = false
+        demoRawTask?.cancel()
+        demoRawTask = nil
+    }
+
+    /// Feeds synthetic beacons so the capture flow works in the simulator's demo.
+    private func startDemoRawCapture(channel: Int) {
+        demoRawTask?.cancel()
+        demoRawTask = Task { [weak self] in
+            var seq: UInt16 = 0
+            let start = DispatchTime.now().uptimeNanoseconds
+            while !Task.isCancelled {
+                guard let self, self.rawCapturing else { return }
+                let frame = Self.demoBeacon(channel: channel, seq: seq)
+                let micros = UInt32(truncatingIfNeeded: (DispatchTime.now().uptimeNanoseconds - start) / 1000)
+                let fragment = SensorProtocol.RawFrameFragment(
+                    seq: seq, fragmentIndex: 0, fragmentCount: 1,
+                    timestampMicros: micros, channel: channel,
+                    rssi: Int.random(in: -82 ... -42), originalLength: frame.count, payload: frame
+                )
+                self.handleRawFrame(fragment)
+                seq &+= 1
+                try? await Task.sleep(for: .milliseconds(140))
+            }
+        }
+    }
+
+    /// A minimal 802.11 beacon for the demo: enough for the decoder to name it.
+    private static func demoBeacon(channel: Int, seq: UInt16) -> [UInt8] {
+        let bssid: [UInt8] = [0x02, 0x00, 0x5E, 0x10, 0x00, UInt8(truncatingIfNeeded: Int(seq) % 4)]
+        var frame: [UInt8] = [0x80, 0x00, 0x00, 0x00]      // beacon, no duration
+        frame += [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]      // addr1 broadcast
+        frame += bssid                                      // addr2
+        frame += bssid                                      // addr3
+        frame += [0x00, 0x00]                               // sequence control
+        frame += [UInt8](repeating: 0, count: 8)            // timestamp
+        frame += [0x64, 0x00]                               // beacon interval
+        frame += [0x01, 0x04]                               // capability info
+        let ssid = Array("Spectra-Demo".utf8)
+        frame += [0x00, UInt8(ssid.count)] + ssid           // SSID element
+        frame += [0x03, 0x01, UInt8(clamping: channel)]     // DS parameter set
+        return frame
+    }
+
+    private func handleRawFrame(_ fragment: SensorProtocol.RawFrameFragment) {
+        guard rawCapturing else { return }
+        guard let completed = rawAssembler.ingest(fragment) else {
+            rawDropped = rawAssembler.dropped > 0
+            return
+        }
+        if rawFirstDeviceTs == nil { rawFirstDeviceTs = completed.timestampMicros }
+        let base = rawCaptureStart ?? .now
+        // Unsigned subtraction wraps cleanly across the sensor's 32-bit clock.
+        let delta = completed.timestampMicros &- (rawFirstDeviceTs ?? completed.timestampMicros)
+        rawFrames.append(PcapWriter.Frame(
+            timestamp: base.addingTimeInterval(Double(delta) / 1_000_000),
+            channel: completed.channel,
+            rssi: completed.rssi,
+            originalLength: completed.originalLength,
+            bytes: completed.bytes
+        ))
+        rawFrameCount = rawFrames.count
+        rawByteCount += completed.bytes.count
+        rawDropped = rawAssembler.dropped > 0
+        if rawFrameCount >= Self.rawFrameCap || rawByteCount >= Self.rawByteCap {
+            stopRawCapture()
+        }
+    }
+
     func installFirmware(_ image: Data) {
         guard firmwareUpdate?.isRunning != true else { return }
         do {
@@ -258,6 +384,7 @@ final class SensorLink: NSObject {
             info = nil
             loraDevices = []
             endLoraScan()
+            endRawCapture()
             capFix = nil
             store.abandonScan()
             updateIdleState()
@@ -340,6 +467,10 @@ final class SensorLink: NSObject {
                 }
                 return
             }
+            if case .rawFrame(let fragment) = message {
+                handleRawFrame(fragment)
+                return
+            }
             if case .battery(_, let level, let charging) = message {
                 batteryLevel = level
                 isCharging = charging
@@ -364,6 +495,7 @@ final class SensorLink: NSObject {
         info = nil
         loraDevices = []
         endLoraScan()
+        endRawCapture()
         capFix = nil
         batteryLevel = nil
         isCharging = nil
@@ -748,6 +880,7 @@ extension SensorLink: CBCentralManagerDelegate {
         info = nil
         loraDevices = []
         endLoraScan()
+        endRawCapture()
         capFix = nil
         store.abandonScan()
         finishFirmwareWrite(FirmwareUpdate.TransferError.linkLost)

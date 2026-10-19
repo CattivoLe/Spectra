@@ -4,7 +4,7 @@ import Foundation
 /// The BLE contract with the Cardputer firmware. docs/protocol.md is the
 /// source of truth; keep the two in step.
 nonisolated enum SensorProtocol {
-    static let version = 7
+    static let version = 8
 
     static let service = CBUUID(string: "53500001-8F2D-4B6A-9C1E-737065637472")
     static let info = CBUUID(string: "53500002-8F2D-4B6A-9C1E-737065637472")
@@ -26,6 +26,11 @@ nonisolated enum SensorProtocol {
         case ackKnown
         /// The next rememberWifi commands replace the list on the sensor.
         case resetKnown
+        /// Pin the radio to one channel and stream raw frames (`0x24`). A BSSID
+        /// filter is optional; without it the sensor sends everything on the channel.
+        case startRawCapture(channel: Int, bssid: BSSID?)
+        /// Stop the raw-frame stream.
+        case stopRawCapture
 
         var data: Data {
             switch self {
@@ -55,6 +60,12 @@ nonisolated enum SensorProtocol {
                 return Data([0x08])
             case .resetKnown:
                 return Data([0x09])
+            case .startRawCapture(let channel, let bssid):
+                var data = Data([0x0A, UInt8(clamping: channel), bssid == nil ? 0 : 0x01])
+                data.append(contentsOf: bssid?.bytes ?? [0, 0, 0, 0, 0, 0])
+                return data
+            case .stopRawCapture:
+                return Data([0x0B])
             }
         }
 
@@ -108,6 +119,23 @@ nonisolated enum SensorProtocol {
         case gps(valid: Bool, latitude: Double, longitude: Double, satellites: Int)
         case saved(SavedRecord)
         case knownWifi(index: Int, total: Int, ssid: String, password: String)
+        case rawFrame(RawFrameFragment)
+    }
+
+    /// One `0x24` notification: a whole captured frame, or a slice of one. The
+    /// metadata (timestamp, channel, RSSI, original length) rides on fragment 0;
+    /// later fragments carry only more bytes. `RawFrameAssembler` stitches them.
+    struct RawFrameFragment: Equatable {
+        var seq: UInt16
+        var fragmentIndex: Int
+        var fragmentCount: Int
+        /// Microseconds since the sensor booted; only meaningful on fragment 0.
+        var timestampMicros: UInt32
+        var channel: Int
+        var rssi: Int
+        /// The frame's true length on the air, even when fewer bytes were captured.
+        var originalLength: Int
+        var payload: [UInt8]
     }
 
     struct LoRaDevice: Equatable {
@@ -163,6 +191,7 @@ nonisolated enum SensorProtocol {
         case gps = 0x21
         case loraProgress = 0x22
         case knownWifi = 0x23
+        case rawFrame = 0x24
     }
 
     /// Decodes one Results notification, or returns nil for anything malformed
@@ -352,7 +381,41 @@ nonisolated enum SensorProtocol {
 
         case .knownWifi:
             return decodeKnownWifi(bytes)
+
+        case .rawFrame:
+            return decodeRawFrame(bytes)
         }
+    }
+
+    private static func decodeRawFrame(_ bytes: [UInt8]) -> Message? {
+        guard bytes.count >= 5 else { return nil }
+        let seq = u16(bytes, 1)
+        let fragmentIndex = Int(bytes[3])
+        let fragmentCount = Int(bytes[4])
+        guard fragmentCount >= 1, fragmentIndex < fragmentCount else { return nil }
+        if fragmentIndex == 0 {
+            guard bytes.count >= 13 else { return nil }
+            return .rawFrame(RawFrameFragment(
+                seq: seq,
+                fragmentIndex: 0,
+                fragmentCount: fragmentCount,
+                timestampMicros: u32(bytes, 5),
+                channel: Int(bytes[9]),
+                rssi: Int(Int8(bitPattern: bytes[10])),
+                originalLength: Int(u16(bytes, 11)),
+                payload: Array(bytes[13...])
+            ))
+        }
+        return .rawFrame(RawFrameFragment(
+            seq: seq,
+            fragmentIndex: fragmentIndex,
+            fragmentCount: fragmentCount,
+            timestampMicros: 0,
+            channel: 0,
+            rssi: 0,
+            originalLength: 0,
+            payload: Array(bytes[5...])
+        ))
     }
 
     private static func decodeKnownWifi(_ bytes: [UInt8]) -> Message? {
@@ -556,6 +619,19 @@ nonisolated enum SensorProtocol {
             bytes.append(contentsOf: name)
             bytes.append(UInt8(secret.count))
             bytes.append(contentsOf: secret)
+
+        case .rawFrame(let fragment):
+            bytes.append(MessageType.rawFrame.rawValue)
+            put16(fragment.seq)
+            bytes.append(UInt8(clamping: fragment.fragmentIndex))
+            bytes.append(UInt8(clamping: fragment.fragmentCount))
+            if fragment.fragmentIndex == 0 {
+                put32(fragment.timestampMicros)
+                bytes.append(UInt8(clamping: fragment.channel))
+                bytes.append(UInt8(bitPattern: Int8(clamping: fragment.rssi)))
+                put16(UInt16(clamping: fragment.originalLength))
+            }
+            bytes.append(contentsOf: fragment.payload)
         }
         return Data(bytes)
     }
