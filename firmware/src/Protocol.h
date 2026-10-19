@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-inline constexpr uint8_t kProtocolVersion = 7;
+inline constexpr uint8_t kProtocolVersion = 8;
 
 // All UUIDs share one base; only the first group differs.
 inline constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
@@ -29,6 +29,12 @@ inline constexpr uint8_t kCmdSetPeer = 0x07;
 inline constexpr uint8_t kCmdAckKnown = 0x08;
 // The phone is about to send its whole list. Drop the previous copy.
 inline constexpr uint8_t kCmdResetKnown = 0x09;
+// Start streaming raw Wi-Fi frames from a single channel (v8). Payload:
+// channel (1–13, 0 = keep current), flags (bit0 = filter to the BSSID below),
+// BSSID (6 bytes, zeros when the filter is off).
+inline constexpr uint8_t kCmdStartRawCapture = 0x0A;
+// Stop the raw-frame stream (v8). No payload.
+inline constexpr uint8_t kCmdStopRawCapture = 0x0B;
 
 // Results notification message types (first byte).
 inline constexpr uint8_t kMsgScanStarted = 0x10;
@@ -50,9 +56,17 @@ inline constexpr uint8_t kMsgLoraScan = 0x1F;
 inline constexpr uint8_t kMsgLoraProgress = 0x22;
 // A network the sensor joined, waiting for the phone to keep it.
 inline constexpr uint8_t kMsgKnownWifi = 0x23;
+// One captured raw Wi-Fi frame, possibly split across several notifications
+// to fit the ATT MTU (v8).
+inline constexpr uint8_t kMsgRawFrame = 0x24;
 inline constexpr uint8_t kMsgSavedLora = 0x20;
 inline constexpr uint8_t kMsgGps = 0x21;
 inline constexpr uint8_t kMsgUpdate = 0x30;
+
+// Raw capture limits. A frame is truncated to this many bytes on the wire;
+// the full length is still reported so a reader can show it. A short snap
+// length keeps per-frame RAM and the narrow BLE link manageable.
+inline constexpr uint16_t kRawSnapLen = 256;
 
 // Firmware characteristic commands (first byte of the write).
 inline constexpr uint8_t kOtaBegin = 0x01;

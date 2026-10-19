@@ -1,7 +1,7 @@
 # Spectra BLE protocol
 
 The Cardputer runs a GATT server; the iPhone is the central. Everything is
-little-endian. Version 7.
+little-endian. Version 8.
 
 ## Service
 
@@ -63,6 +63,8 @@ First byte is the command.
 | `0x07` | Set central name | UTF-8 device name, the rest of the write, at most 31 bytes |
 | `0x08` | Ack known | — |
 | `0x09` | Reset known list | — |
+| `0x0A` | Start raw capture | `u8` channel (1–14, 0 = keep current), `u8` flags (bit0 = filter to the BSSID), `6` BSSID |
+| `0x0B` | Stop raw capture | — |
 
 `0x05` adds one network to the list the sensor shows. Passwords are included
 so a known network can be joined from the picker. `0x09` clears that list;
@@ -82,6 +84,16 @@ at spreading factors 7, 9 and 12. It is ignored
 when the cap is not fitted. A scan that is already running is not restarted;
 the request is ignored. Every control command is ignored while a firmware
 update is in progress.
+
+`0x0A` pins the radio to one channel in promiscuous mode and streams the
+management and data frames it sees as `0x24` notifications. It is a short,
+thinned sniff, not a full capture: BLE moves far less than the air does, so the
+sensor keeps a small ring of frames and drops the oldest when the phone falls
+behind, and each frame is truncated to 256 bytes on the wire (the true length
+is still reported). Frames can be filtered to one BSSID, but the phone normally
+captures everything on the channel. Automatic scans pause while a capture runs,
+the same way a firmware update holds them off. `0x0B` stops the stream, which
+also happens when the phone disconnects.
 
 ## Firmware (write)
 
@@ -362,6 +374,43 @@ next time. Passwords are not repeated in Info.
 | 4 | *n* | SSID |
 | 4+*n* | 1 | password length *m* (0–64) |
 | 5+*n* | *m* | password |
+
+### `0x24` Raw frame (v8)
+
+One Wi-Fi frame captured in promiscuous mode after a `0x0A` request. A frame
+larger than the ATT payload is split across several notifications that share a
+`seq`; the metadata is on fragment 0, and the rest carry only more frame bytes.
+The phone reassembles by `seq`, in `frag index` order, until it has `orig len`
+bytes (or runs out, when the frame was truncated to the 256-byte snap length).
+
+Fragment 0 (and any single-fragment frame):
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x24` |
+| 1 | 2 | seq (`u16`, wraps) |
+| 3 | 1 | fragment index = 0 |
+| 4 | 1 | fragment count (≥ 1) |
+| 5 | 4 | timestamp, microseconds since boot (`u32`, wraps) |
+| 9 | 1 | channel |
+| 10 | 1 | RSSI, dBm (`i8`) |
+| 11 | 2 | original frame length (`u16`) |
+| 13 | | frame bytes for this fragment |
+
+Fragment *k* > 0:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x24` |
+| 1 | 2 | seq |
+| 3 | 1 | fragment index |
+| 4 | 1 | fragment count |
+| 5 | | frame bytes for this fragment |
+
+The frame is a bare 802.11 MAC frame (no radiotap); the phone adds a radiotap
+header carrying the channel and RSSI when it writes the `.pcap` (link type 127).
+The timestamp is only good for spacing frames apart: the phone anchors the first
+one to the wall-clock moment the capture began.
 
 ### `0x20` Saved LoRa device (v7)
 

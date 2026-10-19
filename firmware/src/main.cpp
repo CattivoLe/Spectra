@@ -22,6 +22,7 @@
 #include <esp_mac.h>
 #include <esp_ota_ops.h>
 #include <esp_task_wdt.h>
+#include <esp_timer.h>
 #include <esp_wifi.h>
 #include <algorithm>
 #include <cstring>
@@ -269,6 +270,44 @@ struct HiddenAP { uint8_t bssid[6]; };
 static std::vector<HiddenAP> hiddenAPs;
 static uint8_t ownMac[6];
 
+// Negotiated ATT MTU for the live connection, updated from onMTUChange. Raw
+// frames are split to fit MTU - 3 (the ATT notification header). 23 is the
+// BLE default both phones raise during connection setup.
+static volatile uint16_t attMtu = 23;
+
+// ---------------------------------------------------------------------------
+// Raw-frame capture (0x24)
+// ---------------------------------------------------------------------------
+//
+// A short, thinned sniff of one channel: the promiscuous callback copies each
+// frame into a fixed ring of slots, and loop() drains them to the phone as
+// 0x24 notifications. BLE moves far less than the air does, so the ring drops
+// the oldest frame when the phone falls behind — this is a sample, not a full
+// dump. The phone caps the total and sends stop.
+struct RawSlot {
+  uint16_t capLen;   // bytes stored here (<= kRawSnapLen)
+  uint16_t origLen;  // true frame length on the air
+  uint32_t ts;       // microseconds since boot, from esp_timer
+  uint16_t seq;      // per-frame id, shared by every fragment
+  uint8_t channel;
+  int8_t rssi;
+  uint8_t data[kRawSnapLen];
+};
+static constexpr int kRawSlots = 48;
+static RawSlot rawSlots[kRawSlots];
+static portMUX_TYPE rawMux = portMUX_INITIALIZER_UNLOCKED;
+static int rawHead = 0;             // next write slot
+static int rawTail = 0;             // next read slot
+static volatile int rawCount = 0;   // filled slots
+static volatile bool rawActive = false;
+static volatile bool rawStartPending = false;
+static volatile bool rawStopPending = false;
+static volatile uint8_t rawChannel = 0;   // locked channel, 0 = current
+static volatile bool rawFilter = false;   // keep only frames touching rawBssid
+static uint8_t rawBssid[6];
+static uint16_t rawSeq = 0;
+static uint32_t rawDropped = 0;
+
 static bool isConnected() { return server != nullptr && server->getConnectedCount() > 0; }
 
 // ---------------------------------------------------------------------------
@@ -494,11 +533,53 @@ static void extractWPSInfo(const uint8_t *frame, uint16_t frameLen,
 //     association request (0), association response (1), reassociation (2/3).
 //   Data (type 2): any data frame, including QoS data.
 
+/// Store one frame in the raw-capture ring. Runs inside the promiscuous
+/// callback; the critical section is only the copy, and the oldest frame is
+/// dropped when the ring is full so the radio task never blocks on the phone.
+static void IRAM_ATTR recordRawFrame(const uint8_t *frame, uint16_t sigLen, int8_t rssi) {
+  if (rawFilter) {
+    const uint8_t *a1 = frame + 4, *a2 = frame + 10, *a3 = frame + 16;
+    const bool hit = macEqual(a1, rawBssid) ||
+                     (sigLen >= 16 && macEqual(a2, rawBssid)) ||
+                     (sigLen >= 22 && macEqual(a3, rawBssid));
+    if (!hit) return;
+  }
+  uint16_t capLen = sigLen;
+  if (capLen > kRawSnapLen) capLen = kRawSnapLen;
+  const uint32_t ts = static_cast<uint32_t>(esp_timer_get_time());
+
+  taskENTER_CRITICAL_ISR(&rawMux);
+  if (rawCount >= kRawSlots) {
+    // Full: drop the oldest so the newest still lands.
+    rawTail = (rawTail + 1) % kRawSlots;
+    rawCount--;
+    rawDropped++;
+  }
+  RawSlot &slot = rawSlots[rawHead];
+  slot.capLen = capLen;
+  slot.origLen = sigLen;
+  slot.ts = ts;
+  slot.seq = rawSeq++;
+  slot.channel = rawChannel;
+  slot.rssi = rssi;
+  memcpy(slot.data, frame, capLen);
+  rawHead = (rawHead + 1) % kRawSlots;
+  rawCount++;
+  taskEXIT_CRITICAL_ISR(&rawMux);
+}
+
 static void IRAM_ATTR promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t type) {
   if (type != WIFI_PKT_MGMT && type != WIFI_PKT_DATA) return;
 
   const auto *pkt = static_cast<const wifi_promiscuous_pkt_t *>(buf);
   if (pkt->rx_ctrl.sig_len < 24) return;
+
+  // Raw capture takes over the callback: just copy frames, skip the per-AP
+  // bookkeeping the normal sniff does.
+  if (rawActive) {
+    recordRawFrame(pkt->payload, pkt->rx_ctrl.sig_len, pkt->rx_ctrl.rssi);
+    return;
+  }
 
   const uint8_t *frame = pkt->payload;
   const uint8_t fc0 = frame[0];
@@ -701,12 +782,17 @@ static void updateInfo() {
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *, NimBLEConnInfo &) override { linkChanged = true; }
 
+  void onMTUChange(uint16_t mtu, NimBLEConnInfo &) override { attMtu = mtu; }
+
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
     // The interval stays. The phone set it, and the patrol keeps using it.
     peerName[0] = '\0';
     linkChanged = true;
     resultsSubscribed = false;
     captureFlushPending = false;
+    attMtu = 23;
+    // A raw capture belongs to the phone that started it.
+    if (rawActive) rawStopPending = true;
     if (otaActive) {
       if (Update.isRunning()) {
         Update.abort();
@@ -837,6 +923,30 @@ class ControlCallbacks : public NimBLECharacteristicCallbacks {
         linkChanged = true;
         break;
       }
+      case kCmdStartRawCapture: {
+        if (value.size() < 9 || value.data() == nullptr) {
+          break;
+        }
+        const uint8_t *bytes = value.data();
+        const uint8_t ch = bytes[1];
+        if (ch > 14) {
+          break;
+        }
+        taskENTER_CRITICAL(&radioMux);
+        rawChannel = ch;
+        rawFilter = (bytes[2] & 0x01) != 0;
+        memcpy(rawBssid, bytes + 3, 6);
+        rawStartPending = true;
+        rawStopPending = false;
+        taskEXIT_CRITICAL(&radioMux);
+        break;
+      }
+      case kCmdStopRawCapture:
+        taskENTER_CRITICAL(&radioMux);
+        rawStopPending = true;
+        rawStartPending = false;
+        taskEXIT_CRITICAL(&radioMux);
+        break;
       default:
         break;
     }
@@ -2418,6 +2528,117 @@ static void sniffStations() {
   esp_wifi_set_promiscuous(false);
 }
 
+// Send one captured frame, split into as many 0x24 notifications as the ATT
+// MTU needs. Returns false if a notification could not be delivered, so the
+// caller leaves the frame queued for the next drain.
+static bool sendRawFrame(const RawSlot &slot) {
+  // Header is 13 bytes on the first fragment, 5 on the rest.
+  int maxPayload = static_cast<int>(attMtu) - 3;
+  if (maxPayload < 20) maxPayload = 20;
+  if (maxPayload > 512) maxPayload = 512;
+  const int firstCap = maxPayload - 13;
+  const int restCap = maxPayload - 5;
+  if (firstCap < 1 || restCap < 1) return false;
+
+  // How many fragments this frame needs.
+  uint8_t fragCount = 1;
+  if (slot.capLen > firstCap) {
+    fragCount = 1 + static_cast<uint8_t>((slot.capLen - firstCap + restCap - 1) / restCap);
+  }
+
+  uint8_t msg[3 + 512];
+  int sent = 0;
+  for (uint8_t frag = 0; frag < fragCount; ++frag) {
+    int n = 0;
+    msg[n++] = kMsgRawFrame;
+    putU16(msg + n, slot.seq);
+    n += 2;
+    msg[n++] = frag;
+    msg[n++] = fragCount;
+    int cap;
+    if (frag == 0) {
+      putU32(msg + n, slot.ts);
+      n += 4;
+      msg[n++] = slot.channel;
+      msg[n++] = static_cast<uint8_t>(slot.rssi);
+      putU16(msg + n, slot.origLen);
+      n += 2;
+      cap = firstCap;
+    } else {
+      cap = restCap;
+    }
+    int chunk = slot.capLen - sent;
+    if (chunk > cap) chunk = cap;
+    memcpy(msg + n, slot.data + sent, chunk);
+    n += chunk;
+    sent += chunk;
+    if (!sendMessage(msg, n)) return false;
+  }
+  return true;
+}
+
+static void startRawCapture() {
+  // Clear any leftover frames from a previous run.
+  taskENTER_CRITICAL(&rawMux);
+  rawHead = rawTail = rawCount = 0;
+  rawSeq = 0;
+  rawDropped = 0;
+  taskEXIT_CRITICAL(&rawMux);
+
+  esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
+  WiFi.mode(WIFI_STA);
+  wifi_promiscuous_filter_t filt = {
+      .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA};
+  esp_wifi_set_promiscuous_filter(&filt);
+  esp_wifi_set_promiscuous_rx_cb(promiscuousCallback);
+  esp_wifi_set_promiscuous(true);
+  if (rawChannel >= 1 && rawChannel <= 14) {
+    esp_wifi_set_channel(rawChannel, WIFI_SECOND_CHAN_NONE);
+  } else {
+    uint8_t ch = 0;
+    esp_wifi_get_channel(&ch, nullptr);
+    rawChannel = ch;
+  }
+  rawActive = true;
+  char line[24];
+  snprintf(line, sizeof(line), "Raw capture ch %u", rawChannel);
+  drawStatus(line);
+}
+
+static void stopRawCapture() {
+  rawActive = false;
+  esp_wifi_set_promiscuous(false);
+  drawStatus("Capture stopped");
+}
+
+// Drain a bounded number of captured frames to the phone each loop, so BLE
+// work stays off the radio task and the watchdog keeps getting fed.
+static void pumpRawCapture() {
+  int budget = 12;
+  while (budget-- > 0 && isConnected()) {
+    RawSlot slot;
+    taskENTER_CRITICAL(&rawMux);
+    if (rawCount == 0) {
+      taskEXIT_CRITICAL(&rawMux);
+      break;
+    }
+    slot = rawSlots[rawTail];
+    taskEXIT_CRITICAL(&rawMux);
+
+    if (!sendRawFrame(slot)) break;  // link busy; keep it for next time
+
+    taskENTER_CRITICAL(&rawMux);
+    // The slot may have been dropped as oldest while we sent; only advance
+    // when it is still the one we read.
+    if (rawCount > 0 && rawSlots[rawTail].seq == slot.seq) {
+      rawTail = (rawTail + 1) % kRawSlots;
+      rawCount--;
+    }
+    taskEXIT_CRITICAL(&rawMux);
+    esp_task_wdt_reset();
+  }
+}
+
 static void runScan() {
   if (otaActive) {
     return;
@@ -3315,10 +3536,31 @@ void loop() {
     uiDirty = true;
   }
 
+  // Raw frame capture: start/stop on the loop task (radio work off the host
+  // task), then drain the ring to the phone. It owns the radio while running,
+  // so periodic scans wait, like a firmware update.
+  if (rawStartPending && !otaActive && !otaJobBusy && !scanInProgress) {
+    rawStartPending = false;
+    startRawCapture();
+    uiDirty = true;
+  }
+  if (rawActive) {
+    pumpRawCapture();
+  }
+  if (rawStopPending) {
+    rawStopPending = false;
+    rawStartPending = false;
+    if (rawActive) {
+      stopRawCapture();
+      uiDirty = true;
+    }
+  }
+
   // The phone's interval drives the sweep whether or not the phone is here.
   // Zero means wait. Alone, the speaker reports what the sweep finds.
   const uint32_t everyMs = static_cast<uint32_t>(scanIntervalSec) * 1000;
-  const bool due = everyMs > 0 && !otaActive && !otaJobBusy && millis() - lastScanMs >= everyMs;
+  const bool due = everyMs > 0 && !otaActive && !otaJobBusy && !rawActive && !rawStartPending &&
+                   millis() - lastScanMs >= everyMs;
   bool startScan = false;
   uint8_t kind = 0;
   taskENTER_CRITICAL(&radioMux);
@@ -3327,7 +3569,8 @@ void loop() {
   }
   const bool joinBusy =
       wifiUi == WifiUi::Connecting || (menuIndex == kTabLink && wifiUi != WifiUi::None);
-  if ((scanRequested || due) && !otaActive && !otaJobBusy && !joinBusy) {
+  if ((scanRequested || due) && !otaActive && !otaJobBusy && !joinBusy && !rawActive &&
+      !rawStartPending) {
     scanRequested = false;
     kind = requestedKind;
     scanInProgress = true;
