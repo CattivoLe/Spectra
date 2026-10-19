@@ -677,3 +677,18 @@ This is not a pcap or pcapng file.	Это не файл pcap или pcapng.
 This file is too short to be a capture.	Файл слишком короткий для захвата.
 Could not decode this capture.	Не удалось разобрать этот захват.
 Could not read the file.	Не удалось прочитать файл.
+
+# wi-fi join (phone)
+Connect	Подключить
+Join “%s”	Подключиться к «%s»
+Connect to this network	Подключиться к этой сети
+Enter password & connect	Ввести пароль и подключиться
+Forget this network	Забыть эту сеть
+Added. Android joins “%s” when it is in range; it may ask you to approve Spectra once.	Добавлено. Android подключится к «%s», когда она окажется рядом; возможно, потребуется один раз подтвердить Spectra.
+Enterprise and other 802.1X networks have to be joined from Settings.	Корпоративные сети (802.1X) можно подключить только из настроек.
+This network is open. Android will ask you to confirm before joining.	Сеть открытая. Android попросит подтвердить подключение.
+The password is handed straight to Android and is not stored by Spectra.	Пароль передаётся напрямую в Android и не сохраняется в Spectra.
+WEP networks can't be added on this version of Android.	Сети WEP нельзя добавить в этой версии Android.
+Android would not add this network.	Android не смог добавить эту сеть.
+Spectra is not allowed to change Wi-Fi settings.	Spectra не разрешено менять настройки Wi-Fi.
+Could not join this network.	Не удалось подключиться к этой сети.

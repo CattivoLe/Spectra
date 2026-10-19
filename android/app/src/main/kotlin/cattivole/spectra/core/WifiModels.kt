@@ -55,6 +55,17 @@ value class AuthMode(val raw: Int) {
             else -> Strength.STRONG
         }
 
+    /** How the phone itself joins this network. Mirrors the iOS `AuthMode.JoinMethod`. */
+    enum class JoinMethod { OPEN, PSK, WEP, UNSUPPORTED }
+
+    val joinMethod: JoinMethod
+        get() = when (raw) {
+            0, 9 -> JoinMethod.OPEN        // open, OWE
+            1 -> JoinMethod.WEP
+            2, 3, 4, 6, 7 -> JoinMethod.PSK // WPA, WPA2, WPA/WPA2, WPA3, WPA2/WPA3 (PSK/SAE)
+            else -> JoinMethod.UNSUPPORTED  // enterprise, DPP, WAPI, unknown
+        }
+
     companion object {
         val OPEN = AuthMode(0)
         val WEP = AuthMode(1)

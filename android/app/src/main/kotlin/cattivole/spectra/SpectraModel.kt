@@ -12,6 +12,7 @@ import cattivole.spectra.platform.DeviceBleScanner
 import cattivole.spectra.platform.LanScanner
 import cattivole.spectra.platform.LinkProbe
 import cattivole.spectra.platform.PhoneWifiScanner
+import cattivole.spectra.platform.WifiJoiner
 import cattivole.spectra.platform.SensorLink
 import cattivole.spectra.platform.UsbEspFlasher
 import cattivole.spectra.core.HistoryStore
@@ -30,6 +31,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     val lan = LanScanner(app)
     val connection = LinkProbe(app, lan)
     val usb = UsbEspFlasher(app)
+    val wifiJoiner = WifiJoiner(app)
 
     var generation by mutableIntStateOf(0)
         private set
