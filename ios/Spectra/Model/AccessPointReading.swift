@@ -124,6 +124,28 @@ nonisolated struct AuthMode: RawRepresentable, Hashable, Codable, Sendable {
         default: .strong
         }
     }
+
+    /// How the phone itself joins this network with `NEHotspotConfiguration`.
+    enum JoinMethod: Equatable {
+        /// No passphrase: open, OWE (enhanced open).
+        case open
+        /// A WPA/WPA2/WPA3 pre-shared key.
+        case psk
+        /// A WEP key. Obsolete, but still joinable.
+        case wep
+        /// 802.1X/enterprise and anything else iOS will not take from a
+        /// passphrase alone; it has to be joined from Settings.
+        case unsupported
+    }
+
+    var joinMethod: JoinMethod {
+        switch rawValue {
+        case 0, 9: .open           // open, OWE
+        case 1: .wep
+        case 2, 3, 4, 6, 7: .psk   // WPA, WPA2, WPA/WPA2, WPA3, WPA2/WPA3 (PSK/SAE)
+        default: .unsupported      // enterprise, DPP, WAPI, unknown
+        }
+    }
 }
 
 /// ESP-IDF `wifi_cipher_type_t`.

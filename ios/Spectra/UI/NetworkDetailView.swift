@@ -15,6 +15,17 @@ struct NetworkDetailView: View {
     }
 
     @Environment(NetworkStore.self) private var store
+    @State private var joiner = WiFiJoiner()
+    @State private var pendingJoin: PendingJoin?
+    @State private var passphrase = ""
+
+    /// A secured network waiting for its password before the join is applied.
+    private struct PendingJoin: Identifiable {
+        let id = UUID()
+        var ssid: String
+        var isWEP: Bool
+        var hidden: Bool
+    }
 
     var body: some View {
         if let network = snapshot ?? lookup.flatMap({ store.networks[$0] }) {
@@ -128,6 +139,10 @@ struct NetworkDetailView: View {
                 InfoRow("WPS", value: reading.capabilities.contains(.wps) ? String(localized: "On") : String(localized: "Off"))
             }
 
+            if let ssid = network.revealedSSID ?? reading.ssid {
+                connectionSection(ssid: ssid, hidden: reading.ssid == nil, method: reading.auth.joinMethod)
+            }
+
             // Clients (stations associated with this AP).
             if !network.clients.isEmpty {
                 Section {
@@ -172,6 +187,84 @@ struct NetworkDetailView: View {
         }
         .navigationTitle(network.revealedSSID ?? reading.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .task { await joiner.refreshCurrent() }
+        .alert(
+            pendingJoin.map { String(localized: "Join “\($0.ssid)”") } ?? "",
+            isPresented: Binding(
+                get: { pendingJoin != nil },
+                set: { if !$0 { pendingJoin = nil } }
+            ),
+            presenting: pendingJoin
+        ) { join in
+            SecureField("Password", text: $passphrase)
+            Button("Connect") {
+                Task { await joiner.join(ssid: join.ssid, passphrase: passphrase, isWEP: join.isWEP, hidden: join.hidden) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { join in
+            Text("Enter the password for “\(join.ssid)”.")
+        }
+    }
+
+    // MARK: Join this network from the phone
+
+    @ViewBuilder
+    private func connectionSection(ssid: String, hidden: Bool, method: AuthMode.JoinMethod) -> some View {
+        Section {
+            if case .joining(let joining) = joiner.status, joining == ssid {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Connecting…").foregroundStyle(.secondary)
+                }
+            } else if joiner.isOn(ssid) {
+                Label("Connected", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Button(role: .destructive) {
+                    joiner.forget(ssid: ssid)
+                } label: {
+                    Label("Forget this network", systemImage: "wifi.slash")
+                }
+            } else {
+                if case .failed(let failed, let message) = joiner.status, failed == ssid {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.subheadline)
+                }
+                connectButton(ssid: ssid, hidden: hidden, method: method)
+            }
+        } header: {
+            Text("Connection")
+        } footer: {
+            switch method {
+            case .open:
+                Text("This network is open. iOS will ask you to confirm before joining.")
+            case .unsupported:
+                Text("Enterprise and other 802.1X networks have to be joined from Settings.")
+            case .psk, .wep:
+                Text("The password is handed straight to iOS and is not stored by Spectra.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func connectButton(ssid: String, hidden: Bool, method: AuthMode.JoinMethod) -> some View {
+        switch method {
+        case .unsupported:
+            EmptyView()
+        case .open:
+            Button {
+                Task { await joiner.join(ssid: ssid, passphrase: nil, isWEP: false, hidden: hidden) }
+            } label: {
+                Label("Connect to this network", systemImage: "wifi")
+            }
+        case .psk, .wep:
+            Button {
+                passphrase = ""
+                pendingJoin = PendingJoin(ssid: ssid, isWEP: method == .wep, hidden: hidden)
+            } label: {
+                Label("Enter password & connect", systemImage: "wifi")
+            }
+        }
     }
 
     private func widthDescription(_ reading: AccessPointReading) -> String {
