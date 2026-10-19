@@ -173,10 +173,10 @@ final class LANDevice: Identifiable {
         case "iOS": return "iphone"
         case "iPadOS": return "ipad"
         case "macOS": return "laptopcomputer"
-        case "tvOS": return "tv"
+        case "tvOS", "Android TV", "Google TV": return "appletv"
         case "watchOS": return "applewatch"
-        case "Android": return "smartphone"
-        case "Tizen": return "tv"
+        case "Android": return looksLikeMediaPlayer ? "appletv" : "smartphone"
+        case "Tizen", "webOS": return "tv"
         case "Windows": return "desktopcomputer"
         default: break
         }
@@ -189,8 +189,9 @@ final class LANDevice: Identifiable {
         if name.contains("mac") || name.contains("imac") || name.contains("book") { return "laptopcomputer" }
         if name.contains("iphone") { return "iphone" }
         if name.contains("ipad") { return "ipad" }
+        if Self.isMediaPlayerName(name) { return "appletv" }
         if name.contains("apple") || name.contains("homepod") { return "homepod" }
-        if name.contains("tv") || name.contains("roku") || name.contains("chromecast") { return "tv" }
+        if name.contains("tv") { return "tv" }
         if name.contains("echo") || name.contains("alexa") || name.contains("sonos") || name.contains("eversolo") { return "hifispeaker" }
         if name.contains("print") || name.contains("canon") || name.contains("epson") || name.contains("brother") { return "printer" }
         if name.contains("pi") || name.contains("esp") { return "cpu" }
@@ -208,6 +209,25 @@ final class LANDevice: Identifiable {
             if mfr.contains("synology") || mfr.contains("qnap") { return "externaldrive" }
         }
         return "desktopcomputer"
+    }
+
+    /// Android TV boxes are often labelled just Android, which would draw a phone.
+    private var looksLikeMediaPlayer: Bool {
+        if openPorts.contains(where: { $0.number == 6466 }) { return true }
+        if Self.isMediaPlayerName(displayName) { return true }
+        let title = displayName.lowercased()
+        if title.contains(" tv") || title.hasSuffix("tv") { return true }
+        let servicesBlob = services.map { "\($0.type) \($0.name)" }.joined(separator: " ").lowercased()
+        return servicesBlob.contains("androidtv") || servicesBlob.contains("googlecast") || servicesBlob.contains("bravia")
+    }
+
+    private static func isMediaPlayerName(_ name: String) -> Bool {
+        let folded = name.lowercased()
+        return folded.contains("android tv") || folded.contains("google tv") || folded.contains("androidtv")
+            || folded.contains("bravia") || folded.contains("chromecast") || folded.contains("shield")
+            || folded.contains("roku") || folded.contains("apple tv") || folded.contains("appletv")
+            || folded.contains("fire tv") || folded.contains("firestick") || folded.contains("fire stick")
+            || folded.contains("mi box") || folded.contains("mibox") || folded.contains("media player")
     }
 
     init(

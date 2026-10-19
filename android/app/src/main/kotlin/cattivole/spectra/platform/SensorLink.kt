@@ -88,6 +88,15 @@ class SensorLink(
 
     private val app = context.applicationContext
     private val knownNetworks = KnownNetworks(context)
+
+    /** SSIDs the phone can rejoin because a password was stored for them. */
+    fun knownSsids(): Set<String> = knownNetworks.all().mapNotNull { (ssid, pass) ->
+        ssid.takeIf { pass.isNotEmpty() }
+    }.toSet()
+
+    /** The stored password for this network name, or null when none was saved. */
+    fun knownPassword(ssid: String): String? =
+        knownNetworks.all().firstOrNull { it.first == ssid && it.second.isNotEmpty() }?.second
     private val prefs = app.getSharedPreferences("spectra", Context.MODE_PRIVATE)
     private val adapter: BluetoothAdapter? =
         app.getSystemService(BluetoothManager::class.java)?.adapter
@@ -567,6 +576,7 @@ class SensorLink(
                 enqueue(control, SensorProtocol.Command.AckKnown.data)
                 pushKnownNetworks()
             }
+            publish()
             return
         }
         if (message is SensorProtocol.Message.Battery) {

@@ -94,6 +94,21 @@ class HistoryEntry(
     fun host(ip: String): LanDevice? = lan.firstOrNull { it.ipAddress == ip }
     fun ble(address: String): BleDevice? = bluetooth.firstOrNull { it.address == address }
     fun probe(mac: MacAddress): ProbingDevice? = probes.firstOrNull { it.mac == mac }
+
+    /** Search across the session's place, source and the records it holds. */
+    fun matchesQuery(needle: String): Boolean {
+        val query = needle.trim()
+        if (query.isEmpty()) return true
+        fun hit(value: String?) = value?.contains(query, ignoreCase = true) == true
+        if (hit(placeLabel) || hit(source) || hit(importedFrom) || hit(rowTitle)) return true
+        if (lines.any { hit(it.title) || hit(it.detail) || hit(it.trailing) }) return true
+        if (networks.any { hit(it.title) || hit(it.id.text) || hit(it.latest.ssid) }) return true
+        if (probes.any { hit(it.displayName) || hit(it.mac.text) || it.ssids.any { ssid -> hit(ssid) } }) return true
+        if (lan.any { hit(it.displayName) || hit(it.ipAddress) || hit(it.macAddress?.text) }) return true
+        if (bluetooth.any { hit(it.displayName) || hit(it.address) }) return true
+        if (deauths.any { hit(it.bssid.text) }) return true
+        return false
+    }
 }
 
 private fun labelFor(kind: String): String = when (kind) {

@@ -12,6 +12,7 @@ import cattivole.spectra.core.DeauthEvent
 import cattivole.spectra.core.DiscoveredPort
 import cattivole.spectra.core.ExternalAddress
 import cattivole.spectra.core.HistoryCodec
+import cattivole.spectra.core.HistoryEntry
 import cattivole.spectra.core.HistoryStore
 import cattivole.spectra.core.LinkReport
 import cattivole.spectra.core.LinkStatus
@@ -34,6 +35,7 @@ import cattivole.spectra.core.WindowsHost
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -193,6 +195,22 @@ class HistoryTest {
         val merged = HistoryStore.mergeConnections(entry.connections, listOf(saved.copy(checkedAt = saved.checkedAt + 1)))
         assertEquals(2, merged.size)
         assertEquals(saved.checkedAt + 1, merged[0].checkedAt)
+    }
+
+    @Test
+    fun historyQueryMatchesThePlaceAndTheSource() {
+        val entry = HistoryEntry(
+            id = "a",
+            kind = "wifi",
+            savedAt = 1,
+            source = "Cardputer",
+            captureId = null,
+            placeLabel = "Kitchen",
+        )
+        assertTrue(entry.matchesQuery("kit"))
+        assertTrue(entry.matchesQuery("card"))
+        assertFalse(entry.matchesQuery("office"))
+        assertTrue(entry.matchesQuery("  "))
     }
 
     @Test

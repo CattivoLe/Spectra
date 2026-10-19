@@ -117,6 +117,13 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
         },
         refreshing = false,
         onRefresh = { if (!lan.scanning) lan.scan() },
+        searchQuery = query.takeIf { lan.devices.isNotEmpty() },
+        onSearchChange = if (lan.devices.isNotEmpty()) {
+            { query = it }
+        } else {
+            null
+        },
+        searchPlaceholder = tr("IP, name or MAC"),
         overlay = {
             when {
                 lan.devices.isEmpty() && !lan.scanning && lan.noNetwork -> EmptyState(
@@ -167,9 +174,6 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
             card(key = "wide", rows = listOf { NoteRow(tr("The prefix is wider than /20, so only the local /24 is walked."), warning = false) })
         }
         connectionEntry(model, nav)
-        if (lan.devices.isNotEmpty()) {
-            item(key = "search") { SearchField(query, { query = it }, tr("IP, name or MAC")) }
-        }
         cardSection(
             visible,
             header = tr("Devices: %d", lan.devices.size),

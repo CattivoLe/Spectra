@@ -181,7 +181,7 @@ Last sweep	Последний проход
 %.1f s	%.1f с
 Scans this session	Сканирований за сеанс
 Device	Устройство
-This firmware cannot take updates from the app. Flash 0.6.0 or newer once over USB or the launcher; after that, updates install from here.	Эта прошивка не принимает обновления из приложения. Один раз прошейте 0.6.0 или новее по USB или через лаунчер — после этого обновления ставятся отсюда.
+This firmware cannot take updates from the app. Connect the Cardputer with a USB cable and use Flash over USB, or use the launcher, to install 0.6.0 or newer once. After that, updates install from here.	Эта прошивка не принимает обновления из приложения. Подключите Cardputer кабелем USB и выберите «Прошить по USB», или поставьте 0.6.0 или новее через лаунчер — после этого обновления ставятся отсюда.
 Choose firmware.bin from pio run, the same app image Launcher installs. A merged image with a bootloader is rejected.	Выберите firmware.bin после pio run — тот же образ приложения, что ставит Launcher. Объединённый образ с загрузчиком не подойдёт.
 Firmware	Прошивка
 Reported interval	Интервал на устройстве
@@ -596,4 +596,53 @@ On this phone	На этом телефоне
 Imported	Импортированные
 Nothing imported yet.	Пока ничего не импортировано.
 Nothing saved on this phone.	На этом телефоне ничего не сохранено.
+Could not find the ROM bootloader. Hold the G0 button, tap reset, let go, and try again.	Не удалось найти загрузчик ROM. Зажмите кнопку G0, нажмите сброс, отпустите и попробуйте снова.
+This chip is not an ESP32-S3.	Это не ESP32-S3.
+The chip rejected the flash command.	Чип отклонил команду прошивки.
+The chip rejected part of the image.	Чип отклонил часть образа.
+The image on the chip does not match. Flash it again.	Образ на чипе не совпал. Прошейте ещё раз.
+Flash cancelled.	Прошивка отменена.
+The USB link dropped.	USB-соединение оборвалось.
+The phone could not open the USB device.	Телефон не смог открыть USB-устройство.
+Allow USB access and try again.	Разрешите доступ к USB и попробуйте снова.
+The chip stopped answering. Keep the cable connected and try again.	Чип перестал отвечать. Не отключайте кабель и попробуйте снова.
+This is an application image. A blank chip needs the flash bundle: bootloader, partition table and firmware together.	Это образ приложения. Чистому чипу нужен пакет прошивки: загрузчик, таблица разделов и сама прошивка.
+This file is not a flash bundle.	Это не пакет прошивки.
+This bundle has no bootloader at the start of flash.	В пакете нет загрузчика в начале флеш-памяти.
+The pieces of this bundle overlap or do not fit in the flash.	Части пакета пересекаются или не помещаются во флеш-память.
+This build of the app has no firmware inside. Run pio run, rebuild the app, or pick a flash bundle.	В этой сборке приложения нет прошивки. Запустите pio run, пересоберите приложение или выберите пакет прошивки.
+New Cardputer	Новый Cardputer
+A blank ESP32-S3 does not speak Bluetooth yet. Connect it with a data cable and flash it from here. If a program is already running, hold G0, tap reset, and let go.	Чистый ESP32-S3 ещё не говорит по Bluetooth. Подключите его кабелем с данными и прошейте отсюда. Если программа уже запущена, зажмите G0, нажмите сброс и отпустите.
+Flash over USB	Прошить по USB
+Blank ESP32-S3	Чистый ESP32-S3
+Flash this chip?	Прошить этот чип?
+The bootloader and the firmware on %s are replaced (%s). Keep the cable connected until it finishes.	Загрузчик и прошивка на %s будут заменены (%s). Не отключайте кабель, пока процесс не закончится.
+Flash	Прошить
+The bundle is the bootloader, the partition table and the application from pio run. firmware.bin on its own cannot start a blank chip.	Пакет — это загрузчик, таблица разделов и приложение после pio run. Одного firmware.bin мало, чтобы чистый чип запустился.
+Included firmware	Встроенная прошивка
+Image	Образ
+Size	Размер
+Choose a flash bundle…	Выбрать пакет прошивки…
+Use the included firmware	Использовать встроенную прошивку
+USB devices	USB-устройства
+Plug the Cardputer into this phone with a cable that carries data. A blank chip is already waiting. If a program is running, hold the G0 button, tap reset, and let go.	Подключите Cardputer к телефону кабелем, по которому идут данные. Чистый чип уже ждёт. Если программа запущена, зажмите кнопку G0, нажмите сброс и отпустите.
+Nothing is plugged in.	Ничего не подключено.
+Flashing	Идёт прошивка
+Preparing the chip…	Подготовка чипа…
+Writing	Запись
+Restarting the chip…	Перезапуск чипа…
+Firmware is on the chip. It will show up over Bluetooth in a moment. Tap reset if it does not start.	Прошивка записана. Через мгновение чип появится по Bluetooth. Если не запустится, нажмите сброс.
+Cancel flash	Отменить прошивку
 Imported scans are removed. Scans on this phone stay.	Импортированные сканирования удаляются. Сканы на этом телефоне остаются.
+Known	Известные
+Saved: %d	Сохранено: %d
+Password saved	Пароль сохранён
+Password	Пароль
+Newest	Сначала новые
+Oldest	Сначала старые
+Most found	Больше всего
+All	Все
+Name, place or address	Имя, место или адрес
+Supported boards	Поддерживаемые платы
+ESP32-S3, 2.4 GHz	ESP32-S3, 2,4 ГГц
+ESP32-S3, 2.4 GHz, LoRa cap fits this board	ESP32-S3, 2,4 ГГц, сюда ставится плата LoRa

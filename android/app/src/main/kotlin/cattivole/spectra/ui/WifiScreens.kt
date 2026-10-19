@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -19,14 +20,17 @@ import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.GppBad
 import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
+import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.GppMaybe
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.SettingsInputAntenna
@@ -53,6 +57,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,6 +81,8 @@ import cattivole.spectra.core.LanDevice
 import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.ProbeInsight
 import cattivole.spectra.core.ProbingDevice
+import cattivole.spectra.core.hasStoredPassword
+import cattivole.spectra.core.passesWifiFilter
 import cattivole.spectra.core.RadioSource
 import cattivole.spectra.core.SecondaryChannel
 import cattivole.spectra.core.SignalQuality
@@ -81,31 +92,46 @@ import cattivole.spectra.platform.Permissions
 import cattivole.spectra.platform.PhoneWifiScanner
 import java.util.Locale
 
-private enum class WifiSort { SIGNAL, NAME, CHANNEL }
+internal enum class WifiSort { SIGNAL, NAME, CHANNEL }
 
 @Composable
-fun NetworksScreen(model: SpectraModel, nav: Navigator) {
-    model.generation
-    val store = model.store
-    var query by rememberSaveable { mutableStateOf("") }
-    var sort by rememberSaveable { mutableStateOf(WifiSort.SIGNAL) }
-    var showOut by rememberSaveable { mutableStateOf(true) }
-    var openOnly by rememberSaveable { mutableStateOf(false) }
-    var band by rememberSaveable { mutableStateOf<Band?>(null) }
-    var menu by rememberSaveable { mutableStateOf(false) }
-    val all = store.networks().values
-    val needle = query.trim()
-    val networks = all.filter { network ->
-        (showOut || network.isInRange) &&
-            (!openOnly || network.latest.auth.isOpen()) &&
-            (band == null || network.latest.band == band) &&
-            (
-                needle.isEmpty() ||
-                    network.title.contains(needle, ignoreCase = true) ||
-                    network.id.text.contains(needle, ignoreCase = true) ||
-                    network.id.vendor()?.contains(needle, ignoreCase = true) == true
-                )
-    }.sortedWith { a, b ->
+internal fun WifiSortRow(sort: WifiSort, onSort: (WifiSort) -> Unit) {
+    ChipRow(contentPadding = SortChipPadding) {
+        ToggleChip(tr("Signal"), sort == WifiSort.SIGNAL, { onSort(WifiSort.SIGNAL) })
+        ToggleChip(tr("Name"), sort == WifiSort.NAME, { onSort(WifiSort.NAME) })
+        ToggleChip(tr("Channel"), sort == WifiSort.CHANNEL, { onSort(WifiSort.CHANNEL) })
+    }
+}
+
+@Composable
+internal fun WifiFilterRow(
+    openOnly: Boolean,
+    onOpenOnly: () -> Unit,
+    showKnown: Boolean,
+    knownOnly: Boolean,
+    onKnownOnly: () -> Unit,
+    bands: Set<Band>,
+    band: Band?,
+    onBand: (Band?) -> Unit,
+    showOut: Boolean,
+    onShowOut: () -> Unit,
+) {
+    ChipRow(contentPadding = FilterChipPadding) {
+        ToggleChip(tr("Open"), openOnly, onOpenOnly)
+        if (showKnown) {
+            ToggleChip(tr("Known"), knownOnly, onKnownOnly)
+        }
+        if (bands.size > 1) {
+            for (shown in Band.entries.filter { it in bands }) {
+                ToggleChip(bandLabel(shown), band == shown, { onBand(if (band == shown) null else shown) })
+            }
+        }
+        ToggleChip(tr("Out of range"), showOut, onShowOut)
+    }
+}
+
+internal fun List<TrackedNetwork>.sortedForWifi(sort: WifiSort): List<TrackedNetwork> =
+    sortedWith { a, b ->
         if (a.isInRange != b.isInRange) return@sortedWith if (a.isInRange) -1 else 1
         when (sort) {
             WifiSort.NAME -> a.title.compareTo(b.title, ignoreCase = true)
@@ -113,6 +139,27 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
             WifiSort.SIGNAL -> b.latest.rssi.compareTo(a.latest.rssi)
         }
     }
+
+@Composable
+fun NetworksScreen(model: SpectraModel, nav: Navigator) {
+    model.generation
+    val store = model.store
+    var query by rememberSaveable { mutableStateOf("") }
+    var sort by rememberSaveable { mutableStateOf(WifiSort.SIGNAL) }
+    var showOut by rememberSaveable { mutableStateOf(false) }
+    var openOnly by rememberSaveable { mutableStateOf(false) }
+    var knownOnly by rememberSaveable { mutableStateOf(false) }
+    var band by rememberSaveable { mutableStateOf<Band?>(null) }
+    var menu by rememberSaveable { mutableStateOf(false) }
+    val knownSsids = model.link.knownSsids()
+    val all = store.networks().values
+    val showKnown = all.any { it.hasStoredPassword(knownSsids) }
+    val filterKnown = knownOnly && showKnown
+    val needle = query.trim()
+    val networks = all.filter { network ->
+        network.passesWifiFilter(showOut, openOnly, band, needle, filterKnown, knownSsids)
+    }.sortedForWifi(sort)
+    val probes = store.probingDevices.filter { it.passesWifiFilter(openOnly, band, needle, filterKnown) }
     val bands = all.map { it.latest.band }.toSet()
     val threats = Threats.assess(all.toList(), store.deauthEvents)
     val watching = WatchList.presentNetworks(model.watchedIds, all)
@@ -139,6 +186,9 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
             model.link.scanNow()
             model.phone.refresh()
         },
+        searchQuery = query,
+        onSearchChange = { query = it },
+        searchPlaceholder = tr("Name, BSSID or maker"),
         overlay = {
             when {
                 all.isEmpty() && model.phone.status == PhoneWifiScanner.Status.SCANNING -> EmptyState(
@@ -161,29 +211,34 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
                     body = tr("Networks appear here after the first scan."),
                     busy = true,
                 )
-                networks.isEmpty() && needle.isNotEmpty() -> EmptyState(
+                networks.isEmpty() && probes.isEmpty() && needle.isNotEmpty() -> EmptyState(
                     icon = Icons.Rounded.SearchOff,
                     title = tr("No results"),
                     body = tr("Nothing matches “%s”.", needle),
+                )
+                networks.isEmpty() && probes.isEmpty() && all.isNotEmpty() -> EmptyState(
+                    icon = Icons.Rounded.WifiFind,
+                    title = tr("No results"),
+                    body = tr("Nothing in this filter is nearby."),
                 )
             }
         },
     ) {
         item(key = "status") { WifiStatusChips(model, nav) }
-        item(key = "search") { SearchField(query, { query = it }, tr("Name, BSSID or maker")) }
+        item(key = "sort") { WifiSortRow(sort) { sort = it } }
         item(key = "filters") {
-            ChipRow {
-                ToggleChip(tr("Signal"), sort == WifiSort.SIGNAL, { sort = WifiSort.SIGNAL })
-                ToggleChip(tr("Name"), sort == WifiSort.NAME, { sort = WifiSort.NAME })
-                ToggleChip(tr("Channel"), sort == WifiSort.CHANNEL, { sort = WifiSort.CHANNEL })
-                ToggleChip(tr("Open"), openOnly, { openOnly = !openOnly })
-                if (bands.size > 1) {
-                    for (shown in Band.entries.filter { it in bands }) {
-                        ToggleChip(bandLabel(shown), band == shown, { band = if (band == shown) null else shown })
-                    }
-                }
-                ToggleChip(tr("Out of range"), showOut, { showOut = !showOut })
-            }
+            WifiFilterRow(
+                openOnly = openOnly,
+                onOpenOnly = { openOnly = !openOnly },
+                showKnown = showKnown,
+                knownOnly = knownOnly,
+                onKnownOnly = { knownOnly = !knownOnly },
+                bands = bands,
+                band = band,
+                onBand = { band = it },
+                showOut = showOut,
+                onShowOut = { showOut = !showOut },
+            )
         }
         phoneRadioNote(model)?.takeIf { all.isNotEmpty() }?.let { note ->
             card(key = "phone-note", rows = listOf { NoteRow(note, warning = model.phone.status != PhoneWifiScanner.Status.SCANNING) })
@@ -215,17 +270,31 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
             headerTint = { Spectra.colors.warning },
             headerIcon = Icons.Rounded.Star,
             dividerInset = 70.dp,
-        ) { network -> NetworkRow(network, onClick = { nav.network(network.id) }, watched = true) }
+        ) { network ->
+            NetworkRow(
+                network,
+                onClick = { nav.network(network.id) },
+                watched = true,
+                known = network.hasStoredPassword(knownSsids),
+            )
+        }
         cardSection(
             networks,
             header = tr("In the latest pass: %d", all.count { it.wasInLastScan }),
             key = { it.id.text },
             sectionKey = "networks",
             dividerInset = 70.dp,
-        ) { network -> NetworkRow(network, onClick = { nav.network(network.id) }, watched = model.isWatched(network.id.text)) }
+        ) { network ->
+            NetworkRow(
+                network,
+                onClick = { nav.network(network.id) },
+                watched = model.isWatched(network.id.text),
+                known = network.hasStoredPassword(knownSsids),
+            )
+        }
         cardSection(
-            store.probingDevices,
-            header = tr("Probing: %d", store.probingDevices.size),
+            probes,
+            header = tr("Probing: %d", probes.size),
             footer = tr("Devices sending probe requests nearby, revealing networks they have connected to before."),
             key = { "probe-" + it.mac.text },
             sectionKey = "probes",
@@ -331,27 +400,60 @@ private fun securityIcon(reading: AccessPointReading): Pair<androidx.compose.ui.
     }
 }
 
+/** Third line of a network cell: a person for clients and an up-down mark for traffic. */
+@Composable
+private fun ClientTrafficLine(clients: Int, traffic: String?) {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    val text = buildAnnotatedString {
+        if (clients > 0) {
+            appendInlineContent("clients", tr("Clients: %d", clients))
+            append(" $clients")
+        }
+        if (traffic != null) {
+            if (clients > 0) append("  ")
+            appendInlineContent("traffic", tr("Traffic"))
+            append(" $traffic")
+        }
+    }
+    val mark = Placeholder(12.sp, 12.sp, PlaceholderVerticalAlign.TextCenter)
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall.merge(Tabular),
+        color = color,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        inlineContent = mapOf(
+            "clients" to InlineTextContent(mark) {
+                Icon(Icons.Rounded.Person, contentDescription = null, tint = color, modifier = Modifier.fillMaxSize())
+            },
+            "traffic" to InlineTextContent(mark) {
+                Icon(Icons.Rounded.SwapVert, contentDescription = null, tint = color, modifier = Modifier.fillMaxSize())
+            },
+        ),
+    )
+}
+
 internal fun networkName(network: TrackedNetwork): String = network.revealedSsid ?: when (network.latest.displayName) {
     "Hidden network", "Name withheld" -> tr(network.latest.displayName)
     else -> network.latest.displayName
 }
 
 @Composable
-fun NetworkRow(network: TrackedNetwork, onClick: () -> Unit, now: Long = System.currentTimeMillis(), watched: Boolean = false) {
+fun NetworkRow(network: TrackedNetwork, onClick: () -> Unit, now: Long = System.currentTimeMillis(), watched: Boolean = false, known: Boolean = false) {
     val reading = network.latest
     val hidden = reading.ssid == null && network.revealedSsid == null
     val (lock, lockTint) = securityIcon(reading)
-    val subtitle = when {
+    val facts = when {
         network.wasInLastScan -> buildList {
             add(tr("Ch %d", reading.channel))
             add(reading.auth.name)
             Capabilities.generation(reading.capabilities, reading.phyNote).takeIf { it != "—" }?.let(::add)
-            if (network.clients.isNotEmpty()) add(tr("Clients: %d", network.clients.size))
-            network.traffic?.let { add("↕ " + byteSize(it.bytes)) }
         }.joinToString(" · ")
         network.isInRange -> tr("Missed scans: %d", network.missedScans)
         else -> tr("Out of range · %s", ago(network.lastSeen, now))
     }
+    val clientCount = network.clients.size
+    val traffic = network.traffic?.let { byteSize(it.bytes) }
     WithCopyMenu(
         listOfNotNull(
             (network.revealedSsid ?: reading.ssid)?.let { CopyItem(tr("Copy name"), tr("Name"), it) },
@@ -360,7 +462,13 @@ fun NetworkRow(network: TrackedNetwork, onClick: () -> Unit, now: Long = System.
     ) { open ->
         ListRow(
             title = networkName(network),
-            subtitle = subtitle,
+            subtitle = facts,
+            subtitleLines = 1,
+            detailContent = if (clientCount > 0 || traffic != null) {
+                { ClientTrafficLine(clientCount, traffic) }
+            } else {
+                null
+            },
             italicTitle = hidden,
             mutedTitle = hidden,
             dimmed = !network.wasInLastScan,
@@ -371,6 +479,9 @@ fun NetworkRow(network: TrackedNetwork, onClick: () -> Unit, now: Long = System.
             },
             badges = {
                 Icon(lock, contentDescription = reading.auth.name, tint = lockTint, modifier = Modifier.size(15.dp))
+                if (known) {
+                    Icon(Icons.Rounded.Key, contentDescription = tr("Password saved"), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(15.dp))
+                }
                 if (network.revealedSsid != null) {
                     Icon(Icons.Rounded.Visibility, contentDescription = tr("Revealed"), tint = Spectra.colors.revealed, modifier = Modifier.size(15.dp))
                 }
@@ -597,6 +708,9 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
             rows = buildList {
                 add { InfoRow(tr("Name"), networkName(network), copyable = true) }
                 if (network.revealedSsid != null) add { InfoRow(tr("Broadcast name"), tr("Hidden")) }
+                (network.revealedSsid ?: reading.ssid)?.let { model.link.knownPassword(it) }?.let { password ->
+                    add { InfoRow(tr("Password"), password, mono = true, copyable = true) }
+                }
                 add { InfoRow("BSSID", reading.bssid.text, mono = true, copyable = true) }
                 add { InfoRow(tr("Address type"), macKind(reading.bssid)) }
                 reading.bssid.vendor()?.let { add { InfoRow(tr("Maker"), it) } }
@@ -663,7 +777,7 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
             rows = buildList {
                 val recorded = model.history.earliestNetworkSeen(network.id)
                 val first = if (recorded != null && recorded < network.firstSeen) recorded else network.firstSeen
-                add { InfoRow(tr("First seen"), clockTime(first)) }
+                add { InfoRow(tr("First seen"), dateTime(first)) }
                 add { InfoRow(tr("Last seen"), ago(network.lastSeen, if (snapshot) entry?.savedAt ?: now else now)) }
                 add { InfoRow(tr("Readings"), "${network.samples.size}") }
                 if (network.missedScans > 0) add { InfoRow(tr("Missed scans"), "${network.missedScans}") }

@@ -59,8 +59,57 @@ import cattivole.spectra.core.WatchList
 import cattivole.spectra.core.hex
 import cattivole.spectra.platform.DeviceBleScanner
 
-private enum class BleSort { SIGNAL, NAME, RECENT }
-private enum class BleScope { ALL, NAMED, CONNECTABLE }
+internal enum class BleSort { SIGNAL, NAME, RECENT }
+internal enum class BleScope { ALL, NAMED, CONNECTABLE }
+
+@Composable
+internal fun BleSortRow(sort: BleSort, onSort: (BleSort) -> Unit) {
+    ChipRow(contentPadding = SortChipPadding) {
+        ToggleChip(tr("Signal"), sort == BleSort.SIGNAL, { onSort(BleSort.SIGNAL) })
+        ToggleChip(tr("Name"), sort == BleSort.NAME, { onSort(BleSort.NAME) })
+        ToggleChip(tr("Recently seen"), sort == BleSort.RECENT, { onSort(BleSort.RECENT) })
+    }
+}
+
+@Composable
+internal fun BleFilterRow(scope: BleScope, onScope: (BleScope) -> Unit, showOut: Boolean, onShowOut: () -> Unit) {
+    ChipRow(contentPadding = FilterChipPadding) {
+        ToggleChip(tr("With a name"), scope == BleScope.NAMED, { onScope(if (scope == BleScope.NAMED) BleScope.ALL else BleScope.NAMED) })
+        ToggleChip(tr("Connectable"), scope == BleScope.CONNECTABLE, { onScope(if (scope == BleScope.CONNECTABLE) BleScope.ALL else BleScope.CONNECTABLE) })
+        ToggleChip(tr("Out of range"), showOut, onShowOut)
+    }
+}
+
+internal fun Iterable<BleDevice>.arranged(
+    now: Long,
+    sort: BleSort,
+    scope: BleScope,
+    showOut: Boolean,
+    needle: String,
+): List<BleDevice> = filter { device ->
+    (showOut || device.isNearby(now)) &&
+        when (scope) {
+            BleScope.ALL -> true
+            BleScope.NAMED -> device.hasOwnName
+            BleScope.CONNECTABLE -> device.isConnectable == true
+        } &&
+        (
+            needle.isEmpty() ||
+                device.shownName().contains(needle, true) ||
+                device.shownSubtitle().contains(needle, true) ||
+                device.address.contains(needle, true) ||
+                device.services.any { it.name?.contains(needle, true) == true }
+            )
+}.sortedWith { a, b ->
+    val near = b.isNearby(now).compareTo(a.isNearby(now))
+    if (near != 0) return@sortedWith near
+    val order = when (sort) {
+        BleSort.SIGNAL -> b.orderRssi.compareTo(a.orderRssi)
+        BleSort.NAME -> a.shownName().compareTo(b.shownName(), ignoreCase = true)
+        BleSort.RECENT -> (b.lastSeen / 10_000).compareTo(a.lastSeen / 10_000)
+    }
+    if (order != 0) order else a.address.compareTo(b.address)
+}
 
 private fun unavailableTitle(why: DeviceBleScanner.Availability): String = when (why) {
     DeviceBleScanner.Availability.STARTING -> tr("Starting Bluetooth…")
@@ -76,35 +125,12 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(BleSort.SIGNAL) }
     var scope by rememberSaveable { mutableStateOf(BleScope.ALL) }
-    var showOut by rememberSaveable { mutableStateOf(true) }
+    var showOut by rememberSaveable { mutableStateOf(false) }
     var menu by rememberSaveable { mutableStateOf(false) }
     val now = ble.now
     val needle = query.trim()
     val heard = ble.devices.values
-    val rows = heard.filter { device ->
-        (showOut || device.isNearby(now)) &&
-            when (scope) {
-                BleScope.ALL -> true
-                BleScope.NAMED -> device.hasOwnName
-                BleScope.CONNECTABLE -> device.isConnectable == true
-            } &&
-            (
-                needle.isEmpty() ||
-                    device.shownName().contains(needle, true) ||
-                    device.shownSubtitle().contains(needle, true) ||
-                    device.address.contains(needle, true) ||
-                    device.services.any { it.name?.contains(needle, true) == true }
-                )
-    }.sortedWith { a, b ->
-        val near = b.isNearby(now).compareTo(a.isNearby(now))
-        if (near != 0) return@sortedWith near
-        val order = when (sort) {
-            BleSort.SIGNAL -> b.orderRssi.compareTo(a.orderRssi)
-            BleSort.NAME -> a.shownName().compareTo(b.shownName(), ignoreCase = true)
-            BleSort.RECENT -> (b.lastSeen / 10_000).compareTo(a.lastSeen / 10_000)
-        }
-        if (order != 0) order else a.address.compareTo(b.address)
-    }
+    val rows = heard.arranged(now, sort, scope, showOut, needle)
     val watching = WatchList.presentDevices(model.watchedIds, heard, now)
     val state = ble.state
     SpectraScreen(
@@ -169,6 +195,13 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
         },
         refreshing = false,
         onRefresh = { if (state !is DeviceBleScanner.State.Unavailable) ble.start() },
+        searchQuery = query.takeIf { heard.isNotEmpty() },
+        onSearchChange = if (heard.isNotEmpty()) {
+            { query = it }
+        } else {
+            null
+        },
+        searchPlaceholder = tr("Name, company or address"),
         overlay = {
             when {
                 heard.isEmpty() && state is DeviceBleScanner.State.Unavailable -> EmptyState(
@@ -219,16 +252,9 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
             }
         }
         if (heard.isNotEmpty()) {
-            item(key = "search") { SearchField(query, { query = it }, tr("Name, company or address")) }
+            item(key = "sort") { BleSortRow(sort) { sort = it } }
             item(key = "filters") {
-                ChipRow {
-                    ToggleChip(tr("Signal"), sort == BleSort.SIGNAL, { sort = BleSort.SIGNAL })
-                    ToggleChip(tr("Name"), sort == BleSort.NAME, { sort = BleSort.NAME })
-                    ToggleChip(tr("Recently seen"), sort == BleSort.RECENT, { sort = BleSort.RECENT })
-                    ToggleChip(tr("With a name"), scope == BleScope.NAMED, { scope = if (scope == BleScope.NAMED) BleScope.ALL else BleScope.NAMED })
-                    ToggleChip(tr("Connectable"), scope == BleScope.CONNECTABLE, { scope = if (scope == BleScope.CONNECTABLE) BleScope.ALL else BleScope.CONNECTABLE })
-                    ToggleChip(tr("Out of range"), showOut, { showOut = !showOut })
-                }
+                BleFilterRow(scope, { scope = it }, showOut) { showOut = !showOut }
             }
         }
         if (ble.classicInquiry) {

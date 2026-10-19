@@ -11,11 +11,13 @@
 
 #include <M5Cardputer.h>
 #include <ESPmDNS.h>
+#include <HTTPClient.h>
 #include <HWCDC.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
 #include <Update.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <time.h>
 #include <esp_mac.h>
 #include <esp_ota_ops.h>
@@ -181,9 +183,9 @@ static constexpr int kTabCount = 5;
 static constexpr int kTabLink = 4;
 static const char *kMenuNames[] = {"WiFi", "LAN", "BLE", "LoRa", "Join"};
 
-// Wi-Fi join for LAN scans. The Cardputer stays unassociated for sniffing, but
-// mDNS needs a real link, so the user can pick a network and type a password
-// here; the credentials persist in NVS and the LAN scan reconnects as needed.
+// Wi-Fi join for LAN scans. The Cardputer stays unassociated until the user
+// picks a network and confirms the password. Credentials persist in NVS so the
+// password can be shown again, but nothing connects on its own.
 enum class WifiUi : uint8_t { None, Pick, Pass, Connecting };
 static WifiUi wifiUi = WifiUi::None;
 static std::vector<String> wifiList;
@@ -224,7 +226,9 @@ static bool wifiInputSeeded = false;
 
 static uint16_t lastStationCount = 0;
 static uint16_t lastProbeCount = 0;
-static bool uiDirty = true;
+// Written from the internet-check task as well as loop(), so a cached read
+// would miss the result.
+static volatile bool uiDirty = true;
 
 // Scan and OTA both want the radio and the flash. The mux only covers the
 // flag hand-off; the scan itself runs outside it.
@@ -1884,37 +1888,13 @@ static void loadWifiCreds() {
   }
 }
 
-// Brings the stored network up, blocking up to timeoutMs. Promiscuous sniffing
-// hops channels and drops any association, so the link is re-established here
-// on demand rather than kept alive.
-static bool ensureWifiLink(uint32_t timeoutMs) {
-  if (WiFi.status() == WL_CONNECTED) {
-    return true;
-  }
-  if (!wifiHaveCreds) {
-    return false;
-  }
-  WiFi.begin(wifiSsid, wifiPass);
-  const uint32_t until = millis() + timeoutMs;
-  while (WiFi.status() != WL_CONNECTED && static_cast<int32_t>(millis() - until) < 0) {
-    delay(100);
-  }
-  return WiFi.status() == WL_CONNECTED;
-}
-
 static void runLanScan() {
   keptLan.clear();
   lanNote[0] = '\0';
   if (WiFi.status() != WL_CONNECTED) {
-    if (wifiHaveCreds) {
-      drawStatus("Wi-Fi link...");
-      ensureWifiLink(6000);
-    }
-    if (WiFi.status() != WL_CONNECTED) {
-      snprintf(lanNote, sizeof(lanNote), wifiHaveCreds ? "link failed" : "no Wi-Fi");
-      uiDirty = true;
-      return;
-    }
+    snprintf(lanNote, sizeof(lanNote), "no Wi-Fi");
+    uiDirty = true;
+    return;
   }
   drawStatus("Scanning LAN...");
   if (!MDNS.begin("spectra")) {
@@ -2808,16 +2788,11 @@ static void handleWifiKeys() {
       const char *stored = knownPassword(wifiSsid);
       if (stored != nullptr) {
         snprintf(wifiPass, sizeof(wifiPass), "%s", stored);
-        wifiPassLen = static_cast<uint8_t>(strlen(wifiPass));
-        WiFi.begin(wifiSsid, wifiPass);
-        wifiConnectUntil = millis() + 12000;
-        snprintf(wifiMsg, sizeof(wifiMsg), "Connecting...");
-        wifiUi = WifiUi::Connecting;
       } else {
         wifiPass[0] = '\0';
-        wifiPassLen = 0;
-        wifiUi = WifiUi::Pass;
       }
+      wifiPassLen = static_cast<uint8_t>(strlen(wifiPass));
+      wifiUi = WifiUi::Pass;
       uiDirty = true;
     }
   } else if (wifiUi == WifiUi::Pass) {
@@ -2859,6 +2834,129 @@ static void handleWifiKeys() {
   prevWord.assign(keys.word.begin(), keys.word.end());
 }
 
+// One look at Cloudflare's trace after the user joins: the request only
+// succeeds with a route to the internet, and the body names the address the
+// network is seen as from outside.
+enum class NetCheck : uint8_t { Idle, Checking, Ok, Fail };
+static volatile NetCheck netCheck = NetCheck::Idle;
+static char publicLine[40] = "";
+static volatile uint8_t netEpoch = 0;
+static TaskHandle_t netTask = nullptr;
+
+static void copyTraceField(const String &body, const char *key, char *out, size_t outLen) {
+  out[0] = '\0';
+  if (outLen == 0) {
+    return;
+  }
+  const int at = body.indexOf(key);
+  if (at < 0) {
+    return;
+  }
+  const int start = at + static_cast<int>(strlen(key));
+  int end = start;
+  while (end < body.length()) {
+    const char c = body.charAt(end);
+    if (c == '\n' || c == '\r') {
+      break;
+    }
+    ++end;
+  }
+  size_t n = static_cast<size_t>(end - start);
+  if (n >= outLen) {
+    n = outLen - 1;
+  }
+  memcpy(out, body.c_str() + start, n);
+  out[n] = '\0';
+}
+
+static void netTaskMain(void *) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    const uint8_t epoch = netEpoch;
+    if (WiFi.status() != WL_CONNECTED) {
+      continue;
+    }
+    char line[40] = "";
+    bool ok = false;
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    http.setConnectTimeout(4000);
+    http.setTimeout(4000);
+    if (http.begin(client, "https://1.1.1.1/cdn-cgi/trace")) {
+      const int code = http.GET();
+      if (code == 200) {
+        const String body = http.getString();
+        char ip[40] = "";
+        char loc[8] = "";
+        copyTraceField(body, "ip=", ip, sizeof(ip));
+        copyTraceField(body, "loc=", loc, sizeof(loc));
+        if (ip[0] != '\0') {
+          if (loc[0] != '\0') {
+            snprintf(line, sizeof(line), "%s %s", ip, loc);
+          } else {
+            snprintf(line, sizeof(line), "%s", ip);
+          }
+          ok = true;
+        }
+      }
+      http.end();
+    }
+    if (epoch != netEpoch || WiFi.status() != WL_CONNECTED) {
+      continue;
+    }
+    if (ok) {
+      snprintf(publicLine, sizeof(publicLine), "%s", line);
+      netCheck = NetCheck::Ok;
+    } else {
+      publicLine[0] = '\0';
+      netCheck = NetCheck::Fail;
+    }
+    uiDirty = true;
+  }
+}
+
+static void bumpNetEpoch() {
+  uint8_t next = static_cast<uint8_t>(netEpoch + 1);
+  if (next == 0) {
+    next = 1;
+  }
+  netEpoch = next;
+}
+
+static void startNetCheck() {
+  bumpNetEpoch();
+  publicLine[0] = '\0';
+  netCheck = NetCheck::Checking;
+  uiDirty = true;
+  if (netTask == nullptr) {
+    xTaskCreatePinnedToCore(netTaskMain, "net", 16384, nullptr, 1, &netTask, 0);
+  }
+  if (netTask != nullptr) {
+    xTaskNotifyGive(netTask);
+  } else {
+    netCheck = NetCheck::Fail;
+  }
+}
+
+static void dropNetCheck() {
+  bumpNetEpoch();
+  netCheck = NetCheck::Idle;
+  publicLine[0] = '\0';
+}
+
+static bool ssidSeenNow(const char *ssid) {
+  if (ssid == nullptr || ssid[0] == '\0') {
+    return false;
+  }
+  for (const KeptWifi &ap : keptWifi) {
+    if (std::strcmp(ap.ssid, ssid) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Watches a pending connection and reports the outcome.
 static void serviceWifiUi() {
   if (wifiUi != WifiUi::Connecting) {
@@ -2868,6 +2966,7 @@ static void serviceWifiUi() {
     rememberWifi(wifiSsid, wifiPass);
     wifiUi = WifiUi::None;
     showBanner("Wi-Fi OK");
+    startNetCheck();
     uiDirty = true;
   } else if (static_cast<int32_t>(millis() - wifiConnectUntil) >= 0) {
     snprintf(wifiMsg, sizeof(wifiMsg), "Failed, try again");
@@ -2926,13 +3025,11 @@ static void drawLinkTab() {
     d.print(ssidLine);
     d.setCursor(4, kListTop + 16);
     d.print("Pass ");
-    char masked[34];
-    const uint8_t dots = wifiPassLen < 32 ? wifiPassLen : 32;
-    for (uint8_t i = 0; i < dots; ++i) {
-      masked[i] = '*';
+    const char *shown = wifiPass;
+    if (wifiPassLen > 33) {
+      shown = wifiPass + (wifiPassLen - 33);
     }
-    masked[dots] = '\0';
-    d.print(masked);
+    d.print(shown);
     d.print("_");
     return;
   }
@@ -2948,10 +3045,23 @@ static void drawLinkTab() {
     d.setCursor(4, kListTop + 14);
     d.print(WiFi.localIP().toString().c_str());
     d.setCursor(4, kListTop + 28);
+    if (netCheck == NetCheck::Checking) {
+      d.setTextColor(TFT_YELLOW, TFT_BLACK);
+      d.print("Checking internet...");
+    } else if (netCheck == NetCheck::Ok) {
+      d.setTextColor(TFT_WHITE, TFT_BLACK);
+      d.print(publicLine);
+    } else if (netCheck == NetCheck::Fail) {
+      d.setTextColor(TFT_ORANGE, TFT_BLACK);
+      d.print("No internet");
+    }
+    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    d.setCursor(4, kListTop + 42);
     d.print("Btn  disconnect");
     return;
   }
-  d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  const bool seen = wifiHaveCreds && ssidSeenNow(wifiSsid);
+  d.setTextColor(seen ? TFT_WHITE : TFT_DARKGREY, TFT_BLACK);
   d.print(wifiHaveCreds ? wifiSsid : "No network");
 }
 
@@ -3045,6 +3155,7 @@ static void handleSideButton() {
       WiFi.disconnect(false, false);
       WiFi.mode(WIFI_STA);
       wifiUi = WifiUi::None;
+      dropNetCheck();
       showBanner("Wi-Fi off");
       uiDirty = true;
     }
@@ -3100,10 +3211,6 @@ void setup() {
   loadStored();
   loadWifiCreds();
   updateInfo();
-  if (wifiHaveCreds) {
-    // Bring the saved network up in the background so the LAN scan is ready.
-    WiFi.begin(wifiSsid, wifiPass);
-  }
   setupWatchdog();
   uiDirty = true;
 }

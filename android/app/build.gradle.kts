@@ -1,3 +1,6 @@
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -20,6 +23,8 @@ android {
     // the top-level data/ directory, loaded from the classpath as spectra/*.tsv.
     // App-only strings stay under src/main/resources.
     sourceSets["main"].resources.srcDir("../../data")
+    // spectra-flash.zip, packed from the last pio build when that output exists.
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/flashAssets"))
 
     buildTypes {
         release {
@@ -72,4 +77,73 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // HistoryCodec uses org.json, which is only a stub in local unit tests.
     testImplementation("org.json:json:20240303")
+}
+
+// A blank ESP32-S3 needs the bootloader and partition table, not just firmware.bin.
+// The zip is an asset when the last `pio run` output is on disk; otherwise the
+// app still builds and the flash screen asks for a bundle.
+val flashAssets = layout.buildDirectory.dir("generated/flashAssets")
+
+tasks.register("packFlashBundle") {
+    val built = rootProject.file("../firmware/.pio/build/m5stack-cardputer-adv")
+    inputs.files(
+        built.resolve("bootloader.bin"),
+        built.resolve("partitions.bin"),
+        built.resolve("firmware.bin"),
+    ).optional()
+    outputs.dir(flashAssets)
+    doLast {
+        val dir = flashAssets.get().asFile
+        dir.mkdirs()
+        val zipFile = dir.resolve("spectra-flash.zip")
+        val bootloader = built.resolve("bootloader.bin")
+        val partitions = built.resolve("partitions.bin")
+        val firmware = built.resolve("firmware.bin")
+        val otadata = listOf(
+            built.resolve("boot_app0.bin"),
+            file("${System.getProperty("user.home")}/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"),
+        ).firstOrNull { it.isFile }
+        if (!bootloader.isFile || !partitions.isFile || !firmware.isFile || otadata == null) {
+            zipFile.delete()
+            return@doLast
+        }
+        val table = partitions.readBytes()
+        val otadataOffset = partitionOffset(table, "otadata") ?: 0xe000L
+        val appOffset = partitionOffset(table, "app0") ?: 0x10000L
+        val manifest = """{"chip":"esp32s3","flashSize":8388608,"files":[{"offset":0,"name":"bootloader.bin"},{"offset":32768,"name":"partitions.bin"},{"offset":$otadataOffset,"name":"boot_app0.bin"},{"offset":$appOffset,"name":"firmware.bin"}]}"""
+        ZipOutputStream(zipFile.outputStream()).use { zip ->
+            fun put(name: String, bytes: ByteArray) {
+                zip.putNextEntry(ZipEntry(name))
+                zip.write(bytes)
+                zip.closeEntry()
+            }
+            put("flash.json", manifest.toByteArray())
+            put("bootloader.bin", bootloader.readBytes())
+            put("partitions.bin", partitions.readBytes())
+            put("boot_app0.bin", otadata.readBytes())
+            put("firmware.bin", firmware.readBytes())
+        }
+    }
+}
+
+tasks.matching { it.name == "preBuild" || (it.name.startsWith("merge") && it.name.endsWith("Assets")) }.configureEach {
+    dependsOn("packFlashBundle")
+}
+
+/** Offset of a named entry in an ESP-IDF partition table. */
+fun partitionOffset(table: ByteArray, label: String): Long? {
+    var index = 0
+    while (index + 32 <= table.size) {
+        val magic = (table[index].toInt() and 0xFF) or ((table[index + 1].toInt() and 0xFF) shl 8)
+        if (magic == 0xFFFF) return null
+        if (magic != 0x50AA) return null
+        val offset = (table[index + 4].toLong() and 0xFF) or
+            ((table[index + 5].toLong() and 0xFF) shl 8) or
+            ((table[index + 6].toLong() and 0xFF) shl 16) or
+            ((table[index + 7].toLong() and 0xFF) shl 24)
+        val name = String(table, index + 12, 16, Charsets.UTF_8).substringBefore('\u0000')
+        if (name == label) return offset
+        index += 32
+    }
+    return null
 }

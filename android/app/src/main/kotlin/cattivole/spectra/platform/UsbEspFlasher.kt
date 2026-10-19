@@ -1,0 +1,331 @@
+package cattivole.spectra.platform
+
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbConstants
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbDeviceConnection
+import android.hardware.usb.UsbEndpoint
+import android.hardware.usb.UsbInterface
+import android.hardware.usb.UsbManager
+import android.os.Build
+import cattivole.spectra.core.EspFlashException
+import cattivole.spectra.core.EspFlashFailure
+import cattivole.spectra.core.EspFlashProgress
+import cattivole.spectra.core.EspFlashSession
+import cattivole.spectra.core.EspPipe
+import cattivole.spectra.core.EspReset
+import cattivole.spectra.core.FlashBundle
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
+
+/**
+ * Finds an ESP32-S3 in ROM download mode on the phone's USB port and writes a
+ * flash bundle to it. A blank chip enumerates on its own. One that is already
+ * running firmware has to be held in download mode with the G0 button.
+ */
+class UsbEspFlasher(context: Context) {
+    data class Board(val id: Int, val title: String, val port: String, val kind: EspReset.Kind)
+
+    private val app = context.applicationContext
+    private val usb = app.getSystemService(UsbManager::class.java)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, _ -> },
+    )
+    private val listeners = mutableListOf<() -> Unit>()
+    private var job: Job? = null
+    private var session: EspFlashSession? = null
+    private var pending: Pair<Int, FlashBundle.Image>? = null
+
+    var boards: List<Board> = emptyList()
+        private set
+    var progress: EspFlashProgress? = null
+        private set
+    var bundled: FlashBundle.Image? = null
+        private set
+    var bundledKnown = false
+        private set
+    var chosen: FlashBundle.Image? = null
+        private set
+    var chosenName: String? = null
+        private set
+
+    val image: FlashBundle.Image? get() = chosen ?: bundled
+
+    private val receiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                UsbManager.ACTION_USB_DEVICE_ATTACHED, UsbManager.ACTION_USB_DEVICE_DETACHED -> refresh()
+                ACTION_USB_PERMISSION -> {
+                    val device = deviceExtra(intent)
+                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    val waiting = pending
+                    pending = null
+                    if (device != null && granted && waiting != null && waiting.first == device.deviceId) {
+                        start(device, waiting.second)
+                    } else if (waiting != null) {
+                        publish { progress = EspFlashProgress(EspFlashProgress.Stage.Failed(EspFlashFailure.PERMISSION)) }
+                    }
+                }
+            }
+        }
+    }
+
+    init {
+        val filter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            addAction(ACTION_USB_PERMISSION)
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            app.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            app.registerReceiver(receiver, filter)
+        }
+        scope.launch(Dispatchers.IO) {
+            val loaded = runCatching {
+                app.assets.open("spectra-flash.zip").use { FlashBundle.load(it.readBytes()) }
+            }.getOrNull()
+            publish {
+                bundled = (loaded as? FlashBundle.Load.Ready)?.image
+                bundledKnown = true
+            }
+        }
+        refresh()
+    }
+
+    fun observe(listener: () -> Unit): () -> Unit {
+        listeners.add(listener)
+        return { listeners.remove(listener) }
+    }
+
+    fun refresh() {
+        val found = usb?.deviceList?.values.orEmpty().mapNotNull { board(it) }.sortedBy { it.id }
+        if (found == boards) return
+        publish { boards = found }
+    }
+
+    fun failed(failure: EspFlashFailure) {
+        publish { progress = EspFlashProgress(EspFlashProgress.Stage.Failed(failure)) }
+    }
+
+    fun choose(name: String, bytes: ByteArray) {
+        when (val loaded = FlashBundle.load(bytes)) {
+            is FlashBundle.Load.Ready -> publish {
+                chosen = loaded.image
+                chosenName = name
+                progress = null
+            }
+            is FlashBundle.Load.Rejected -> publish {
+                progress = EspFlashProgress(EspFlashProgress.Stage.Failed(loaded.failure))
+            }
+        }
+    }
+
+    fun useBundled() {
+        publish {
+            chosen = null
+            chosenName = null
+        }
+    }
+
+    fun flash(boardId: Int) {
+        if (progress?.isRunning == true) return
+        val image = image
+        if (image == null) {
+            publish { progress = EspFlashProgress(EspFlashProgress.Stage.Failed(EspFlashFailure.NO_IMAGE)) }
+            return
+        }
+        val device = usb?.deviceList?.values?.firstOrNull { it.deviceId == boardId } ?: run {
+            refresh()
+            return
+        }
+        val manager = usb ?: return
+        if (!manager.hasPermission(device)) {
+            pending = boardId to image
+            val flags = if (Build.VERSION.SDK_INT >= 31) {
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val intent = PendingIntent.getBroadcast(
+                app,
+                0,
+                Intent(ACTION_USB_PERMISSION).setPackage(app.packageName),
+                flags,
+            )
+            manager.requestPermission(device, intent)
+            return
+        }
+        start(device, image)
+    }
+
+    fun cancel() {
+        session?.cancelled = true
+        job?.cancel()
+    }
+
+    fun dismiss() {
+        if (progress?.isRunning == true) return
+        publish { progress = null }
+    }
+
+    fun close() {
+        cancel()
+        runCatching { app.unregisterReceiver(receiver) }
+    }
+
+    private fun start(device: UsbDevice, image: FlashBundle.Image) {
+        job?.cancel()
+        val kind = if (device.vendorId == ESPRESSIF) EspReset.Kind.USB_JTAG else EspReset.Kind.UART
+        publish { progress = EspFlashProgress(EspFlashProgress.Stage.Preparing) }
+        job = scope.launch {
+            val pipe = withContext(Dispatchers.IO) { open(device) }
+            if (pipe == null) {
+                publish { progress = EspFlashProgress(EspFlashProgress.Stage.Failed(EspFlashFailure.OPEN_FAILED)) }
+                return@launch
+            }
+            val flashing = EspFlashSession(pipe)
+            session = flashing
+            try {
+                withContext(Dispatchers.IO) {
+                    flashing.flash(image, kind) { stage ->
+                        publish { progress = EspFlashProgress(stage) }
+                    }
+                }
+            } catch (e: EspFlashException) {
+                publish { progress = EspFlashProgress(EspFlashProgress.Stage.Failed(e.failure)) }
+            } catch (e: CancellationException) {
+                publish { progress = EspFlashProgress(EspFlashProgress.Stage.Failed(EspFlashFailure.CANCELLED)) }
+                throw e
+            } catch (_: IOException) {
+                publish { progress = EspFlashProgress(EspFlashProgress.Stage.Failed(EspFlashFailure.LINK_DROPPED)) }
+            } finally {
+                session = null
+                withContext(Dispatchers.IO) { runCatching { pipe.close() } }
+            }
+        }
+    }
+
+    private fun open(device: UsbDevice): CdcPipe? {
+        val manager = usb ?: return null
+        val connection = manager.openDevice(device) ?: return null
+        val comm = interfaces(device).firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_COMM }
+        val data = interfaces(device).firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_CDC_DATA }
+            ?: interfaces(device).firstOrNull { iface ->
+                iface.interfaceClass == UsbConstants.USB_CLASS_VENDOR_SPEC && bulkIn(iface) != null && bulkOut(iface) != null
+            }
+        if (data == null) {
+            connection.close()
+            return null
+        }
+        if (comm != null && !connection.claimInterface(comm, true)) {
+            connection.close()
+            return null
+        }
+        if (!connection.claimInterface(data, true)) {
+            if (comm != null) connection.releaseInterface(comm)
+            connection.close()
+            return null
+        }
+        val input = bulkIn(data)
+        val output = bulkOut(data)
+        if (input == null || output == null) {
+            connection.close()
+            return null
+        }
+        val control = comm ?: data
+        val coding = byteArrayOf(0x00, 0xC2.toByte(), 0x01, 0x00, 0, 0, 8)
+        connection.controlTransfer(0x21, 0x20, 0, control.id, coding, coding.size, 300)
+        return CdcPipe(connection, data, comm, input, output, control)
+    }
+
+    private fun board(device: UsbDevice): Board? {
+        if (device.vendorId !in VENDORS) return null
+        if (interfaces(device).none { bulkIn(it) != null && bulkOut(it) != null }) return null
+        val title = runCatching { device.productName }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: if (device.vendorId == ESPRESSIF) "ESP32-S3" else "USB serial"
+        val port = "%04X:%04X".format(device.vendorId, device.productId)
+        val kind = if (device.vendorId == ESPRESSIF) EspReset.Kind.USB_JTAG else EspReset.Kind.UART
+        return Board(device.deviceId, title, port, kind)
+    }
+
+    private fun publish(block: () -> Unit) {
+        scope.launch {
+            block()
+            listeners.toList().forEach { it() }
+        }
+    }
+
+    private class CdcPipe(
+        private val connection: UsbDeviceConnection,
+        private val data: UsbInterface,
+        private val comm: UsbInterface?,
+        private val input: UsbEndpoint,
+        private val output: UsbEndpoint,
+        private val control: UsbInterface,
+    ) : EspPipe {
+        private val buffer = ByteArray(16 * 1024)
+
+        override fun write(bytes: ByteArray) {
+            var offset = 0
+            while (offset < bytes.size) {
+                val wrote = connection.bulkTransfer(output, bytes, offset, bytes.size - offset, 2_000)
+                if (wrote <= 0) throw IOException("usb write")
+                offset += wrote
+            }
+        }
+
+        override fun read(timeoutMs: Long): ByteArray {
+            val read = connection.bulkTransfer(input, buffer, buffer.size, timeoutMs.toInt().coerceIn(1, 5_000))
+            if (read <= 0) return ByteArray(0)
+            return buffer.copyOf(read)
+        }
+
+        override fun setLines(dtr: Boolean, rts: Boolean) {
+            val value = (if (dtr) 1 else 0) or (if (rts) 2 else 0)
+            connection.controlTransfer(0x21, 0x22, value, control.id, null, 0, 200)
+        }
+
+        override fun close() {
+            runCatching { connection.releaseInterface(data) }
+            if (comm != null) runCatching { connection.releaseInterface(comm) }
+            connection.close()
+        }
+    }
+
+    private companion object {
+        const val ACTION_USB_PERMISSION = "cattivole.spectra.USB_PERMISSION"
+        const val ESPRESSIF = 0x303A
+        val VENDORS = setOf(ESPRESSIF, 0x1A86, 0x10C4, 0x0403)
+
+        fun interfaces(device: UsbDevice) = (0 until device.interfaceCount).map { device.getInterface(it) }
+
+        fun bulkIn(iface: UsbInterface) = endpoint(iface, UsbConstants.USB_DIR_IN)
+
+        fun bulkOut(iface: UsbInterface) = endpoint(iface, UsbConstants.USB_DIR_OUT)
+
+        fun endpoint(iface: UsbInterface, direction: Int): UsbEndpoint? =
+            (0 until iface.endpointCount).map { iface.getEndpoint(it) }.firstOrNull {
+                it.direction == direction && it.type == UsbConstants.USB_ENDPOINT_XFER_BULK
+            }
+
+        fun deviceExtra(intent: Intent): UsbDevice? =
+            if (Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+            }
+    }
+}

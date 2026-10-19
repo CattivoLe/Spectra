@@ -26,17 +26,22 @@ The Cardputer advertises as `Spectra-XXXX`. Its screen shows the link state
 and the strongest networks. Fn and the horizontal arrows move between Wi-Fi,
 LAN, BLE, LoRa and Join; the vertical arrows scroll the list. **Enter** scans.
 It works on its own: scans are saved to flash with the side button and uploaded
-the next time a phone connects. **Join** picks a network and takes a password,
-so the on-device LAN scan has a link to walk; the credentials are remembered
-and reconnect on their own.
+the next time a phone connects. **Join** picks a network and shows the password
+in the clear; nothing connects until Enter confirms it. The credentials are
+remembered so the password comes back next time. A LAN scan walks the link
+only while it is already up.
 
 Firmware 0.6.0 and newer can also be installed from the Sensor tab: **Update
 firmware**, then pick `firmware.bin` from `pio run` — the same app image
 Launcher takes, not a merged one. The phone sends it over Bluetooth; the
-Cardputer checks the image and reboots into it. Older firmware has to be
-flashed once over USB or from the SD card before that works. The partition
-table (`default_8MB.csv`) has two app slots, which is what makes the swap
-possible.
+Cardputer checks the image and reboots into it. A blank chip, or older
+firmware, has to be flashed once before that works. On Android, **Flash over
+USB** on the Sensor tab writes the bootloader, partition table and app from
+the phone: a blank ESP32-S3 is already in the ROM bootloader, and a chip that
+is running something else needs G0 held while reset is tapped. A computer
+(`pio run -t upload`) or the SD-card launcher still work. The partition
+table (`default_8MB.csv`) has two app slots, which is what makes the later
+Bluetooth swap possible.
 
 The ESP32-S3 hears 2.4 GHz only.
 
@@ -74,6 +79,12 @@ cd android
 
 Open `android/` in Android Studio. Requires Android 8 or newer. The package
 id is `cattivole.spectra`.
+
+If `firmware/.pio/build/m5stack-cardputer-adv/` is present, the Android build
+packs `bootloader.bin`, `partitions.bin`, `boot_app0.bin` and `firmware.bin`
+into `spectra-flash.zip` and ships it in the app. **Flash over USB** uses that
+bundle. The same zip can be picked by hand: `flash.json` lists each file and
+its offset (`0`, `32768`, the otadata offset, the app offset).
 
 The phone radio is a second source of networks, which iOS does not allow.
 It hears 5 GHz and 6 GHz (the Cardputer is 2.4 GHz only) and it is throttled

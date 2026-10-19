@@ -9,7 +9,7 @@ struct NetworksView: View {
     @State private var search = ""
     @State private var showChannels = false
     @AppStorage("networkSort") private var sort: Sort = .signal
-    @AppStorage("showOutOfRange") private var showOutOfRange = true
+    @AppStorage("showOutOfRange") private var showOutOfRange = false
 
     enum Sort: String, CaseIterable, Identifiable {
         case signal, name, channel
@@ -367,10 +367,22 @@ struct NetworkRow: View {
                 Group {
                     if network.wasInLastScan {
                         Text("Ch \(reading.channel) · \(reading.auth.name) · \(reading.capabilities.generation)")
-                        if !network.clients.isEmpty {
-                            HStack(spacing: 4) {
-                                Text("👤 \(network.clients.count)")
-                                Text("\(network.traffic.map { "↕ \($0.formattedBytes)" } ?? "")")
+                        if !network.clients.isEmpty || network.traffic != nil {
+                            HStack(spacing: 8) {
+                                if !network.clients.isEmpty {
+                                    HStack(spacing: 2) {
+                                        Image(systemName: "person")
+                                            .imageScale(.small)
+                                        Text("\(network.clients.count)")
+                                    }
+                                }
+                                if let traffic = network.traffic {
+                                    HStack(spacing: 2) {
+                                        Image(systemName: "arrow.up.and.down")
+                                            .imageScale(.small)
+                                        Text(traffic.formattedBytes)
+                                    }
+                                }
                             }
                         }
                     } else if network.isInRange {

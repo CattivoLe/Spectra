@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -23,7 +24,9 @@ import androidx.compose.material.icons.rounded.FileOpen
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.GppBad
+import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.Memory
@@ -57,7 +60,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
+import cattivole.spectra.core.Band
 import cattivole.spectra.core.HistoryEntry
+import cattivole.spectra.core.hasStoredPassword
+import cattivole.spectra.core.passesWifiFilter
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -85,7 +91,10 @@ internal fun sourceName(source: String): String = when (source) {
 }
 
 /** How the saved sessions are grouped on screen. */
-private enum class Grouping { DATE, PLACE }
+private enum class Grouping { DATE, PLACE, LIST }
+
+/** Order of sessions inside a group, and of the flat list. */
+private enum class HistorySort { NEWEST, OLDEST, NAME, COUNT }
 
 /** One collapsible group of sessions: a day, or a place. */
 private class HistoryGroup(
@@ -111,6 +120,8 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     var confirmClear by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var grouping by remember { mutableStateOf(Grouping.DATE) }
+    var sort by rememberSaveable { mutableStateOf(HistorySort.NEWEST) }
+    var query by rememberSaveable { mutableStateOf("") }
     var importedShelf by rememberSaveable { mutableStateOf(false) }
     // Today starts open. Every other day stays folded until it is tapped.
     var expanded by remember { mutableStateOf(setOf(todayGroupId())) }
@@ -162,11 +173,14 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
         )
     }
     val shown = history.entries.filter { (it.importedFrom != null) == importedShelf }
+    val needle = query.trim()
+    val matched = shown.filter { it.matchesQuery(needle) }.ordered(sort)
     val groups = when (grouping) {
-        Grouping.DATE -> byDate(shown)
-        Grouping.PLACE -> byPlace(shown)
+        Grouping.DATE -> byDate(matched)
+        Grouping.PLACE -> byPlace(matched)
+        Grouping.LIST -> emptyList()
     }
-    val pins = mapPins(shown)
+    val pins = mapPins(matched)
     val showMap = grouping == Grouping.PLACE && pins.isNotEmpty()
     SpectraScreen(
         title = tr("History"),
@@ -195,22 +209,25 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
         },
         fill = if (showMap) {
             {
-                HistoryPlaceMap(shown, onOpen = { nav.history(it) })
+                HistoryPlaceMap(matched, onOpen = { nav.history(it) })
                 Column(Modifier.align(Alignment.TopCenter)) {
-                    ShelfBar(importedShelf) { importedShelf = it }
-                    GroupingBar(grouping) { grouping = it }
+                    HistoryFilters(importedShelf, { importedShelf = it }, grouping, { grouping = it }, sort, { sort = it })
                 }
             }
         } else {
             null
         },
+        searchQuery = query.takeIf { history.entries.isNotEmpty() },
+        onSearchChange = if (history.entries.isNotEmpty()) {
+            { query = it }
+        } else {
+            null
+        },
+        searchPlaceholder = tr("Name, place or address"),
     ) {
         if (!showMap && history.entries.isNotEmpty()) {
-            item(key = "shelf") {
-                ShelfBar(importedShelf) { importedShelf = it }
-            }
-            item(key = "grouping") {
-                GroupingBar(grouping) { grouping = it }
+            item(key = "filters") {
+                HistoryFilters(importedShelf, { importedShelf = it }, grouping, { grouping = it }, sort, { sort = it })
             }
         }
         if (!showMap && history.entries.isNotEmpty() && shown.isEmpty()) {
@@ -221,21 +238,45 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
                 )
             }
         }
+        if (!showMap && shown.isNotEmpty() && matched.isEmpty()) {
+            item(key = "search-empty") {
+                Box(Modifier.fillMaxWidth().padding(top = 36.dp)) {
+                    EmptyState(
+                        Icons.Rounded.SearchOff,
+                        tr("No results"),
+                        tr("Nothing matches “%s”.", needle),
+                    )
+                }
+            }
+        }
+        if (!showMap && grouping == Grouping.LIST && matched.isNotEmpty()) {
+            cardSection(
+                matched,
+                header = tr("Saved: %d", matched.size),
+                headerIcon = Icons.AutoMirrored.Rounded.ViewList,
+                key = { it.id },
+                sectionKey = "list",
+                dividerInset = 70.dp,
+            ) { entry ->
+                HistoryRow(
+                    entry,
+                    showPlace = true,
+                    onOpen = { nav.history(entry.id) },
+                    onDelete = { history.delete(entry.id) },
+                )
+            }
+        }
         for (group in groups) {
             val open = group.id in expanded
-            item(key = "head-${group.id}", contentType = "section-header") {
-                GroupHeader(
-                    group.label,
-                    group.kinds,
-                    group.itemCount,
-                    open,
-                    modifier = Modifier.animateItem(),
-                ) { expanded = if (open) expanded - group.id else expanded + group.id }
-            }
+            val toggle = { expanded = if (open) expanded - group.id else expanded + group.id }
+            val icon = if (grouping == Grouping.PLACE) Icons.Rounded.Place else Icons.Rounded.CalendarMonth
             if (open) {
                 cardSection(
                     group.entries,
-                    header = null,
+                    header = group.label,
+                    headerIcon = icon,
+                    headerTrailing = { GroupTrailing(group.kinds, group.itemCount, expanded = true) },
+                    onHeaderClick = toggle,
                     key = { it.id },
                     sectionKey = group.id,
                     dividerInset = 70.dp,
@@ -247,6 +288,10 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
                         onDelete = { history.delete(entry.id) },
                     )
                 }
+            } else {
+                item(key = "head-${group.id}", contentType = "section-header") {
+                    GroupHeader(group.label, icon, group.kinds, group.itemCount, expanded = false, Modifier.animateItem(), toggle)
+                }
             }
         }
         if (shown.isNotEmpty()) {
@@ -255,26 +300,44 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     }
 }
 
+/** Sort on one sideways row, shelf and grouping on the row under it. */
 @Composable
-private fun ShelfBar(imported: Boolean, modifier: Modifier = Modifier, onSelect: (Boolean) -> Unit) {
-    ChipRow(modifier) {
-        ToggleChip(tr("On this phone"), !imported, { onSelect(false) })
-        ToggleChip(tr("Imported"), imported, { onSelect(true) })
+private fun HistoryFilters(
+    imported: Boolean,
+    onImported: (Boolean) -> Unit,
+    grouping: Grouping,
+    onGrouping: (Grouping) -> Unit,
+    sort: HistorySort,
+    onSort: (HistorySort) -> Unit,
+) {
+    Column {
+        ChipRow(contentPadding = SortChipPadding) {
+            ToggleChip(tr("Newest"), sort == HistorySort.NEWEST, { onSort(HistorySort.NEWEST) })
+            ToggleChip(tr("Oldest"), sort == HistorySort.OLDEST, { onSort(HistorySort.OLDEST) })
+            ToggleChip(tr("Name"), sort == HistorySort.NAME, { onSort(HistorySort.NAME) })
+            ToggleChip(tr("Most found"), sort == HistorySort.COUNT, { onSort(HistorySort.COUNT) })
+        }
+        ChipRow(contentPadding = FilterChipPadding) {
+            ToggleChip(tr("On this phone"), !imported, { onImported(false) })
+            ToggleChip(tr("Imported"), imported, { onImported(true) })
+            ToggleChip(tr("By date"), grouping == Grouping.DATE, { onGrouping(Grouping.DATE) }, Icons.Rounded.CalendarMonth)
+            ToggleChip(tr("By place"), grouping == Grouping.PLACE, { onGrouping(Grouping.PLACE) }, Icons.Rounded.Place)
+            ToggleChip(tr("All"), grouping == Grouping.LIST, { onGrouping(Grouping.LIST) }, Icons.AutoMirrored.Rounded.ViewList)
+        }
     }
 }
 
-@Composable
-private fun GroupingBar(grouping: Grouping, modifier: Modifier = Modifier, onSelect: (Grouping) -> Unit) {
-    ChipRow(modifier) {
-        ToggleChip(tr("By date"), grouping == Grouping.DATE, { onSelect(Grouping.DATE) }, Icons.Rounded.CalendarMonth)
-        ToggleChip(tr("By place"), grouping == Grouping.PLACE, { onSelect(Grouping.PLACE) }, Icons.Rounded.Place)
-    }
+private fun List<HistoryEntry>.ordered(sort: HistorySort): List<HistoryEntry> = when (sort) {
+    HistorySort.NEWEST -> sortedByDescending { it.savedAt }
+    HistorySort.OLDEST -> sortedBy { it.savedAt }
+    HistorySort.NAME -> sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.placeLabel ?: it.rowTitle })
+    HistorySort.COUNT -> sortedByDescending { it.itemCount }
 }
 
 private fun byDate(entries: List<HistoryEntry>): List<HistoryGroup> {
     val buckets = entries.groupBy { startOfDay(it.savedAt) }
     return buckets.entries.sortedByDescending { it.key }.map { (day, rows) ->
-        HistoryGroup("date:$day", dayLabel(day), rows.sortedByDescending { it.savedAt })
+        HistoryGroup("date:$day", dayLabel(day), rows)
     }
 }
 
@@ -285,7 +348,7 @@ private fun byPlace(entries: List<HistoryEntry>): List<HistoryGroup> {
             HistoryGroup(
                 "place:$label",
                 label.ifEmpty { tr("No location") },
-                rows.sortedByDescending { it.savedAt },
+                rows,
             )
         }
         .sortedByDescending { it.entries.firstOrNull()?.savedAt ?: 0 }
@@ -310,10 +373,11 @@ private fun dayLabel(day: Long): String {
     }
 }
 
-/** A collapsible section header with the group's name and the icons of the scan types inside it. */
+/** A collapsible section header, the same heading a Wi-Fi card uses, with the group's scan types. */
 @Composable
 private fun GroupHeader(
     label: String,
+    icon: ImageVector,
     kinds: List<String>,
     count: Int,
     expanded: Boolean,
@@ -323,25 +387,29 @@ private fun GroupHeader(
     SectionHeader(
         label,
         modifier = modifier.clickable(onClick = onToggle),
-        trailing = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                for (kind in kinds) {
-                    Icon(kindIcon(kind), contentDescription = null, tint = kindTint(kind), modifier = Modifier.size(16.dp))
-                }
-            }
-            Text(
-                "$count",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 6.dp),
-            )
-            Icon(
-                if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
-            )
-        },
+        icon = icon,
+        trailing = { GroupTrailing(kinds, count, expanded) },
+    )
+}
+
+@Composable
+private fun RowScope.GroupTrailing(kinds: List<String>, count: Int, expanded: Boolean) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        for (kind in kinds) {
+            Icon(kindIcon(kind), contentDescription = null, tint = kindTint(kind), modifier = Modifier.size(16.dp))
+        }
+    }
+    Text(
+        "$count",
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 6.dp),
+    )
+    Icon(
+        if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(20.dp),
     )
 }
 
@@ -415,12 +483,61 @@ private fun HistoryRow(entry: HistoryEntry, showPlace: Boolean, onOpen: () -> Un
 @Composable
 fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
     model.generation
+    var query by rememberSaveable { mutableStateOf("") }
+    var wifiSort by rememberSaveable { mutableStateOf(WifiSort.SIGNAL) }
+    var openOnly by rememberSaveable { mutableStateOf(false) }
+    var knownOnly by rememberSaveable { mutableStateOf(false) }
+    var band by rememberSaveable { mutableStateOf<Band?>(null) }
+    var showWifiOut by rememberSaveable { mutableStateOf(false) }
+    var bleSort by rememberSaveable { mutableStateOf(BleSort.SIGNAL) }
+    var bleScope by rememberSaveable { mutableStateOf(BleScope.ALL) }
+    var showBleOut by rememberSaveable { mutableStateOf(false) }
     val entry = model.history.entry(id)
     if (entry == null) {
         SpectraScreen(tr("History"), onBack = nav::back, overlay = {
             EmptyState(Icons.Rounded.History, tr("Gone"), tr("This saved scan is no longer here."))
         }) {}
         return
+    }
+    val needle = query.trim()
+    val knownSsids = model.link.knownSsids()
+    val showWifi = entry.networks.isNotEmpty() || entry.probes.isNotEmpty()
+    val showBle = entry.bluetooth.isNotEmpty()
+    val showKnown = entry.networks.any { it.hasStoredPassword(knownSsids) }
+    val filterKnown = knownOnly && showKnown
+    val networks = entry.networks.filter {
+        it.passesWifiFilter(showWifiOut, openOnly, band, needle, filterKnown, knownSsids)
+    }.sortedForWifi(wifiSort)
+    val probes = entry.probes.filter { it.passesWifiFilter(openOnly, band, needle, filterKnown) }
+    val bands = entry.networks.map { it.latest.band }.toSet()
+    val bleNow = entry.bluetooth.maxOfOrNull { it.lastSeen } ?: entry.savedAt
+    val bluetooth = entry.bluetooth.arranged(bleNow, bleSort, bleScope, showBleOut, needle)
+    val lan = entry.lan.filter { device ->
+        needle.isEmpty() ||
+            device.ipAddress.contains(needle, true) ||
+            device.displayName.contains(needle, true) ||
+            device.macAddress?.text?.contains(needle, true) == true ||
+            device.manufacturer?.contains(needle, true) == true ||
+            device.identity.label.contains(needle, true)
+    }
+    val deauths = entry.deauths.filter { event ->
+        needle.isEmpty() ||
+            event.bssid.text.contains(needle, true) ||
+            event.bssid.vendor()?.contains(needle, true) == true ||
+            event.source.text.contains(needle, true) ||
+            event.target.text.contains(needle, true)
+    }
+    val connections = entry.connections.filter { saved ->
+        if (needle.isEmpty()) return@filter true
+        val report = saved.toReport()
+        statusLabel(saved.status).contains(needle, true) || connectionSummary(report, saved.viaVpn).contains(needle, true)
+    }
+    val searchable = showWifi || showBle || entry.lan.isNotEmpty()
+    val placeholder = when {
+        showWifi && !showBle && entry.lan.isEmpty() -> tr("Name, BSSID or maker")
+        showBle && !showWifi && entry.lan.isEmpty() -> tr("Name, company or address")
+        !showWifi && !showBle -> tr("IP, name or MAC")
+        else -> tr("Name, place or address")
     }
     val who = entry.importedFrom ?: sourceName(entry.source)
     val footer = "$who · ${dateTime(entry.savedAt)}"
@@ -436,7 +553,43 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
                 nav.back()
             }) { Icon(Icons.Rounded.Delete, contentDescription = tr("Delete")) }
         },
+        searchQuery = query.takeIf { searchable },
+        onSearchChange = if (searchable) {
+            { query = it }
+        } else {
+            null
+        },
+        searchPlaceholder = placeholder,
     ) {
+        if (showWifi) {
+            if (showBle) {
+                item(key = "wifi-label") { SectionHeader("Wi‑Fi", icon = Icons.Rounded.Wifi) }
+            }
+            item(key = "wifi-sort") { WifiSortRow(wifiSort) { wifiSort = it } }
+            item(key = "wifi-filters") {
+                WifiFilterRow(
+                    openOnly = openOnly,
+                    onOpenOnly = { openOnly = !openOnly },
+                    showKnown = showKnown,
+                    knownOnly = knownOnly,
+                    onKnownOnly = { knownOnly = !knownOnly },
+                    bands = bands,
+                    band = band,
+                    onBand = { band = it },
+                    showOut = showWifiOut,
+                    onShowOut = { showWifiOut = !showWifiOut },
+                )
+            }
+        }
+        if (showBle) {
+            if (showWifi) {
+                item(key = "ble-label") { SectionHeader("Bluetooth", icon = Icons.Rounded.Bluetooth) }
+            }
+            item(key = "ble-sort") { BleSortRow(bleSort) { bleSort = it } }
+            item(key = "ble-filters") {
+                BleFilterRow(bleScope, { bleScope = it }, showBleOut) { showBleOut = !showBleOut }
+            }
+        }
         val lat = entry.latitude
         val lon = entry.longitude
         if (lat != null && lon != null) {
@@ -467,7 +620,7 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
             return@SpectraScreen
         }
         cardSection(
-            entry.deauths,
+            deauths,
             header = tr("Deauth detected"),
             key = { "d-" + it.id },
             sectionKey = "deauth",
@@ -476,21 +629,28 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
             dividerInset = 70.dp,
         ) { DeauthRow(it) }
         cardSection(
-            entry.networks,
-            header = tr("Networks: %d", entry.networks.size),
+            networks,
+            header = tr("Networks: %d", networks.size),
             key = { "n-" + it.id.text },
             sectionKey = "networks",
             dividerInset = 70.dp,
-        ) { network -> NetworkRow(network, onClick = { nav.network(network.id, entry.id) }, now = entry.savedAt) }
+        ) { network ->
+            NetworkRow(
+                network,
+                onClick = { nav.network(network.id, entry.id) },
+                now = entry.savedAt,
+                known = network.hasStoredPassword(knownSsids),
+            )
+        }
         cardSection(
-            entry.probes,
-            header = tr("Probing: %d", entry.probes.size),
+            probes,
+            header = tr("Probing: %d", probes.size),
             key = { "p-" + it.mac.text },
             sectionKey = "probes",
             dividerInset = 70.dp,
         ) { probe -> ProbeRow(probe, null, onClick = { nav.client(probe.mac, entry.id) }) }
         cardSection(
-            entry.connections,
+            connections,
             header = tr("Connection"),
             key = { "c-${it.checkedAt}" },
             sectionKey = "connection",
@@ -508,19 +668,34 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
             )
         }
         cardSection(
-            entry.lan,
-            header = tr("Devices: %d", entry.lan.size),
+            lan,
+            header = tr("Devices: %d", lan.size),
             key = { "h-" + it.ipAddress },
             sectionKey = "lan",
             dividerInset = 70.dp,
         ) { device -> DeviceRow(device, onClick = { nav.host(device.ipAddress, entry.id) }) }
         cardSection(
-            entry.bluetooth,
-            header = tr("Devices: %d", entry.bluetooth.size),
+            bluetooth,
+            header = tr("Devices: %d", bluetooth.size),
             key = { "b-" + it.address },
             sectionKey = "bluetooth",
             dividerInset = 70.dp,
         ) { device -> BleRow(device, device.lastSeen, onClick = { nav.ble(device.address, entry.id) }) }
+        if (
+            entry.hasRecords &&
+            deauths.isEmpty() && networks.isEmpty() && probes.isEmpty() &&
+            connections.isEmpty() && lan.isEmpty() && bluetooth.isEmpty()
+        ) {
+            item(key = "filtered-empty") {
+                Box(Modifier.fillMaxWidth().padding(top = 36.dp)) {
+                    EmptyState(
+                        Icons.Rounded.SearchOff,
+                        tr("No results"),
+                        if (needle.isNotEmpty()) tr("Nothing matches “%s”.", needle) else tr("Nothing in this filter is nearby."),
+                    )
+                }
+            }
+        }
         item(key = "saved-footer") { SectionFooter(footer) }
     }
 }

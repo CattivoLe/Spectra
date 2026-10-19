@@ -13,6 +13,7 @@ import cattivole.spectra.platform.LanScanner
 import cattivole.spectra.platform.LinkProbe
 import cattivole.spectra.platform.PhoneWifiScanner
 import cattivole.spectra.platform.SensorLink
+import cattivole.spectra.platform.UsbEspFlasher
 import cattivole.spectra.core.HistoryStore
 import cattivole.spectra.core.LinkStatus
 import cattivole.spectra.core.NetworkStore
@@ -28,6 +29,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     val gatt = BleGattClient(app)
     val lan = LanScanner(app)
     val connection = LinkProbe(app, lan)
+    val usb = UsbEspFlasher(app)
 
     var generation by mutableIntStateOf(0)
         private set
@@ -75,6 +77,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
             bump()
             saveFinishedConnection()
         }
+        usb.observe(bump)
         radio.onAdapterChange { ble.availabilityChanged() }
         phone.start()
     }
@@ -122,6 +125,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         ble.resumeIfWanted()
         if (ble.state is cattivole.spectra.platform.DeviceBleScanner.State.Unavailable) ble.availabilityChanged()
         phone.refresh()
+        usb.refresh()
     }
 
     /** The permission dialog closed, or the user came back from Settings. */
@@ -145,6 +149,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         lan.stop()
         connection.stop()
         link.close()
+        usb.close()
         radio.stop()
     }
 

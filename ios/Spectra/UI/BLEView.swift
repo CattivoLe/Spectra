@@ -6,7 +6,7 @@ struct BLEView: View {
     @State private var search = ""
     @AppStorage("bleSort") private var sort: Sort = .signal
     @AppStorage("bleScope") private var scope: Scope = .all
-    @AppStorage("bleShowOutOfRange") private var showOutOfRange = true
+    @AppStorage("bleShowOutOfRange") private var showOutOfRange = false
 
     enum Sort: String, CaseIterable, Identifiable {
         case signal, name, recent

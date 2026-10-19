@@ -29,7 +29,12 @@ import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.Watch
 import androidx.compose.material.icons.rounded.Wifi
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
 import cattivole.spectra.core.AppleAdvertisement
 import cattivole.spectra.core.AuthMode
 import cattivole.spectra.core.BleAdvertisement
@@ -116,9 +121,10 @@ fun LanDevice.icon(): ImageVector {
         "iOS" -> return Icons.Rounded.PhoneIphone
         "iPadOS" -> return Icons.Rounded.TabletAndroid
         "macOS" -> return Icons.Rounded.Laptop
-        "tvOS", "Tizen", "webOS", "Android TV", "Google TV" -> return Icons.Rounded.Tv
+        "tvOS", "Android TV", "Google TV" -> return MediaBox
+        "Tizen", "webOS" -> return Icons.Rounded.Tv
         "watchOS" -> return Icons.Rounded.Watch
-        "Android" -> return if (looksLikeTelevision()) Icons.Rounded.Tv else Icons.Rounded.PhoneAndroid
+        "Android" -> return if (looksLikeMediaPlayer()) MediaBox else Icons.Rounded.PhoneAndroid
         "Windows" -> return Icons.Rounded.DesktopWindows
     }
     when (notable) {
@@ -132,7 +138,8 @@ fun LanDevice.icon(): ImageVector {
         "iphone" in name -> return Icons.Rounded.PhoneIphone
         "ipad" in name -> return Icons.Rounded.TabletAndroid
         "homepod" in name -> return Icons.Rounded.Speaker
-        "tv" in name || "roku" in name || "chromecast" in name || "shield" in name -> return Icons.Rounded.Tv
+        isMediaPlayerName(name) -> return MediaBox
+        "tv" in name -> return Icons.Rounded.Tv
         "echo" in name || "alexa" in name || "sonos" in name || "eversolo" in name -> return Icons.Rounded.Speaker
         "print" in name || "canon" in name || "epson" in name || "brother" in name -> return Icons.Rounded.Print
         "xbox" in name || "playstation" in name || "ps5" in name || "nintendo" in name -> return Icons.Rounded.SportsEsports
@@ -153,18 +160,52 @@ fun LanDevice.icon(): ImageVector {
     }
 }
 
-/** Android TV boxes are often labelled just Android, which would draw a phone. */
-private fun LanDevice.looksLikeTelevision(): Boolean {
-    if (openPorts.any { it.number == 6466 }) return true
-    val title = displayName.lowercase()
-    if (
-        "android tv" in title || "google tv" in title || " tv" in title || title.endsWith("tv") ||
-        "bravia" in title || "chromecast" in title || "shield" in title
+/** A low set-top box, distinct from the television glyph. */
+private val MediaBox: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "MediaBox",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).path(
+        fill = SolidColor(Color.Black),
+        pathFillType = PathFillType.EvenOdd,
     ) {
-        return true
-    }
+        moveTo(4f, 8.5f)
+        lineTo(20f, 8.5f)
+        arcTo(2f, 2f, 0f, false, true, 22f, 10.5f)
+        lineTo(22f, 15.5f)
+        arcTo(2f, 2f, 0f, false, true, 20f, 17.5f)
+        lineTo(4f, 17.5f)
+        arcTo(2f, 2f, 0f, false, true, 2f, 15.5f)
+        lineTo(2f, 10.5f)
+        arcTo(2f, 2f, 0f, false, true, 4f, 8.5f)
+        close()
+        moveTo(17.8f, 13f)
+        arcTo(1.15f, 1.15f, 0f, false, true, 15.5f, 13f)
+        arcTo(1.15f, 1.15f, 0f, false, true, 17.8f, 13f)
+        close()
+    }.build()
+}
+
+/** Android TV boxes are often labelled just Android, which would draw a phone. */
+private fun LanDevice.looksLikeMediaPlayer(): Boolean {
+    if (openPorts.any { it.number == 6466 }) return true
+    if (isMediaPlayerName(displayName)) return true
+    val title = displayName.lowercase()
+    if (" tv" in title || title.endsWith("tv")) return true
     val servicesBlob = services.joinToString(" ") { "${it.type} ${it.name}" }.lowercase()
     return "androidtv" in servicesBlob || "googlecast" in servicesBlob || "bravia" in servicesBlob
+}
+
+private fun isMediaPlayerName(name: String): Boolean {
+    val folded = name.lowercase()
+    return "android tv" in folded || "google tv" in folded || "androidtv" in folded ||
+        "bravia" in folded || "chromecast" in folded || "shield" in folded ||
+        "roku" in folded || "apple tv" in folded || "appletv" in folded ||
+        "fire tv" in folded || "firestick" in folded || "fire stick" in folded ||
+        "mi box" in folded || "mibox" in folded || "media player" in folded
 }
 
 // Bluetooth

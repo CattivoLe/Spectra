@@ -61,16 +61,26 @@ fun WithCopyMenu(items: List<CopyItem>, content: @Composable (open: () -> Unit) 
 
 /** A row of chips that scrolls sideways, under the search field. */
 @Composable
-fun ChipRow(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
+fun ChipRow(
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+    content: @Composable RowScope.() -> Unit,
+) {
     Row(
         modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(PaddingValues(horizontal = 16.dp, vertical = 4.dp)),
+            .padding(contentPadding),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         content = content,
     )
 }
+
+/** Sort row: full space above, half the usual space before the filter row. */
+internal val SortChipPadding = PaddingValues(start = 16.dp, top = 4.dp, end = 16.dp, bottom = 2.dp)
+
+/** Filter row: half the usual space after sort, full space below. */
+internal val FilterChipPadding = PaddingValues(start = 16.dp, top = 2.dp, end = 16.dp, bottom = 4.dp)
 
 @Composable
 fun ToggleChip(text: String, selected: Boolean, onClick: () -> Unit, icon: ImageVector? = null) {

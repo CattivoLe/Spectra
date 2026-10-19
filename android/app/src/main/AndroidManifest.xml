@@ -26,6 +26,8 @@
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
+    <!-- A blank Cardputer is programmed from the phone, as USB host. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
         android:allowBackup="true"

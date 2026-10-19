@@ -18,6 +18,9 @@ import cattivole.spectra.core.NetworkStore
 import cattivole.spectra.core.NotableDevice
 import cattivole.spectra.core.PhoneWifi
 import cattivole.spectra.core.ProbeRequest
+import cattivole.spectra.core.ProbingDevice
+import cattivole.spectra.core.hasStoredPassword
+import cattivole.spectra.core.passesWifiFilter
 import cattivole.spectra.core.RadioSource
 import cattivole.spectra.core.SecondaryChannel
 import cattivole.spectra.core.SensorInfo
@@ -410,6 +413,49 @@ class CoreTest {
         )
         assertEquals("MacBook Pro", pro.model)
     }
+
+    @Test
+    fun openFilterHidesDevicesThatAreLookingForNetworks() {
+        val device = ProbingDevice(
+            MacAddress(byteArrayOf(0x02, 1, 2, 3, 4, 5)),
+            -70,
+            mutableListOf("Home"),
+            6,
+        )
+        assertFalse(device.passesWifiFilter(openOnly = true, band = null, needle = ""))
+        assertTrue(device.passesWifiFilter(openOnly = false, band = null, needle = ""))
+        assertTrue(device.passesWifiFilter(openOnly = false, band = null, needle = "home"))
+        assertFalse(device.passesWifiFilter(openOnly = false, band = BandWait.FIVE, needle = ""))
+
+        val open = network(AuthMode.OPEN, "Cafe")
+        val locked = network(AuthMode.WPA2_PSK, "Home")
+        assertTrue(open.passesWifiFilter(true, openOnly = true, band = null, needle = ""))
+        assertFalse(locked.passesWifiFilter(true, openOnly = true, band = null, needle = ""))
+        assertTrue(locked.hasStoredPassword(setOf("Home")))
+        assertFalse(open.hasStoredPassword(setOf("Home")))
+        assertTrue(locked.passesWifiFilter(true, false, null, "", knownOnly = true, knownSsids = setOf("Home")))
+        assertFalse(open.passesWifiFilter(true, false, null, "", knownOnly = true, knownSsids = setOf("Home")))
+        assertFalse(device.passesWifiFilter(false, null, "", knownOnly = true))
+    }
+
+    private fun network(auth: AuthMode, ssid: String) = cattivole.spectra.core.TrackedNetwork(
+        latest = AccessPointReading(
+            bssid = MacAddress(byteArrayOf(1, 2, 3, 4, 5, 6)),
+            rssi = -50,
+            channel = 1,
+            secondaryChannel = SecondaryChannel.NONE,
+            auth = auth,
+            pairwiseCipher = Cipher.CCMP,
+            groupCipher = Cipher.CCMP,
+            capabilities = 0,
+            countryCode = null,
+            ssidBytes = ssid.encodeToByteArray(),
+        ),
+        firstSeen = 1,
+        lastSeen = 1,
+        samples = mutableListOf(),
+        source = RadioSource.PHONE,
+    )
 }
 
 private typealias BandWait = cattivole.spectra.core.Band

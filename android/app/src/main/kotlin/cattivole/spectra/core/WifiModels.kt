@@ -366,3 +366,47 @@ enum class SignalQuality {
             ((rssi + 95) / 50.0).coerceIn(0.05, 1.0).toFloat()
     }
 }
+
+/** True when this network's name is one the phone has a password for. */
+fun TrackedNetwork.hasStoredPassword(ssids: Set<String>): Boolean {
+    val name = revealedSsid ?: latest.ssid
+    return name != null && name in ssids
+}
+
+/** Whether a network stays on the Wi-Fi list. */
+fun TrackedNetwork.passesWifiFilter(
+    showOutOfRange: Boolean,
+    openOnly: Boolean,
+    band: Band?,
+    needle: String,
+    knownOnly: Boolean = false,
+    knownSsids: Set<String> = emptySet(),
+): Boolean {
+    if (!showOutOfRange && !isInRange) return false
+    if (openOnly && latest.auth.strength != AuthMode.Strength.NONE) return false
+    if (knownOnly && !hasStoredPassword(knownSsids)) return false
+    if (band != null && latest.band != band) return false
+    if (needle.isEmpty()) return true
+    return title.contains(needle, ignoreCase = true) ||
+        id.text.contains(needle, ignoreCase = true) ||
+        id.vendor()?.contains(needle, ignoreCase = true) == true
+}
+
+/**
+ * A probing device is looking for a network, so the Open and Known chips hide the section.
+ */
+fun ProbingDevice.passesWifiFilter(
+    openOnly: Boolean,
+    band: Band?,
+    needle: String,
+    knownOnly: Boolean = false,
+): Boolean {
+    if (openOnly || knownOnly) return false
+    if (band == Band.FIVE || band == Band.SIX) return false
+    if (band == Band.TWO_FOUR && channel > 14) return false
+    if (needle.isEmpty()) return true
+    return displayName.contains(needle, ignoreCase = true) ||
+        mac.text.contains(needle, ignoreCase = true) ||
+        mac.vendor()?.contains(needle, ignoreCase = true) == true ||
+        ssids.any { it.contains(needle, ignoreCase = true) }
+}

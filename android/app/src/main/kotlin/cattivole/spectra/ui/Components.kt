@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,14 +31,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -66,13 +70,16 @@ import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -82,6 +89,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -156,17 +164,28 @@ fun SpectraScreen(
     listState: LazyListState = rememberLazyListState(),
     overlay: @Composable BoxScope.() -> Unit = {},
     fill: (@Composable BoxScope.() -> Unit)? = null,
+    searchQuery: String? = null,
+    onSearchChange: ((String) -> Unit)? = null,
+    searchPlaceholder: String = "",
     content: LazyListScope.() -> Unit = {},
 ) {
-    val large = onBack == null
+    val query = searchQuery
+    val onQuery = onSearchChange
+    val searching = query != null && onQuery != null
+    val large = onBack == null && !searching
     val behavior = if (large) {
         TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
     } else {
         TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
     }
     val colors = TopAppBarDefaults.topAppBarColors(
-        containerColor = MaterialTheme.colorScheme.background,
-        scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        containerColor = Color.Transparent,
+        scrolledContainerColor = Color.Transparent,
+    )
+    val barColor = lerp(
+        MaterialTheme.colorScheme.background,
+        MaterialTheme.colorScheme.surfaceContainerLow,
+        behavior.state.collapsedFraction,
     )
     val navigation: @Composable () -> Unit = {
         if (onBack != null) {
@@ -180,7 +199,39 @@ fun SpectraScreen(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0),
         topBar = {
-            if (large) {
+            Column(Modifier.background(barColor).fillMaxWidth()) {
+            if (query != null && onQuery != null) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(TopAppBarDefaults.windowInsets)
+                        .heightIn(min = 48.dp)
+                        .padding(end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    navigation()
+                    Column(Modifier.padding(start = if (onBack == null) 16.dp else 0.dp).widthIn(max = 132.dp)) {
+                        Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (subtitle != null) {
+                            Text(
+                                subtitle,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    SearchField(
+                        query,
+                        onQuery,
+                        searchPlaceholder,
+                        Modifier.weight(1f),
+                        compact = true,
+                    )
+                    actions()
+                }
+            } else if (large) {
                 MediumTopAppBar(
                     title = {
                         Column {
@@ -221,6 +272,7 @@ fun SpectraScreen(
                     colors = colors,
                     scrollBehavior = behavior,
                 )
+            }
             }
         },
     ) { padding ->
@@ -350,13 +402,15 @@ fun <T> LazyListScope.cardSection(
     headerTint: @Composable () -> Color = { MaterialTheme.colorScheme.onSurfaceVariant },
     headerIcon: ImageVector? = null,
     headerTrailing: (@Composable RowScope.() -> Unit)? = null,
+    onHeaderClick: (() -> Unit)? = null,
     dividerInset: Dp = 16.dp,
     row: @Composable LazyItemScope.(T) -> Unit,
 ) {
     if (items.isEmpty()) return
     if (header != null) {
         item(key = "header-$sectionKey", contentType = "header") {
-            SectionHeader(header, Modifier.animateItem(), tint = headerTint(), icon = headerIcon, trailing = headerTrailing)
+            val click = if (onHeaderClick != null) Modifier.clickable(onClick = onHeaderClick) else Modifier
+            SectionHeader(header, Modifier.animateItem().then(click), tint = headerTint(), icon = headerIcon, trailing = headerTrailing)
         }
     } else {
         item(key = "gap-$sectionKey", contentType = "gap") { Spacer(Modifier.height(12.dp)) }
@@ -418,7 +472,9 @@ fun ListRow(
     title: String,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
+    subtitleContent: (@Composable () -> Unit)? = null,
     detail: String? = null,
+    detailContent: (@Composable () -> Unit)? = null,
     leading: (@Composable () -> Unit)? = null,
     badges: @Composable RowScope.() -> Unit = {},
     trailing: (@Composable () -> Unit)? = null,
@@ -460,7 +516,9 @@ fun ListRow(
                 )
                 badges()
             }
-            if (!subtitle.isNullOrEmpty()) {
+            if (subtitleContent != null) {
+                subtitleContent()
+            } else if (!subtitle.isNullOrEmpty()) {
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodySmall.merge(Tabular),
@@ -470,7 +528,9 @@ fun ListRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (!detail.isNullOrEmpty()) {
+            if (detailContent != null) {
+                detailContent()
+            } else if (!detail.isNullOrEmpty()) {
                 Text(
                     detail,
                     style = MaterialTheme.typography.bodySmall,
@@ -724,18 +784,80 @@ fun StatusChip(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     val focus = LocalFocusManager.current
+    if (compact) {
+        val interaction = remember { MutableInteractionSource() }
+        val colors = TextFieldDefaults.colors(
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            focusedIndicatorColor = Color.Transparent,
+            unfocusedIndicatorColor = Color.Transparent,
+            disabledIndicatorColor = Color.Transparent,
+        )
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).height(38.dp),
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+            singleLine = true,
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
+            interactionSource = interaction,
+            decorationBox = { inner ->
+                TextFieldDefaults.DecorationBox(
+                    value = query,
+                    innerTextField = inner,
+                    enabled = true,
+                    singleLine = true,
+                    visualTransformation = VisualTransformation.None,
+                    interactionSource = interaction,
+                    placeholder = {
+                        Text(placeholder, maxLines = 1, style = MaterialTheme.typography.bodyMedium)
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                    },
+                    trailingIcon = if (query.isNotEmpty()) {
+                        {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = tr("Clear"),
+                                modifier = Modifier.size(18.dp).clickable { onQueryChange("") },
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = colors,
+                    contentPadding = TextFieldDefaults.contentPaddingWithoutLabel(
+                        start = 0.dp,
+                        top = 0.dp,
+                        end = 0.dp,
+                        bottom = 0.dp,
+                    ),
+                )
+            },
+        )
+        return
+    }
     TextField(
         value = query,
         onValueChange = onQueryChange,
-        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = if (compact) 8.dp else 16.dp, vertical = if (compact) 8.dp else 4.dp),
+        textStyle = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
         placeholder = { Text(placeholder, maxLines = 1) },
         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
         trailingIcon = {

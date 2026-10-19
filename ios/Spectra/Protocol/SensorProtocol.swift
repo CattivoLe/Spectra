@@ -30,13 +30,13 @@ nonisolated enum SensorProtocol {
         var data: Data {
             switch self {
             case .scanOnce:
-                Data([0x01])
+                return Data([0x01])
             case .setInterval(let seconds):
-                Data([0x02, UInt8(clamping: seconds)])
+                return Data([0x02, UInt8(clamping: seconds)])
             case .scanLoRa:
-                Data([0x04])
+                return Data([0x04])
             case .ackSaved(let captureID):
-                Data([
+                return Data([
                     0x03,
                     UInt8(captureID & 0xFF),
                     UInt8((captureID >> 8) & 0xFF),
@@ -44,17 +44,17 @@ nonisolated enum SensorProtocol {
                     UInt8((captureID >> 24) & 0xFF),
                 ])
             case .rememberWifi(let ssid, let password):
-                Self.wifiCreds(0x05, ssid: ssid, password: password)
+                return Self.wifiCreds(0x05, ssid: ssid, password: password)
             case .forgetWifi(let ssid):
-                Self.wifiCreds(0x06, ssid: ssid, password: nil)
+                return Self.wifiCreds(0x06, ssid: ssid, password: nil)
             case .setPeer(let name):
                 var data = Data([0x07])
                 data.append(contentsOf: name.utf8.prefix(31))
                 return data
             case .ackKnown:
-                Data([0x08])
+                return Data([0x08])
             case .resetKnown:
-                Data([0x09])
+                return Data([0x09])
             }
         }
 

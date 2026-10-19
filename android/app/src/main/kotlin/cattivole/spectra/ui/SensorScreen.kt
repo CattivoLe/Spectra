@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.SettingsInputAntenna
 import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,6 +40,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +52,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
+import kotlinx.coroutines.delay
 import cattivole.spectra.core.FirmwareUpdateProgress
 import cattivole.spectra.core.SensorProtocol
 import cattivole.spectra.platform.SensorLink
@@ -95,8 +98,16 @@ internal fun intervalLabel(seconds: Int): String = when {
 private class PendingFirmware(val name: String, val data: ByteArray)
 
 @Composable
-fun SensorScreen(model: SpectraModel) {
+fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}) {
     model.generation
+    // USB attach is not always delivered while the screen is up, so the port is
+    // re-read here. An unchanged list does not redraw.
+    LaunchedEffect(Unit) {
+        while (true) {
+            model.usb.refresh()
+            delay(1000)
+        }
+    }
     val link = model.link
     val context = LocalContext.current
     var pending by remember { mutableStateOf<PendingFirmware?>(null) }
@@ -133,6 +144,16 @@ fun SensorScreen(model: SpectraModel) {
     }
     SpectraScreen(tr("Sensor")) {
         freeCard("status") { SensorStatus(model) }
+        if (model.usb.boards.isNotEmpty()) {
+            card(
+                header = tr("New Cardputer"),
+                key = "usb-flash",
+                footer = tr("A blank ESP32-S3 does not speak Bluetooth yet. Connect it with a data cable and flash it from here. If a program is already running, hold G0, tap reset, and let go."),
+                rows = listOf {
+                    ActionRow(tr("Flash over USB"), Icons.Rounded.Usb, onClick = onFlash)
+                },
+            )
+        }
         link.firmwareUpdate?.let { update -> firmwareCard(update, link) }
         if (link.state is SensorLink.State.Searching) {
             if (link.discovered.isEmpty()) {
@@ -180,7 +201,7 @@ fun SensorScreen(model: SpectraModel) {
                     header = tr("Device"),
                     key = "device",
                     footer = when {
-                        connected && !info.ota -> tr("This firmware cannot take updates from the app. Flash 0.6.0 or newer once over USB or the launcher; after that, updates install from here.")
+                        connected && !info.ota -> tr("This firmware cannot take updates from the app. Connect the Cardputer with a USB cable and use Flash over USB, or use the launcher, to install 0.6.0 or newer once. After that, updates install from here.")
                         connected && info.ota -> tr("Choose firmware.bin from pio run, the same app image Launcher installs. A merged image with a bootloader is rejected.")
                         else -> null
                     },
@@ -311,6 +332,26 @@ fun SensorScreen(model: SpectraModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        card(
+            header = tr("Supported boards"),
+            key = "boards",
+            rows = listOf(
+                {
+                    ListRow(
+                        title = "M5Stack Cardputer",
+                        subtitle = tr("ESP32-S3, 2.4 GHz"),
+                        leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
+                    )
+                },
+                {
+                    ListRow(
+                        title = "M5Stack Cardputer-Adv",
+                        subtitle = tr("ESP32-S3, 2.4 GHz, LoRa cap fits this board"),
+                        leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
+                    )
+                },
+            ),
+        )
     }
 }
 

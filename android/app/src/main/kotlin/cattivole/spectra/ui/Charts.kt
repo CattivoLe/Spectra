@@ -21,6 +21,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -44,18 +45,22 @@ import kotlin.math.cos
 import kotlin.math.pow
 
 /**
- * Empty arcs and bars. In the night theme `outlineVariant` sits almost on top
- * of the card, so the unfilled part of the glyph disappeared.
+ * Empty arcs and bars. A quieter shade of the icon's own colour, so the
+ * unfilled part stays visible on the card without a flat grey.
  */
 @Composable
-private fun signalTrack(): Color =
-    if (Spectra.colors.isDark) Color(0xFF8B99B0) else MaterialTheme.colorScheme.outlineVariant
+private fun signalTrack(base: Color): Color =
+    lerp(
+        MaterialTheme.colorScheme.surfaceContainerHigh,
+        base,
+        if (Spectra.colors.isDark) 0.32f else 0.22f,
+    )
 
 /** The Wi-Fi fan, its arcs lit up to the signal level. */
 @Composable
 fun WifiGlyph(rssi: Int, inRange: Boolean = true, modifier: Modifier = Modifier, size: Dp = 24.dp) {
     val lit = if (inRange) signalColor(rssi) else MaterialTheme.colorScheme.outline
-    val dim = signalTrack()
+    val dim = signalTrack(lit)
     val fraction = if (inRange) SignalQuality.fraction(rssi) else 0f
     Canvas(modifier.size(size)) {
         val centre = Offset(this.size.width / 2, this.size.height * 0.84f)
@@ -84,7 +89,7 @@ fun WifiGlyph(rssi: Int, inRange: Boolean = true, modifier: Modifier = Modifier,
 @Composable
 fun SignalBars(rssi: Int, inRange: Boolean = true, modifier: Modifier = Modifier, size: Dp = 18.dp) {
     val lit = if (inRange) signalColor(rssi) else MaterialTheme.colorScheme.outline
-    val dim = signalTrack()
+    val dim = signalTrack(lit)
     val fraction = if (inRange) SignalQuality.fraction(rssi) else 0f
     Canvas(modifier.size(size)) {
         val bars = 4
