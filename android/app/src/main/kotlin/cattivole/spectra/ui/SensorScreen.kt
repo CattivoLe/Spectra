@@ -196,6 +196,12 @@ fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}, onDecodePcap: ()
                     add { InfoRow(tr("Scans this session"), "${model.store.scanCount}") }
                 },
             )
+            card(
+                header = tr("Alerts on sensor"),
+                key = "alerts",
+                footer = tr("The LED blinks red for a threat, yellow for a warning, orange for a tracker that keeps showing up, green for an open network, blue for a watched Bluetooth device and purple for a watched network."),
+                rows = buildList { add { AlertRow(link) } },
+            )
             link.info?.let { info ->
                 val connected = link.state is SensorLink.State.Connected
                 card(
@@ -436,6 +442,40 @@ private fun IntervalRow(link: SensorLink) {
                     },
                     onClick = {
                         link.setLiveInterval(seconds)
+                        open = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun alertLabel(mode: SensorLink.AlertMode): String = when (mode) {
+    SensorLink.AlertMode.SoundAndLight -> tr("Sound and light")
+    SensorLink.AlertMode.LightOnly -> tr("Light only")
+    SensorLink.AlertMode.SoundOnly -> tr("Sound only")
+    SensorLink.AlertMode.Silent -> tr("Silent")
+}
+
+@Composable
+private fun AlertRow(link: SensorLink) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        InfoRow(
+            tr("Mode"),
+            alertLabel(link.alertMode),
+            valueColor = MaterialTheme.colorScheme.primary,
+            onClick = { open = true },
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.align(Alignment.CenterEnd)) {
+            SensorLink.AlertMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(alertLabel(mode)) },
+                    leadingIcon = {
+                        if (mode == link.alertMode) Icon(Icons.Rounded.Check, null) else Spacer(Modifier.size(24.dp))
+                    },
+                    onClick = {
+                        link.setAlertMode(mode)
                         open = false
                     },
                 )

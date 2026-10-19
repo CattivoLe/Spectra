@@ -30,6 +30,9 @@ struct SpectraApp: App {
                 .environment(bleScanner)
                 .environment(location)
                 .environment(watchList)
+                .onChange(of: watchList.ids, initial: true) { _, ids in
+                    link.setWatched(ids)
+                }
                 .task {
                     history.locationProvider = { [weak location] in
                         location?.coordinate.map { ($0.latitude, $0.longitude) }

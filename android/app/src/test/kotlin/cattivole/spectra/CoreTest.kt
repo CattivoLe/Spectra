@@ -131,6 +131,24 @@ class CoreTest {
     }
 
     @Test
+    fun alertAndWatchCommands() {
+        assertArrayEquals(byteArrayOf(0x0C, 0x03), SensorProtocol.Command.SetAlerts(sound = true, light = true).data)
+        assertArrayEquals(byteArrayOf(0x0C, 0x02), SensorProtocol.Command.SetAlerts(sound = false, light = true).data)
+        assertArrayEquals(byteArrayOf(0x0C, 0x00), SensorProtocol.Command.SetAlerts(sound = false, light = false).data)
+        val address = SensorProtocol.addressFromWatchId("AA:BB:CC:01:02:03")
+        assertArrayEquals(byteArrayOf(0xAA.toByte(), 0xBB.toByte(), 0xCC.toByte(), 0x01, 0x02, 0x03), address?.bytes)
+        assertNull(SensorProtocol.addressFromWatchId("not-an-address"))
+        assertArrayEquals(
+            byteArrayOf(0x0D, 1, 0xAA.toByte(), 0xBB.toByte(), 0xCC.toByte(), 0x01, 0x02, 0x03),
+            SensorProtocol.Command.SetWatch(listOfNotNull(address)).data,
+        )
+        assertArrayEquals(byteArrayOf(0x0D, 0), SensorProtocol.Command.SetWatch(emptyList()).data)
+        val info = SensorInfo.decode("""{"proto":9,"fw":"0.10.0","chip":"ESP32-S3","bands":["2.4"],"interval":30,"alerts":2,"watch":4}""")
+        assertEquals(2, info?.alerts)
+        assertEquals(4, info?.watchCount)
+    }
+
+    @Test
     fun loraRoundTripAndCapFix() {
         val device = LoraDevice(868_100, 7, -118, 4, 0x01, 0xA1B2C3D4)
         val message = SensorProtocol.Message.Lora(3, device)

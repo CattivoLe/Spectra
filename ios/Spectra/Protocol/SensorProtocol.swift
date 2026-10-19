@@ -4,7 +4,7 @@ import Foundation
 /// The BLE contract with the Cardputer firmware. docs/protocol.md is the
 /// source of truth; keep the two in step.
 nonisolated enum SensorProtocol {
-    static let version = 8
+    static let version = 9
 
     static let service = CBUUID(string: "53500001-8F2D-4B6A-9C1E-737065637472")
     static let info = CBUUID(string: "53500002-8F2D-4B6A-9C1E-737065637472")
@@ -31,6 +31,11 @@ nonisolated enum SensorProtocol {
         case startRawCapture(channel: Int, bssid: BSSID?)
         /// Stop the raw-frame stream.
         case stopRawCapture
+        /// How the sensor announces findings on its own (v9). Both off is the silent mode.
+        case setAlerts(sound: Bool, light: Bool)
+        /// Addresses the sensor flags in its own Wi-Fi and Bluetooth scans (v9).
+        /// Replaces the list; the sensor keeps the first 32.
+        case setWatch(addresses: [BSSID])
 
         var data: Data {
             switch self {
@@ -66,7 +71,25 @@ nonisolated enum SensorProtocol {
                 return data
             case .stopRawCapture:
                 return Data([0x0B])
+            case .setAlerts(let sound, let light):
+                return Data([0x0C, (sound ? 0x01 : 0) | (light ? 0x02 : 0)])
+            case .setWatch(let addresses):
+                let kept = addresses.filter { $0.bytes.count == 6 }.prefix(32)
+                var data = Data([0x0D, UInt8(kept.count)])
+                for address in kept {
+                    data.append(contentsOf: address.bytes)
+                }
+                return data
             }
+        }
+
+        /// A watch-list id the sensor can match: `AA:BB:CC:DD:EE:FF`. CoreBluetooth
+        /// identifiers are not addresses, so those give nil.
+        static func address(fromWatchID id: String) -> BSSID? {
+            let parts = id.split(separator: ":")
+            guard parts.count == 6 else { return nil }
+            let bytes = parts.compactMap { $0.count == 2 ? UInt8($0, radix: 16) : nil }
+            return bytes.count == 6 ? BSSID(bytes: bytes) : nil
         }
 
         private static func wifiCreds(_ command: UInt8, ssid: String, password: String?) -> Data {
@@ -745,11 +768,15 @@ nonisolated struct SensorInfo: Equatable {
     var name: String?
     /// SSIDs the sensor will rejoin. Passwords are not on this characteristic.
     var known: [String]
+    /// Alert flags the sensor runs with (bit0 sound, bit1 LED). Absent before v9.
+    var alerts: Int?
+    /// How many addresses the sensor watches for. Absent before v9.
+    var watchCount: Int?
 
     init(proto: Int, fw: String, chip: String, bands: [String], interval: Int, ota: Bool = false,
          batteryLevel: Int? = nil, isCharging: Bool? = nil, lora: Bool = false,
          latitude: Double? = nil, longitude: Double? = nil, satellites: Int? = nil,
-         name: String? = nil, known: [String] = []) {
+         name: String? = nil, known: [String] = [], alerts: Int? = nil, watchCount: Int? = nil) {
         self.proto = proto
         self.fw = fw
         self.chip = chip
@@ -764,12 +791,14 @@ nonisolated struct SensorInfo: Equatable {
         self.satellites = satellites
         self.name = name
         self.known = known
+        self.alerts = alerts
+        self.watchCount = watchCount
     }
 }
 
 extension SensorInfo: Decodable {
     private enum CodingKeys: String, CodingKey {
-        case proto, fw, chip, bands, interval, ota, bat, chg, lora, lat, lon, sats, name, known
+        case proto, fw, chip, bands, interval, ota, bat, chg, lora, lat, lon, sats, name, known, alerts, watch
     }
 
     init(from decoder: Decoder) throws {
@@ -794,5 +823,7 @@ extension SensorInfo: Decodable {
         satellites = try container.decodeIfPresent(Int.self, forKey: .sats)
         name = try container.decodeIfPresent(String.self, forKey: .name)
         known = try container.decodeIfPresent([String].self, forKey: .known) ?? []
+        alerts = try container.decodeIfPresent(Int.self, forKey: .alerts)
+        watchCount = try container.decodeIfPresent(Int.self, forKey: .watch)
     }
 }

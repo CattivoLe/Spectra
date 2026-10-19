@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-inline constexpr uint8_t kProtocolVersion = 8;
+inline constexpr uint8_t kProtocolVersion = 9;
 
 // All UUIDs share one base; only the first group differs.
 inline constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
@@ -35,6 +35,16 @@ inline constexpr uint8_t kCmdResetKnown = 0x09;
 inline constexpr uint8_t kCmdStartRawCapture = 0x0A;
 // Stop the raw-frame stream (v8). No payload.
 inline constexpr uint8_t kCmdStopRawCapture = 0x0B;
+// How the sensor announces findings on its own (v9). Payload: flags, see
+// kAlertSound / kAlertLed. Zero is the silent mode.
+inline constexpr uint8_t kCmdSetAlerts = 0x0C;
+// Addresses the user watches (v9): count, then count × 6 bytes, first octet
+// first, as the address is written. Replaces the previous list.
+inline constexpr uint8_t kCmdSetWatch = 0x0D;
+
+inline constexpr uint8_t kAlertSound = 0x01;
+inline constexpr uint8_t kAlertLed = 0x02;
+inline constexpr uint8_t kWatchMax = 32;
 
 // Results notification message types (first byte).
 inline constexpr uint8_t kMsgScanStarted = 0x10;

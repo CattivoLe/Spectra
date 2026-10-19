@@ -1,6 +1,66 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Alerts on sensor" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Оповещения на сенсоре"
+          }
+        }
+      }
+    },
+    "Light only" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Только свет"
+          }
+        }
+      }
+    },
+    "Silent" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Тихо"
+          }
+        }
+      }
+    },
+    "Sound and light" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Звук и свет"
+          }
+        }
+      }
+    },
+    "Sound only" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Только звук"
+          }
+        }
+      }
+    },
+    "The LED blinks red for a threat, yellow for a warning, orange for a tracker that keeps showing up, green for an open network, blue for a watched Bluetooth device and purple for a watched network." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Светодиод мигает красным при угрозе, жёлтым при предупреждении, оранжевым при трекере, который появляется скан за сканом, зелёным при открытой сети, синим при отслеживаемом Bluetooth-устройстве и фиолетовым при отслеживаемой сети."
+          }
+        }
+      }
+    },
     "—" : {
       "localizations" : {
         "ru" : {

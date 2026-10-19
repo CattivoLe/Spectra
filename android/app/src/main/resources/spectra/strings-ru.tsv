@@ -701,3 +701,10 @@ Save .pcap	Сохранить .pcap
 Capture again	Захватить снова
 Pins the sensor to channel %d and streams the frames it hears into a .pcap for Wireshark. Bluetooth is narrow, so this is a short, thinned sample — not a full capture — and it stops on its own near %d frames.	Закрепляет сенсор на канале %d и передаёт услышанные кадры в .pcap для Wireshark. Канал Bluetooth узкий, поэтому это короткая прореженная выборка, а не полный дамп; захват сам останавливается примерно на %d кадрах.
 Some frames were dropped on the way over Bluetooth, so there are gaps.	Часть кадров потерялась при передаче по Bluetooth, поэтому в записи есть пропуски.
+Alerts on sensor	Оповещения на сенсоре
+Mode	Режим
+Sound and light	Звук и свет
+Light only	Только свет
+Sound only	Только звук
+Silent	Тихо
+The LED blinks red for a threat, yellow for a warning, orange for a tracker that keeps showing up, green for an open network, blue for a watched Bluetooth device and purple for a watched network.	Светодиод мигает красным при угрозе, жёлтым при предупреждении, оранжевым при трекере, который появляется скан за сканом, зелёным при открытой сети, синим при отслеживаемом Bluetooth-устройстве и фиолетовым при отслеживаемой сети.

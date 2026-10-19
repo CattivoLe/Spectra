@@ -30,7 +30,7 @@
 
 // The phone app finds this tag in a firmware.bin to show which version it
 // carries. The version below points into it, so the linker keeps the tag.
-static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.9.1";
+static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.10.0";
 static constexpr const char* kFirmwareVersion = kFirmwareTag + 11;
 
 // Wire protocol constants (UUIDs, command/message/update bytes) live in
@@ -134,6 +134,35 @@ static volatile bool captureFlushPending = false;
 // When to tell a newly connected phone that the services may have changed.
 static uint32_t serviceChangedAt = 0;
 
+// The interval patrol stays off after boot until a Wi-Fi scan is asked for,
+// from the keyboard or the phone. From then on the interval drives it.
+static bool patrolArmed = false;
+static bool bleScanned = false;
+// Set by the first Bluetooth scan asked for by hand. The patrol then
+// alternates Wi-Fi and Bluetooth, so a tracker can be seen scan after scan.
+static bool blePatrolArmed = false;
+static bool patrolNextBle = false;
+
+// A tracker in this many Bluetooth scans in a row is treated as following.
+static constexpr uint8_t kTrackerStreak = 3;
+struct TrackerSighting {
+  uint8_t addr[6];
+  uint8_t streak;
+  bool alerted;
+};
+static std::vector<TrackerSighting> trackerSightings;
+
+// Alert mode, set from the phone and kept in NVS. See kAlertSound / kAlertLed.
+static volatile uint8_t alertFlags = kAlertSound | kAlertLed;
+static volatile bool alertsChanged = false;
+
+// Watched addresses, first octet first. Written from the NimBLE host task
+// under watchMux, read from loop().
+static uint8_t watchAddrs[kWatchMax][6];
+static volatile uint8_t watchCount = 0;
+static volatile bool watchChanged = false;
+static portMUX_TYPE watchMux = portMUX_INITIALIZER_UNLOCKED;
+
 static uint16_t scanId = 0;
 static uint32_t lastScanMs = 0;
 static uint32_t lastScanDurationMs = 0;
@@ -146,11 +175,16 @@ struct KeptWifi {
   uint8_t auth;
   char ssid[33];
 };
+// Item trackers recognised from the advertisement.
+enum class Tracker : uint8_t { None, FindMy, SmartTag, Tile };
+
 struct KeptBle {
   uint8_t addr[6];
   uint8_t addrType;
   int8_t rssi;
   char name[21];
+  Tracker tracker;
+  uint8_t streak;  // consecutive Bluetooth scans this tracker was in
 };
 struct KeptLan {
   uint8_t ip[4];
@@ -185,11 +219,18 @@ static constexpr int kTabLink = 4;
 static const char *kMenuNames[] = {"WiFi", "LAN", "BLE", "LoRa", "Join"};
 
 // Wi-Fi join for LAN scans. The Cardputer stays unassociated until the user
-// picks a network and confirms the password. Credentials persist in NVS so the
-// password can be shown again, but nothing connects on its own.
+// picks a network. A network with a stored password, or an open one, joins
+// straight from the picker; otherwise the password is typed. Stored passwords
+// are never drawn, and nothing connects on its own.
 enum class WifiUi : uint8_t { None, Pick, Pass, Connecting };
 static WifiUi wifiUi = WifiUi::None;
-static std::vector<String> wifiList;
+struct PickRow {
+  String ssid;
+  int8_t rssi;
+  bool open;
+};
+static std::vector<PickRow> wifiList;
+// -1 is the "Scan again" row above the list.
 static int wifiSel = 0;
 static int wifiListOffset = 0;
 static char wifiSsid[33] = "";
@@ -197,7 +238,10 @@ static char wifiPass[65] = "";
 static uint8_t wifiPassLen = 0;
 static char wifiMsg[28] = "";
 static uint32_t wifiConnectUntil = 0;
-static bool wifiHaveCreds = false;
+// The join in flight used a password the sensor already had.
+static bool wifiUsedStored = false;
+// Selected button on the Join tab's main screen.
+static int joinSel = 0;
 // Joins not yet accepted by the phone. Eight is the unsent buffer: a full one
 // drops the oldest. The phone keeps the history and sends it back to draw.
 struct KnownWifi {
@@ -773,8 +817,9 @@ static void updateInfo() {
     appendRaw(knownJson, sizeof(knownJson), "]");
   }
   snprintf(json, sizeof(json),
-           "{\"proto\":%u,\"fw\":\"%s\",\"name\":\"%s\",\"chip\":\"ESP32-S3\",\"bands\":[\"2.4\"],\"interval\":%u%s%s%s%s}",
-           kProtocolVersion, kFirmwareVersion, kSensorName, scanIntervalSec,
+           "{\"proto\":%u,\"fw\":\"%s\",\"name\":\"%s\",\"chip\":\"ESP32-S3\",\"bands\":[\"2.4\"],\"interval\":%u,"
+           "\"alerts\":%u,\"watch\":%u%s%s%s%s}",
+           kProtocolVersion, kFirmwareVersion, kSensorName, scanIntervalSec, alertFlags, watchCount,
            otaUpdatable ? ",\"ota\":true" : "", batJson, capJson, knownJson);
   infoChar->setValue(json);
 }
@@ -947,6 +992,31 @@ class ControlCallbacks : public NimBLECharacteristicCallbacks {
         rawStartPending = false;
         taskEXIT_CRITICAL(&radioMux);
         break;
+      case kCmdSetAlerts:
+        if (value.size() >= 2) {
+          alertFlags = value[1] & (kAlertSound | kAlertLed);
+          alertsChanged = true;
+        }
+        break;
+      case kCmdSetWatch: {
+        if (value.size() < 2 || value.data() == nullptr) {
+          break;
+        }
+        const uint8_t *bytes = value.data();
+        uint8_t count = bytes[1];
+        if (count > kWatchMax) {
+          count = kWatchMax;
+        }
+        if (value.size() < static_cast<size_t>(2 + count * 6)) {
+          break;
+        }
+        taskENTER_CRITICAL(&watchMux);
+        memcpy(watchAddrs, bytes + 2, static_cast<size_t>(count) * 6);
+        watchCount = count;
+        watchChanged = true;
+        taskEXIT_CRITICAL(&watchMux);
+        break;
+      }
       default:
         break;
     }
@@ -1443,6 +1513,150 @@ static void showBanner(const char *text) {
   uiDirty = true;
 }
 
+// ---------------------------------------------------------------------------
+// Alerts: speaker and RGB LED
+// ---------------------------------------------------------------------------
+
+// Red and yellow follow the phone's critical and warning banners.
+struct Findings {
+  bool critical = false;
+  bool warning = false;
+  bool open = false;
+  bool watchedWifi = false;
+  bool watchedBle = false;
+  bool tracker = false;
+};
+
+struct Blink {
+  uint8_t r, g, b;
+  uint8_t times;
+};
+static constexpr int kBlinkQueueMax = 6;
+static Blink blinkQueue[kBlinkQueueMax];
+static int blinkCount = 0;
+// Steps taken within the head entry: even lights it, odd turns it off.
+static int blinkStep = 0;
+static uint32_t blinkNextAt = 0;
+static bool ledLit = false;
+
+static void ledSet(uint8_t r, uint8_t g, uint8_t b) {
+  if (!M5.Led.isEnabled()) {
+    return;
+  }
+  M5.Led.setAllColor(r, g, b);
+  ledLit = (r | g | b) != 0;
+}
+
+static void ledOff() {
+  if (ledLit) {
+    ledSet(0, 0, 0);
+  }
+}
+
+static void queueBlink(uint8_t r, uint8_t g, uint8_t b, uint8_t times) {
+  if (!(alertFlags & kAlertLed) || blinkCount >= kBlinkQueueMax) {
+    return;
+  }
+  blinkQueue[blinkCount++] = {r, g, b, times};
+}
+
+static void serviceLed() {
+  if (!(alertFlags & kAlertLed)) {
+    blinkCount = 0;
+    blinkStep = 0;
+  }
+  if (blinkCount == 0) {
+    ledOff();
+    return;
+  }
+  if (static_cast<int32_t>(millis() - blinkNextAt) < 0) {
+    return;
+  }
+  const Blink &head = blinkQueue[0];
+  const int steps = head.times * 2;
+  if (blinkStep >= steps) {
+    for (int i = 1; i < blinkCount; ++i) {
+      blinkQueue[i - 1] = blinkQueue[i];
+    }
+    --blinkCount;
+    blinkStep = 0;
+    return;
+  }
+  if (blinkStep % 2 == 0) {
+    ledSet(head.r, head.g, head.b);
+    blinkNextAt = millis() + 180;
+  } else {
+    ledSet(0, 0, 0);
+    blinkNextAt = millis() + (blinkStep + 1 == steps ? 500 : 160);
+  }
+  ++blinkStep;
+}
+
+static bool playTone(float hz, uint32_t ms) {
+  M5Cardputer.Speaker.setVolume(200);
+  if (!M5Cardputer.Speaker.tone(hz, ms)) {
+    return false;
+  }
+  delay(ms + 50);
+  esp_task_wdt_reset();
+  return true;
+}
+
+static void announce(const Findings &f) {
+  const bool threat = f.critical || f.warning;
+  const bool watched = f.watchedWifi || f.watchedBle;
+  if (!threat && !f.open && !watched && !f.tracker) {
+    return;
+  }
+  char text[sizeof(banner)] = "";
+  auto add = [&](const char *label) {
+    if (text[0] != '\0') {
+      appendRaw(text, sizeof(text), " + ");
+    }
+    appendRaw(text, sizeof(text), label);
+  };
+  if (f.critical) add("Threat");
+  else if (f.warning) add("Warning");
+  if (f.tracker) add("Tracker");
+  if (watched) add(f.watchedBle && !f.watchedWifi ? "Watched BLE" : "Watched");
+  if (f.open) add(threat || watched ? "open" : "Open network");
+  showBanner(text);
+
+  if (f.critical) queueBlink(255, 0, 0, 4);
+  else if (f.warning) queueBlink(255, 150, 0, 3);
+  if (f.tracker) queueBlink(255, 50, 0, 4);
+  if (f.watchedBle) queueBlink(0, 0, 255, 3);
+  if (f.watchedWifi) queueBlink(170, 0, 255, 3);
+  if (f.open) queueBlink(0, 255, 0, 2);
+
+  if (!(alertFlags & kAlertSound)) {
+    return;
+  }
+  if (f.critical) {
+    playTone(520, 90);
+    playTone(520, 90);
+    playTone(390, 180);
+  } else if (f.warning) {
+    playTone(520, 90);
+    playTone(390, 140);
+  }
+  if (f.tracker) {
+    playTone(880, 120);
+    playTone(660, 120);
+    playTone(880, 120);
+    playTone(660, 120);
+  }
+  if (watched) {
+    playTone(1319, 60);
+    playTone(1760, 60);
+    playTone(1319, 60);
+  }
+  if (f.open) {
+    playTone(1568, 70);
+    playTone(2093, 110);
+  }
+}
+
 static size_t storedRecordSize(uint8_t kind) {
   if (kind == 1) return 41;
   if (kind == 4) return 13;
@@ -1750,19 +1964,6 @@ static const char *knownPassword(const char *ssid) {
   return pending >= 0 ? knownWifi[pending].pass : nullptr;
 }
 
-static void applyHead() {
-  const KnownWifi *head = !knownWifi.empty() ? &knownWifi.front() : !phoneWifi.empty() ? &phoneWifi.front() : nullptr;
-  if (head != nullptr) {
-    snprintf(wifiSsid, sizeof(wifiSsid), "%s", head->ssid);
-    snprintf(wifiPass, sizeof(wifiPass), "%s", head->pass);
-    wifiHaveCreds = true;
-  } else if (WiFi.status() != WL_CONNECTED) {
-    wifiSsid[0] = '\0';
-    wifiPass[0] = '\0';
-    wifiHaveCreds = false;
-  }
-}
-
 // One NVS blob. The record itself is the only ceiling: a value past this
 // does not fit in a single flash entry, so the oldest network is dropped.
 static constexpr size_t kWifiBlobMax = 4000;
@@ -1839,8 +2040,53 @@ static void saveInterval() {
   prefs.end();
 }
 
+static void saveAlerts() {
+  Preferences prefs;
+  prefs.begin("spectra", false);
+  prefs.putUChar("alerts", alertFlags);
+  prefs.end();
+}
+
+static void saveWatch() {
+  uint8_t copy[kWatchMax][6];
+  taskENTER_CRITICAL(&watchMux);
+  const uint8_t count = watchCount;
+  memcpy(copy, watchAddrs, static_cast<size_t>(count) * 6);
+  taskEXIT_CRITICAL(&watchMux);
+  Preferences prefs;
+  prefs.begin("spectra", false);
+  if (count == 0) {
+    prefs.remove("watch");
+  } else {
+    prefs.putBytes("watch", copy, static_cast<size_t>(count) * 6);
+  }
+  prefs.end();
+}
+
+static void loadAlertPrefs() {
+  Preferences prefs;
+  prefs.begin("spectra", true);
+  alertFlags = prefs.getUChar("alerts", kAlertSound | kAlertLed) & (kAlertSound | kAlertLed);
+  const size_t len = prefs.getBytesLength("watch");
+  const size_t count = std::min<size_t>(len / 6, kWatchMax);
+  if (count > 0 && prefs.getBytes("watch", watchAddrs, count * 6) == count * 6) {
+    watchCount = static_cast<uint8_t>(count);
+  }
+  prefs.end();
+}
+
+// `addr` in the order the phone writes it, first octet first.
+static bool isWatched(const uint8_t *addr) {
+  bool hit = false;
+  taskENTER_CRITICAL(&watchMux);
+  for (uint8_t i = 0; i < watchCount && !hit; ++i) {
+    hit = memcmp(watchAddrs[i], addr, 6) == 0;
+  }
+  taskEXIT_CRITICAL(&watchMux);
+  return hit;
+}
+
 static void touchKnownUi() {
-  applyHead();
   if (infoChar != nullptr) {
     updateInfo();
   }
@@ -1992,7 +2238,6 @@ static void loadWifiCreds() {
     knownWifi.pop_back();
     migrated = true;
   }
-  applyHead();
   if (migrated) {
     persistKnown();
   }
@@ -2030,6 +2275,78 @@ static void runLanScan() {
   uiDirty = true;
 }
 
+// Find My accessories away from their owner (the long 0x12 payload an AirTag
+// sends once separated), Samsung SmartTag and Tile.
+static Tracker trackerKind(const NimBLEAdvertisedDevice &dev) {
+  for (uint8_t i = 0; i < dev.getManufacturerDataCount(); ++i) {
+    const std::string data = dev.getManufacturerData(i);
+    if (data.size() >= 4 && static_cast<uint8_t>(data[0]) == 0x4C && data[1] == 0x00 &&
+        data[2] == 0x12 && static_cast<uint8_t>(data[3]) >= 0x19) {
+      return Tracker::FindMy;
+    }
+  }
+  static const NimBLEUUID kSmartTag(static_cast<uint16_t>(0xFD5A));
+  static const NimBLEUUID kTileA(static_cast<uint16_t>(0xFEED));
+  static const NimBLEUUID kTileB(static_cast<uint16_t>(0xFEEC));
+  auto has = [&](const NimBLEUUID &uuid) {
+    if (dev.isAdvertisingService(uuid)) {
+      return true;
+    }
+    for (uint8_t i = 0; i < dev.getServiceDataCount(); ++i) {
+      if (dev.getServiceDataUUID(i) == uuid) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (has(kSmartTag)) {
+    return Tracker::SmartTag;
+  }
+  if (has(kTileA) || has(kTileB)) {
+    return Tracker::Tile;
+  }
+  return Tracker::None;
+}
+
+static const char *trackerLabel(Tracker kind) {
+  switch (kind) {
+    case Tracker::FindMy: return "Find My tag";
+    case Tracker::SmartTag: return "SmartTag";
+    case Tracker::Tile: return "Tile";
+    default: return "";
+  }
+}
+
+// Carries each tracker's streak over from the previous scan. One missed scan
+// ends it. Returns true when a tracker has just reached kTrackerStreak.
+static bool updateTrackerStreaks() {
+  std::vector<TrackerSighting> next;
+  bool following = false;
+  for (KeptBle &dev : keptBle) {
+    if (dev.tracker == Tracker::None || next.size() >= 16) {
+      continue;
+    }
+    TrackerSighting seen{};
+    memcpy(seen.addr, dev.addr, 6);
+    seen.streak = 1;
+    for (const TrackerSighting &before : trackerSightings) {
+      if (macEqual(before.addr, dev.addr)) {
+        seen.streak = static_cast<uint8_t>(std::min<int>(before.streak + 1, 99));
+        seen.alerted = before.alerted;
+        break;
+      }
+    }
+    if (seen.streak >= kTrackerStreak && !seen.alerted) {
+      seen.alerted = true;
+      following = true;
+    }
+    dev.streak = seen.streak;
+    next.push_back(seen);
+  }
+  trackerSightings = std::move(next);
+  return following;
+}
+
 static void runBluetoothScan() {
   drawStatus("Scanning Bluetooth...");
   keptBle.clear();
@@ -2057,9 +2374,26 @@ static void runBluetoothScan() {
     const std::string name = dev->getName();
     const size_t n = std::min<size_t>(name.size(), 20);
     memcpy(row.name, name.data(), n);
+    row.tracker = trackerKind(*dev);
     keptBle.push_back(row);
   }
   scan->clearResults();
+  bleScanned = true;
+
+  // NimBLE keeps the address least significant octet first.
+  Findings found;
+  found.tracker = updateTrackerStreaks();
+  for (const KeptBle &dev : keptBle) {
+    uint8_t written[6];
+    for (int i = 0; i < 6; ++i) {
+      written[i] = dev.addr[5 - i];
+    }
+    if (isWatched(written)) {
+      found.watchedBle = true;
+      break;
+    }
+  }
+  announce(found);
   uiDirty = true;
 }
 
@@ -2272,6 +2606,8 @@ static void drawUi() {
     } else {
       snprintf(header, sizeof(header), "%s  linked", deviceName);
     }
+  } else if (scanIntervalSec > 0 && !patrolArmed && !blePatrolArmed) {
+    snprintf(header, sizeof(header), "%s  idle", deviceName);
   } else if (scanIntervalSec > 0) {
     snprintf(header, sizeof(header), "%s  every %us", deviceName,
              static_cast<unsigned>(scanIntervalSec));
@@ -2299,7 +2635,7 @@ static void drawUi() {
     if (keptWifi.empty()) {
       d.setTextColor(TFT_DARKGREY, TFT_BLACK);
       d.setCursor(4, y);
-      d.print("No networks");
+      d.print(patrolArmed ? "No networks" : "Enter to scan");
     }
     for (const KeptWifi &ap : keptWifi) {
       if (skip > 0) {
@@ -2318,12 +2654,16 @@ static void drawUi() {
       d.setTextColor(open ? TFT_GREEN : TFT_WHITE, TFT_BLACK);
       d.setCursor(34, y);
       d.print(open ? "o" : "*");
-      d.setTextColor(busy ? TFT_YELLOW : TFT_BLACK, TFT_BLACK);
-      d.print(busy ? "+" : " ");
+      if (busy) {
+        d.setTextColor(TFT_YELLOW, TFT_BLACK);
+        d.setCursor(43, y);
+        d.print("+");
+      }
       d.setTextColor(TFT_WHITE, TFT_BLACK);
+      d.setCursor(54, y);
       const char *name = ap.ssid[0] != '\0' ? ap.ssid : "(hidden)";
       char shown[28];
-      snprintf(shown, sizeof(shown), " %.26s", name);
+      snprintf(shown, sizeof(shown), "%.26s", name);
       d.print(shown);
       y += 10;
     }
@@ -2351,6 +2691,11 @@ static void drawUi() {
   } else if (menuIndex == 3) {
     drawLoraList();
   } else {
+    if (keptBle.empty()) {
+      d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      d.setCursor(4, y);
+      d.print(bleScanned ? "No devices" : "Enter to scan");
+    }
     for (const KeptBle &dev : keptBle) {
       if (skip > 0) {
         --skip;
@@ -2363,9 +2708,18 @@ static void drawUi() {
       d.setTextColor(color, TFT_BLACK);
       d.setCursor(4, y);
       d.printf("%4d", dev.rssi);
-      d.setTextColor(TFT_WHITE, TFT_BLACK);
       d.setCursor(34, y);
-      d.print(dev.name[0] != '\0' ? dev.name : "(unnamed)");
+      if (dev.tracker != Tracker::None) {
+        const bool following = dev.streak >= kTrackerStreak;
+        d.setTextColor(following ? TFT_ORANGE : TFT_YELLOW, TFT_BLACK);
+        char line[40];
+        snprintf(line, sizeof(line), "%s%s x%u", following ? "! " : "",
+                 dev.name[0] != '\0' ? dev.name : trackerLabel(dev.tracker), dev.streak);
+        d.print(line);
+      } else {
+        d.setTextColor(TFT_WHITE, TFT_BLACK);
+        d.print(dev.name[0] != '\0' ? dev.name : "(unnamed)");
+      }
       y += 10;
     }
   }
@@ -2398,41 +2752,37 @@ static const char *apName(const KeptWifi &ap) {
   return "";
 }
 
-// A deauth the phone would rank as a warning or worse: a broadcast, or a
-// burst of three or more frames with the same signature.
-static bool deauthIsThreat(const DeauthEntry &event) {
-  return isAllFf(event.dst) || event.count >= 3;
+// The phone's DeauthEvent ranks: 0 none, 1 warning, 2 critical.
+static int deauthSeverity(const DeauthEntry &event) {
+  const bool broadcast = isAllFf(event.dst);
+  if ((broadcast && event.count >= 3) || event.count >= 10) {
+    return 2;
+  }
+  return broadcast || event.count >= 3 ? 1 : 0;
 }
 
-// One SSID on several access points is normal for mesh. It is a threat only
-// when those copies differ in security or in maker.
-static bool evilTwinPresent() {
+// One SSID on several access points is normal for mesh. Copies that differ
+// in security are critical; copies that differ only in maker are a warning.
+static int evilTwinSeverity() {
+  int worst = 0;
   const int count = static_cast<int>(keptWifi.size());
-  for (int i = 0; i < count; ++i) {
+  for (int i = 0; i < count && worst < 2; ++i) {
     const char *name = apName(keptWifi[i]);
     if (name[0] == '\0') {
       continue;
     }
-    int copies = 1;
-    bool authDiffers = false;
-    bool ouiDiffers = false;
     for (int j = i + 1; j < count; ++j) {
       if (std::strcmp(name, apName(keptWifi[j])) != 0) {
         continue;
       }
-      ++copies;
       if (keptWifi[j].auth != keptWifi[i].auth) {
-        authDiffers = true;
+        worst = 2;
+      } else if (std::memcmp(keptWifi[j].bssid, keptWifi[i].bssid, 3) != 0) {
+        worst = std::max(worst, 1);
       }
-      if (std::memcmp(keptWifi[j].bssid, keptWifi[i].bssid, 3) != 0) {
-        ouiDiffers = true;
-      }
-    }
-    if (copies >= 2 && (authDiffers || ouiDiffers)) {
-      return true;
     }
   }
-  return false;
+  return worst;
 }
 
 static bool streamingPresent() {
@@ -2444,61 +2794,26 @@ static bool streamingPresent() {
   return false;
 }
 
-static bool openNetworkPresent() {
+static void alertScanFindings() {
+  Findings found;
+  int worst = evilTwinSeverity();
+  if (streamingPresent()) {
+    worst = std::max(worst, 1);
+  }
+  for (const DeauthEntry &event : capturedDeauths) {
+    worst = std::max(worst, deauthSeverity(event));
+  }
+  found.critical = worst >= 2;
+  found.warning = worst == 1;
   for (const KeptWifi &ap : keptWifi) {
     if (ap.auth == WIFI_AUTH_OPEN) {
-      return true;
+      found.open = true;
+    }
+    if (isWatched(ap.bssid)) {
+      found.watchedWifi = true;
     }
   }
-  return false;
-}
-
-static bool playTone(float hz, uint32_t ms) {
-  M5Cardputer.Speaker.setVolume(200);
-  if (!M5Cardputer.Speaker.tone(hz, ms)) {
-    return false;
-  }
-  delay(ms + 50);
-  esp_task_wdt_reset();
-  return true;
-}
-
-// Low pulses for a threat, a higher chirp for an open network. Both play
-// when a sweep finds both. A linked phone already receives the scan, so the
-// speaker stays quiet then.
-static void alertScanFindings() {
-  if (isConnected()) {
-    return;
-  }
-  bool threat = evilTwinPresent() || streamingPresent();
-  if (!threat) {
-    for (const DeauthEntry &event : capturedDeauths) {
-      if (deauthIsThreat(event)) {
-        threat = true;
-        break;
-      }
-    }
-  }
-  const bool open = openNetworkPresent();
-  if (!threat && !open) {
-    return;
-  }
-  if (threat && open) {
-    showBanner("Threat + open");
-  } else if (threat) {
-    showBanner("Threat");
-  } else {
-    showBanner("Open network");
-  }
-  if (threat) {
-    playTone(520, 90);
-    playTone(520, 90);
-    playTone(390, 180);
-  }
-  if (open) {
-    playTone(1568, 70);
-    playTone(2093, 110);
-  }
+  announce(found);
 }
 
 /// Sniff Wi-Fi frames in promiscuous mode to discover client stations.
@@ -2905,26 +3220,56 @@ static void startWifiPick() {
       continue;
     }
     bool dup = false;
-    for (const String &have : wifiList) {
-      if (have == s) {
+    for (const PickRow &have : wifiList) {
+      if (have.ssid == s) {
         dup = true;
         break;
       }
     }
     if (!dup) {
-      wifiList.push_back(s);
+      wifiList.push_back({s, static_cast<int8_t>(WiFi.RSSI(i)), WiFi.encryptionType(i) == WIFI_AUTH_OPEN});
     }
   }
   WiFi.scanDelete();
-  std::stable_partition(wifiList.begin(), wifiList.end(), [](const String &name) {
-    return isKnownSsid(name.c_str());
+  std::stable_partition(wifiList.begin(), wifiList.end(), [](const PickRow &row) {
+    return isKnownSsid(row.ssid.c_str());
   });
-  wifiSel = 0;
-  wifiListOffset = 0;
+  wifiSel = wifiList.empty() ? -1 : 0;
+  wifiListOffset = -1;
   wifiInputSeeded = false;
   wifiUi = WifiUi::Pick;
   menuIndex = kTabLink;
   uiDirty = true;
+}
+
+// Internet check and public-address lookup, one at a time on their own task
+// so the HTTP round trips do not stall the keyboard.
+enum class NetState : uint8_t { Idle, Busy, Ok, Captive, Fail };
+static constexpr uint8_t kNetJobInternet = 1;
+static constexpr uint8_t kNetJobPublicIp = 2;
+static volatile NetState inetState = NetState::Idle;
+static volatile NetState ipState = NetState::Idle;
+static volatile uint32_t inetMs = 0;
+static char publicLine[40] = "";
+static volatile uint8_t netJob = 0;
+static volatile uint8_t netEpoch = 0;
+static TaskHandle_t netTask = nullptr;
+
+static void dropNetCheck();
+
+static void beginJoin(bool stored) {
+  dropNetCheck();
+  WiFi.begin(wifiSsid, wifiPass);
+  wifiUsedStored = stored;
+  wifiConnectUntil = millis() + 12000;
+  snprintf(wifiMsg, sizeof(wifiMsg), "Connecting...");
+  wifiUi = WifiUi::Connecting;
+  uiDirty = true;
+}
+
+static void wipePass() {
+  memset(wifiPass, 0, sizeof(wifiPass));
+  wifiPassLen = 0;
 }
 
 struct NavKeys {
@@ -2983,49 +3328,46 @@ static void handleWifiKeys() {
   if (wifiUi == WifiUi::Pick) {
     const NavKeys nav = navKeys(keys, true);
     const int dir = (nav.up && !nav.down) ? -1 : (nav.down && !nav.up) ? 1 : 0;
-    if (dir != 0 && !wifiList.empty()) {
+    if (dir != 0) {
       const uint32_t now = millis();
       const bool first = dir != heldDir;
       if (first || static_cast<int32_t>(now - repeatAt) >= 0) {
-        wifiSel += dir;
-        if (wifiSel < 0) {
-          wifiSel = 0;
-        }
-        if (wifiSel >= static_cast<int>(wifiList.size())) {
-          wifiSel = static_cast<int>(wifiList.size()) - 1;
-        }
+        wifiSel = std::max(-1, std::min(wifiSel + dir, static_cast<int>(wifiList.size()) - 1));
         heldDir = dir;
         repeatAt = now + (first ? 360 : 140);
         uiDirty = true;
       }
-    } else if (dir == 0) {
+    } else {
       heldDir = 0;
     }
     if (tabEdge) {
       wifiUi = WifiUi::None;
       uiDirty = true;
-    } else if (enterEdge && !wifiList.empty()) {
-      snprintf(wifiSsid, sizeof(wifiSsid), "%s", wifiList[wifiSel].c_str());
+    } else if (enterEdge && wifiSel < 0) {
+      startWifiPick();
+    } else if (enterEdge) {
+      const PickRow &row = wifiList[wifiSel];
+      snprintf(wifiSsid, sizeof(wifiSsid), "%s", row.ssid.c_str());
+      wipePass();
+      wifiMsg[0] = '\0';
       const char *stored = knownPassword(wifiSsid);
       if (stored != nullptr) {
         snprintf(wifiPass, sizeof(wifiPass), "%s", stored);
+        beginJoin(true);
+      } else if (row.open) {
+        beginJoin(false);
       } else {
-        wifiPass[0] = '\0';
+        wifiUi = WifiUi::Pass;
+        uiDirty = true;
       }
-      wifiPassLen = static_cast<uint8_t>(strlen(wifiPass));
-      wifiUi = WifiUi::Pass;
-      uiDirty = true;
     }
   } else if (wifiUi == WifiUi::Pass) {
     if (tabEdge) {
+      wipePass();
       wifiUi = WifiUi::Pick;
       uiDirty = true;
     } else if (enterEdge) {
-      WiFi.begin(wifiSsid, wifiPass);
-      wifiConnectUntil = millis() + 12000;
-      snprintf(wifiMsg, sizeof(wifiMsg), "Connecting...");
-      wifiUi = WifiUi::Connecting;
-      uiDirty = true;
+      beginJoin(false);
     } else {
       if (delEdge && wifiPassLen > 0) {
         wifiPass[--wifiPassLen] = '\0';
@@ -3044,7 +3386,9 @@ static void handleWifiKeys() {
     }
   } else if (wifiUi == WifiUi::Connecting) {
     if (tabEdge) {
-      wifiUi = WifiUi::None;
+      WiFi.disconnect(false, false);
+      wipePass();
+      wifiUi = WifiUi::Pick;
       uiDirty = true;
     }
   }
@@ -3054,15 +3398,6 @@ static void handleWifiKeys() {
   prevDel = keys.del || keys.backspace;
   prevWord.assign(keys.word.begin(), keys.word.end());
 }
-
-// One look at Cloudflare's trace after the user joins: the request only
-// succeeds with a route to the internet, and the body names the address the
-// network is seen as from outside.
-enum class NetCheck : uint8_t { Idle, Checking, Ok, Fail };
-static volatile NetCheck netCheck = NetCheck::Idle;
-static char publicLine[40] = "";
-static volatile uint8_t netEpoch = 0;
-static TaskHandle_t netTask = nullptr;
 
 static void copyTraceField(const String &body, const char *key, char *out, size_t outLen) {
   out[0] = '\0';
@@ -3090,48 +3425,82 @@ static void copyTraceField(const String &body, const char *key, char *out, size_
   out[n] = '\0';
 }
 
+// A 204 from a connectivity probe means a clear route out. Any other answer
+// means something on the way rewrote it, usually a captive login page.
+static NetState probeInternet(uint32_t &elapsedMs) {
+  static const char *kProbes[] = {"http://connectivitycheck.gstatic.com/generate_204",
+                                  "http://cp.cloudflare.com/generate_204"};
+  for (const char *url : kProbes) {
+    WiFiClient client;
+    HTTPClient http;
+    http.setConnectTimeout(4000);
+    http.setTimeout(4000);
+    const uint32_t started = millis();
+    if (!http.begin(client, url)) {
+      continue;
+    }
+    const int code = http.GET();
+    elapsedMs = millis() - started;
+    http.end();
+    if (code == 204) {
+      return NetState::Ok;
+    }
+    if (code > 0) {
+      return NetState::Captive;
+    }
+  }
+  return NetState::Fail;
+}
+
+// Cloudflare's trace names the address the network is seen as from outside.
+static bool lookupPublicIp(char *line, size_t lineLen) {
+  bool ok = false;
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.setConnectTimeout(4000);
+  http.setTimeout(4000);
+  if (http.begin(client, "https://1.1.1.1/cdn-cgi/trace")) {
+    if (http.GET() == 200) {
+      const String body = http.getString();
+      char ip[40] = "";
+      char loc[8] = "";
+      copyTraceField(body, "ip=", ip, sizeof(ip));
+      copyTraceField(body, "loc=", loc, sizeof(loc));
+      if (ip[0] != '\0') {
+        if (loc[0] != '\0') {
+          snprintf(line, lineLen, "%s %s", ip, loc);
+        } else {
+          snprintf(line, lineLen, "%s", ip);
+        }
+        ok = true;
+      }
+    }
+    http.end();
+  }
+  return ok;
+}
+
 static void netTaskMain(void *) {
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     const uint8_t epoch = netEpoch;
-    if (WiFi.status() != WL_CONNECTED) {
-      continue;
-    }
-    char line[40] = "";
-    bool ok = false;
-    WiFiClientSecure client;
-    client.setInsecure();
-    HTTPClient http;
-    http.setConnectTimeout(4000);
-    http.setTimeout(4000);
-    if (http.begin(client, "https://1.1.1.1/cdn-cgi/trace")) {
-      const int code = http.GET();
-      if (code == 200) {
-        const String body = http.getString();
-        char ip[40] = "";
-        char loc[8] = "";
-        copyTraceField(body, "ip=", ip, sizeof(ip));
-        copyTraceField(body, "loc=", loc, sizeof(loc));
-        if (ip[0] != '\0') {
-          if (loc[0] != '\0') {
-            snprintf(line, sizeof(line), "%s %s", ip, loc);
-          } else {
-            snprintf(line, sizeof(line), "%s", ip);
-          }
-          ok = true;
-        }
+    const uint8_t job = netJob;
+    const bool linked = WiFi.status() == WL_CONNECTED;
+    if (job == kNetJobInternet) {
+      uint32_t ms = 0;
+      const NetState result = linked ? probeInternet(ms) : NetState::Fail;
+      if (epoch == netEpoch) {
+        inetMs = ms;
+        inetState = result;
       }
-      http.end();
-    }
-    if (epoch != netEpoch || WiFi.status() != WL_CONNECTED) {
-      continue;
-    }
-    if (ok) {
-      snprintf(publicLine, sizeof(publicLine), "%s", line);
-      netCheck = NetCheck::Ok;
-    } else {
-      publicLine[0] = '\0';
-      netCheck = NetCheck::Fail;
+    } else if (job == kNetJobPublicIp) {
+      char line[40] = "";
+      const bool ok = linked && lookupPublicIp(line, sizeof(line));
+      if (epoch == netEpoch) {
+        snprintf(publicLine, sizeof(publicLine), "%s", line);
+        ipState = ok ? NetState::Ok : NetState::Fail;
+      }
     }
     uiDirty = true;
   }
@@ -3145,55 +3514,212 @@ static void bumpNetEpoch() {
   netEpoch = next;
 }
 
-static void startNetCheck() {
-  bumpNetEpoch();
-  publicLine[0] = '\0';
-  netCheck = NetCheck::Checking;
-  uiDirty = true;
+static bool netBusy() { return inetState == NetState::Busy || ipState == NetState::Busy; }
+
+static void startNetJob(uint8_t job) {
+  if (netBusy() || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
   if (netTask == nullptr) {
     xTaskCreatePinnedToCore(netTaskMain, "net", 16384, nullptr, 1, &netTask, 0);
   }
-  if (netTask != nullptr) {
-    xTaskNotifyGive(netTask);
-  } else {
-    netCheck = NetCheck::Fail;
+  volatile NetState &state = job == kNetJobInternet ? inetState : ipState;
+  if (netTask == nullptr) {
+    state = NetState::Fail;
+    uiDirty = true;
+    return;
   }
+  if (job == kNetJobInternet) {
+    ipState = NetState::Idle;
+    publicLine[0] = '\0';
+  }
+  state = NetState::Busy;
+  netJob = job;
+  uiDirty = true;
+  xTaskNotifyGive(netTask);
 }
 
 static void dropNetCheck() {
   bumpNetEpoch();
-  netCheck = NetCheck::Idle;
+  inetState = NetState::Idle;
+  ipState = NetState::Idle;
   publicLine[0] = '\0';
 }
 
-static bool ssidSeenNow(const char *ssid) {
-  if (ssid == nullptr || ssid[0] == '\0') {
-    return false;
+// The Join tab's main screen: one row per action, greyed out until it applies.
+static constexpr int kJoinConnect = 0;
+static constexpr int kJoinInternet = 1;
+static constexpr int kJoinPublicIp = 2;
+static constexpr int kJoinDisconnect = 3;
+static constexpr int kJoinItems = 4;
+static const char *kJoinLabels[kJoinItems] = {"Connect Wi-Fi", "Check internet", "Public IP", "Disconnect"};
+
+static bool joinEnabled(int item) {
+  const bool linked = WiFi.status() == WL_CONNECTED;
+  switch (item) {
+    case kJoinConnect: return true;
+    case kJoinInternet: return linked && !netBusy();
+    case kJoinPublicIp: return linked && !netBusy() && inetState == NetState::Ok;
+    case kJoinDisconnect: return linked;
+    default: return false;
   }
-  for (const KeptWifi &ap : keptWifi) {
-    if (std::strcmp(ap.ssid, ssid) == 0) {
-      return true;
-    }
-  }
-  return false;
 }
 
-// Watches a pending connection and reports the outcome.
-static void serviceWifiUi() {
-  if (wifiUi != WifiUi::Connecting) {
+static void moveJoin(int direction) {
+  for (int at = joinSel + direction; at >= 0 && at < kJoinItems; at += direction) {
+    if (joinEnabled(at)) {
+      joinSel = at;
+      uiDirty = true;
+      return;
+    }
+  }
+}
+
+static void disconnectWifi() {
+  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_STA);
+  wifiUi = WifiUi::None;
+  wipePass();
+  dropNetCheck();
+  joinSel = kJoinConnect;
+  showBanner("Wi-Fi off");
+  uiDirty = true;
+}
+
+static void activateJoin() {
+  if (!joinEnabled(joinSel)) {
     return;
   }
-  if (WiFi.status() == WL_CONNECTED) {
-    rememberWifi(wifiSsid, wifiPass);
-    wifiUi = WifiUi::None;
-    showBanner("Wi-Fi OK");
-    startNetCheck();
+  switch (joinSel) {
+    case kJoinConnect: startWifiPick(); break;
+    case kJoinInternet: startNetJob(kNetJobInternet); break;
+    case kJoinPublicIp: startNetJob(kNetJobPublicIp); break;
+    case kJoinDisconnect: disconnectWifi(); break;
+    default: break;
+  }
+}
+
+// Watches a pending connection and reports the outcome. Also notices a link
+// that drops later, and steps the selection on once a check succeeds.
+static void serviceWifiUi() {
+  static bool wasLinked = false;
+  static NetState lastInet = NetState::Idle;
+  static uint32_t refreshAt = 0;
+  const bool linked = WiFi.status() == WL_CONNECTED;
+
+  if (wifiUi == WifiUi::Connecting) {
+    if (linked) {
+      rememberWifi(wifiSsid, wifiPass);
+      wipePass();
+      wifiUi = WifiUi::None;
+      joinSel = kJoinInternet;
+      showBanner("Wi-Fi OK");
+      uiDirty = true;
+    } else if (static_cast<int32_t>(millis() - wifiConnectUntil) >= 0) {
+      WiFi.disconnect(false, false);
+      wipePass();
+      snprintf(wifiMsg, sizeof(wifiMsg), wifiUsedStored ? "Saved password failed" : "Failed, try again");
+      wifiUi = WifiUi::Pass;
+      wifiInputSeeded = false;
+      showBanner("Wi-Fi failed");
+      uiDirty = true;
+    }
+  }
+
+  if (wasLinked && !linked && wifiUi != WifiUi::Connecting) {
+    dropNetCheck();
+    if (joinSel != kJoinConnect) {
+      joinSel = kJoinConnect;
+    }
+    showBanner("Wi-Fi lost");
+  }
+  wasLinked = linked;
+
+  const NetState inet = inetState;
+  if (inet != lastInet) {
+    if (inet == NetState::Ok && joinSel == kJoinInternet) {
+      joinSel = kJoinPublicIp;
+    }
+    lastInet = inet;
     uiDirty = true;
-  } else if (static_cast<int32_t>(millis() - wifiConnectUntil) >= 0) {
-    snprintf(wifiMsg, sizeof(wifiMsg), "Failed, try again");
-    wifiUi = WifiUi::Pass;
-    showBanner("Wi-Fi failed");
+  }
+  if (!joinEnabled(joinSel) && !netBusy()) {
+    joinSel = kJoinConnect;
+  }
+
+  // Signal strength on the status line.
+  if (linked && menuIndex == kTabLink && wifiUi == WifiUi::None &&
+      static_cast<int32_t>(millis() - refreshAt) >= 0) {
+    refreshAt = millis() + 3000;
     uiDirty = true;
+  }
+}
+
+static void drawHint(const char *text) {
+  auto &d = M5Cardputer.Display;
+  d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  d.setCursor(4, d.height() - 10);
+  d.print(text);
+}
+
+static void drawJoinMenu() {
+  auto &d = M5Cardputer.Display;
+  const bool linked = WiFi.status() == WL_CONNECTED;
+  d.setCursor(4, kListTop);
+  if (linked) {
+    d.setTextColor(TFT_GREEN, TFT_BLACK);
+    char line[44];
+    snprintf(line, sizeof(line), "%.24s  %d dBm ch%u", WiFi.SSID().c_str(), static_cast<int>(WiFi.RSSI()),
+             static_cast<unsigned>(WiFi.channel()));
+    d.print(line);
+    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    d.setCursor(4, kListTop + 11);
+    d.print("IP ");
+    d.print(WiFi.localIP().toString().c_str());
+  } else {
+    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    d.print("Not connected");
+  }
+
+  const int buttonW = 100;
+  const int resultX = buttonW + 12;
+  int y = kListTop + 26;
+  for (int i = 0; i < kJoinItems; ++i) {
+    const bool enabled = joinEnabled(i);
+    const bool on = i == joinSel;
+    const uint16_t ink = enabled ? TFT_WHITE : 0x4208;
+    if (on) {
+      d.fillRect(2, y - 2, buttonW, 12, enabled ? TFT_WHITE : 0x4208);
+      d.setTextColor(TFT_BLACK, enabled ? TFT_WHITE : 0x4208);
+    } else {
+      d.drawRect(2, y - 2, buttonW, 12, ink);
+      d.setTextColor(ink, TFT_BLACK);
+    }
+    d.setCursor(7, y);
+    d.print(kJoinLabels[i]);
+
+    const NetState state = i == kJoinInternet ? inetState : i == kJoinPublicIp ? ipState : NetState::Idle;
+    d.setCursor(resultX, y);
+    char result[24] = "";
+    uint16_t color = TFT_WHITE;
+    if (state == NetState::Busy) {
+      snprintf(result, sizeof(result), "...");
+      color = TFT_YELLOW;
+    } else if (state == NetState::Ok && i == kJoinInternet) {
+      snprintf(result, sizeof(result), "OK %lu ms", static_cast<unsigned long>(inetMs));
+      color = TFT_GREEN;
+    } else if (state == NetState::Ok) {
+      snprintf(result, sizeof(result), "%.21s", publicLine);
+    } else if (state == NetState::Captive) {
+      snprintf(result, sizeof(result), "Login page");
+      color = TFT_ORANGE;
+    } else if (state == NetState::Fail) {
+      snprintf(result, sizeof(result), i == kJoinInternet ? "No internet" : "Failed");
+      color = TFT_ORANGE;
+    }
+    d.setTextColor(color, TFT_BLACK);
+    d.print(result);
+    y += 14;
   }
 }
 
@@ -3213,28 +3739,34 @@ static void drawLinkTab() {
         break;
       }
       const bool on = i == wifiSel;
-      const bool known = isKnownSsid(wifiList[i].c_str());
       d.fillRect(0, y - 1, d.width(), 12, on ? TFT_WHITE : TFT_BLACK);
+      if (i < 0) {
+        d.setTextColor(on ? TFT_BLACK : TFT_CYAN, on ? TFT_WHITE : TFT_BLACK);
+        d.setCursor(6, y);
+        d.print(wifiList.empty() ? "No networks, scan again" : "Scan again");
+        y += 12;
+        continue;
+      }
+      const PickRow &row = wifiList[i];
+      const bool known = isKnownSsid(row.ssid.c_str());
       if (known) {
         d.fillRect(0, y - 1, 3, 12, TFT_GREEN);
       }
-      if (on) {
-        d.setTextColor(TFT_BLACK, TFT_WHITE);
-      } else if (known) {
-        d.setTextColor(TFT_GREEN, TFT_BLACK);
-      } else {
-        d.setTextColor(TFT_WHITE, TFT_BLACK);
-      }
+      const uint16_t bg = on ? TFT_WHITE : TFT_BLACK;
+      d.setTextColor(on ? TFT_BLACK : known ? TFT_GREEN : TFT_WHITE, bg);
       d.setCursor(6, y);
       char shown[36];
-      snprintf(shown, sizeof(shown), "%.34s", wifiList[i].c_str());
+      snprintf(shown, sizeof(shown), "%.31s", row.ssid.c_str());
       d.print(shown);
+      if (row.open) {
+        d.setTextColor(on ? TFT_BLACK : TFT_GREEN, bg);
+        d.setCursor(d.width() - 36, y);
+        d.print("o");
+      }
+      d.setTextColor(on ? TFT_BLACK : TFT_DARKGREY, bg);
+      d.setCursor(d.width() - 26, y);
+      d.printf("%4d", row.rssi);
       y += 12;
-    }
-    if (wifiList.empty()) {
-      d.setTextColor(TFT_DARKGREY, TFT_BLACK);
-      d.setCursor(4, kListTop);
-      d.print("No networks found");
     }
     return;
   }
@@ -3252,38 +3784,22 @@ static void drawLinkTab() {
     }
     d.print(shown);
     d.print("_");
+    if (wifiMsg[0] != '\0') {
+      d.setTextColor(TFT_ORANGE, TFT_BLACK);
+      d.setCursor(4, kListTop + 32);
+      d.print(wifiMsg);
+    }
+    drawHint("Enter join   Tab back");
     return;
   }
   if (wifiUi == WifiUi::Connecting) {
     d.print(wifiMsg);
     d.setCursor(4, kListTop + 16);
     d.print(wifiSsid);
+    drawHint("Tab cancel");
     return;
   }
-  if (WiFi.status() == WL_CONNECTED) {
-    d.print(WiFi.SSID().c_str());
-    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    d.setCursor(4, kListTop + 14);
-    d.print(WiFi.localIP().toString().c_str());
-    d.setCursor(4, kListTop + 28);
-    if (netCheck == NetCheck::Checking) {
-      d.setTextColor(TFT_YELLOW, TFT_BLACK);
-      d.print("Checking internet...");
-    } else if (netCheck == NetCheck::Ok) {
-      d.setTextColor(TFT_WHITE, TFT_BLACK);
-      d.print(publicLine);
-    } else if (netCheck == NetCheck::Fail) {
-      d.setTextColor(TFT_ORANGE, TFT_BLACK);
-      d.print("No internet");
-    }
-    d.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    d.setCursor(4, kListTop + 42);
-    d.print("Btn  disconnect");
-    return;
-  }
-  const bool seen = wifiHaveCreds && ssidSeenNow(wifiSsid);
-  d.setTextColor(seen ? TFT_WHITE : TFT_DARKGREY, TFT_BLACK);
-  d.print(wifiHaveCreds ? wifiSsid : "No network");
+  drawJoinMenu();
 }
 
 static void handleKeyboard() {
@@ -3321,6 +3837,8 @@ static void handleKeyboard() {
         moveMode(mode);
       } else if (menuIndex != kTabLink) {
         moveList(scroll);
+      } else if (wifiUi == WifiUi::None) {
+        moveJoin(scroll);
       }
       held = gesture;
       repeatAt = now + (first ? 360 : 140);
@@ -3356,7 +3874,7 @@ static void handleKeyboard() {
     }
   } else if (keys.enter && !enterHeld) {
     if (menuIndex == kTabLink) {
-      startWifiPick();
+      activateJoin();
     } else {
       taskENTER_CRITICAL(&radioMux);
       requestedKind = static_cast<uint8_t>(menuIndex);
@@ -3373,12 +3891,7 @@ static void handleSideButton() {
   }
   if (menuIndex == kTabLink) {
     if (WiFi.status() == WL_CONNECTED || wifiUi == WifiUi::Connecting) {
-      WiFi.disconnect(false, false);
-      WiFi.mode(WIFI_STA);
-      wifiUi = WifiUi::None;
-      dropNetCheck();
-      showBanner("Wi-Fi off");
-      uiDirty = true;
+      disconnectWifi();
     }
     return;
   }
@@ -3431,6 +3944,8 @@ void setup() {
   setupBle();
   loadStored();
   loadWifiCreds();
+  loadAlertPrefs();
+  ledSet(0, 0, 0);
   updateInfo();
   setupWatchdog();
   uiDirty = true;
@@ -3478,6 +3993,17 @@ void loop() {
     updateInfo();
     uiDirty = true;
   }
+  if (alertsChanged) {
+    alertsChanged = false;
+    saveAlerts();
+    updateInfo();
+  }
+  if (watchChanged) {
+    watchChanged = false;
+    saveWatch();
+    updateInfo();
+  }
+  serviceLed();
   if (linkChanged) {
     linkChanged = false;
     uiDirty = true;
@@ -3556,16 +4082,16 @@ void loop() {
     }
   }
 
-  // The phone's interval drives the sweep whether or not the phone is here.
-  // Zero means wait. Alone, the speaker reports what the sweep finds.
+  // The phone's interval drives the sweep whether or not the phone is here,
+  // once a first Wi-Fi scan has been asked for. Zero means wait.
   const uint32_t everyMs = static_cast<uint32_t>(scanIntervalSec) * 1000;
-  const bool due = everyMs > 0 && !otaActive && !otaJobBusy && !rawActive && !rawStartPending &&
-                   millis() - lastScanMs >= everyMs;
+  const bool due = (patrolArmed || blePatrolArmed) && everyMs > 0 && !otaActive && !otaJobBusy && !rawActive &&
+                   !rawStartPending && millis() - lastScanMs >= everyMs;
   bool startScan = false;
   uint8_t kind = 0;
   taskENTER_CRITICAL(&radioMux);
   if (due && !scanRequested) {
-    requestedKind = 0;
+    requestedKind = blePatrolArmed && (!patrolArmed || patrolNextBle) ? 2 : 0;
   }
   const bool joinBusy =
       wifiUi == WifiUi::Connecting || (menuIndex == kTabLink && wifiUi != WifiUi::None);
@@ -3580,6 +4106,15 @@ void loop() {
   }
   taskEXIT_CRITICAL(&radioMux);
   if (startScan) {
+    // The loop stalls for the scan; do not leave a blink lit through it.
+    ledOff();
+    if (kind == 0) {
+      patrolArmed = true;
+      patrolNextBle = true;
+    } else if (kind == 2) {
+      blePatrolArmed = true;
+      patrolNextBle = false;
+    }
     if (kind == 1) {
       runLanScan();
     } else if (kind == 2) {
@@ -3588,6 +4123,9 @@ void loop() {
       runLoraScan();
     } else {
       runScan();
+    }
+    if (kind == 0 || kind == 2) {
+      lastScanMs = millis();
     }
     scanInProgress = false;
     uiDirty = true;

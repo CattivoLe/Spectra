@@ -43,13 +43,21 @@ data class LoraDevice(
 }
 
 object SensorProtocol {
-    const val VERSION = 8
+    const val VERSION = 9
 
     val SERVICE: UUID = UUID.fromString("53500001-8f2d-4b6a-9c1e-737065637472")
     val INFO: UUID = UUID.fromString("53500002-8f2d-4b6a-9c1e-737065637472")
     val CONTROL: UUID = UUID.fromString("53500003-8f2d-4b6a-9c1e-737065637472")
     val RESULTS: UUID = UUID.fromString("53500004-8f2d-4b6a-9c1e-737065637472")
     val FIRMWARE: UUID = UUID.fromString("53500005-8f2d-4b6a-9c1e-737065637472")
+
+    /** A watch-list id the sensor can match, `AA:BB:CC:DD:EE:FF`; anything else gives null. */
+    fun addressFromWatchId(id: String): MacAddress? {
+        val parts = id.split(":")
+        if (parts.size != 6 || parts.any { it.length != 2 }) return null
+        val bytes = parts.map { it.toIntOrNull(16) ?: return null }
+        return MacAddress(ByteArray(6) { bytes[it].toByte() })
+    }
 
     sealed class Command {
         data object ScanOnce : Command()
@@ -70,6 +78,11 @@ object SensorProtocol {
         data class StartRawCapture(val channel: Int, val bssid: MacAddress?) : Command()
         /** Stop the raw-frame stream. */
         data object StopRawCapture : Command()
+        /** How the sensor announces findings on its own (v9). Both off is the silent mode. */
+        data class SetAlerts(val sound: Boolean, val light: Boolean) : Command()
+        /** Addresses the sensor flags in its own Wi-Fi and Bluetooth scans (v9).
+         *  Replaces the list; the sensor keeps the first 32. */
+        data class SetWatch(val addresses: List<MacAddress>) : Command()
 
         val data: ByteArray
             get() = when (this) {
@@ -90,6 +103,10 @@ object SensorProtocol {
                 is StartRawCapture -> byteArrayOf(0x0A, channel.toU8(), if (bssid == null) 0 else 1) +
                     (bssid?.bytes ?: ByteArray(6))
                 StopRawCapture -> byteArrayOf(0x0B)
+                is SetAlerts -> byteArrayOf(0x0C, ((if (sound) 0x01 else 0) or (if (light) 0x02 else 0)).toByte())
+                is SetWatch -> addresses.take(32).let { kept ->
+                    byteArrayOf(0x0D, kept.size.toByte()) + kept.fold(ByteArray(0)) { acc, mac -> acc + mac.bytes }
+                }
                 is SetPeer -> byteArrayOf(0x07) + name.encodeToByteArray().let { bytes ->
                     val end = utf8Cut(bytes, 31)
                     bytes.copyOf(end)
@@ -707,6 +724,10 @@ data class SensorInfo(
     val name: String? = null,
     /** SSIDs the sensor will rejoin. Passwords are not on this characteristic. */
     val known: List<String> = emptyList(),
+    /** Alert flags the sensor runs with (bit0 sound, bit1 LED). Absent before v9. */
+    val alerts: Int? = null,
+    /** How many addresses the sensor watches for. Absent before v9. */
+    val watchCount: Int? = null,
 ) {
     companion object {
         fun decode(json: String): SensorInfo? {
@@ -731,6 +752,8 @@ data class SensorInfo(
                 satellites = jsonInt(json, "sats"),
                 name = jsonString(json, "name"),
                 known = jsonStrings(json, "known"),
+                alerts = jsonInt(json, "alerts"),
+                watchCount = jsonInt(json, "watch"),
             )
         }
 

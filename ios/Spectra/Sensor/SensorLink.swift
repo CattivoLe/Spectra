@@ -83,6 +83,51 @@ final class SensorLink: NSObject {
         }
     }
 
+    /// How the sensor announces findings on its own. Remembered across launches.
+    enum AlertMode: Int, CaseIterable, Identifiable {
+        case soundAndLight = 3
+        case lightOnly = 2
+        case soundOnly = 1
+        case silent = 0
+
+        var id: Int { rawValue }
+        var sound: Bool { rawValue & 0x01 != 0 }
+        var light: Bool { rawValue & 0x02 != 0 }
+
+        var label: String {
+            switch self {
+            case .soundAndLight: String(localized: "Sound and light")
+            case .lightOnly: String(localized: "Light only")
+            case .soundOnly: String(localized: "Sound only")
+            case .silent: String(localized: "Silent")
+            }
+        }
+    }
+
+    var alertMode: AlertMode {
+        didSet {
+            UserDefaults.standard.set(alertMode.rawValue, forKey: Keys.alertMode)
+            send(.setAlerts(sound: alertMode.sound, light: alertMode.light))
+        }
+    }
+
+    /// Watched BSSIDs and Bluetooth addresses, in the form the sensor matches.
+    private var watchedAddresses: [BSSID] = []
+
+    /// Hands the watch list to the sensor. Ids that are not addresses are skipped.
+    func setWatched(_ ids: Set<String>) {
+        let addresses = ids.compactMap(SensorProtocol.Command.address(fromWatchID:))
+            .sorted { $0.description < $1.description }
+        guard addresses != watchedAddresses else { return }
+        watchedAddresses = addresses
+        send(.setWatch(addresses: addresses))
+    }
+
+    private func pushAlertSettings() {
+        send(.setAlerts(sound: alertMode.sound, light: alertMode.light))
+        send(.setWatch(addresses: watchedAddresses))
+    }
+
     var isConnected: Bool {
         switch state {
         case .connected, .demo: true
@@ -111,6 +156,7 @@ final class SensorLink: NSObject {
     private enum Keys {
         static let lastSensor = "lastSensorIdentifier"
         static let liveInterval = "liveInterval"
+        static let alertMode = "sensorAlertMode"
     }
 
     static let liveIntervals = [0, 10, 30, 60, 120, 180, 240]
@@ -128,6 +174,8 @@ final class SensorLink: NSObject {
         self.history = history
         let saved = UserDefaults.standard.object(forKey: Keys.liveInterval) as? Int
         liveInterval = saved.flatMap { Self.liveIntervals.contains($0) ? $0 : nil } ?? 30
+        let savedAlerts = UserDefaults.standard.object(forKey: Keys.alertMode) as? Int
+        alertMode = savedAlerts.flatMap(AlertMode.init(rawValue:)) ?? .soundAndLight
         super.init()
         central = CBCentralManager(delegate: self, queue: nil)
     }
@@ -759,6 +807,7 @@ final class SensorLink: NSObject {
                 // The reconnect happened while the update still held scans back.
                 send(.setInterval(seconds: liveInterval))
                 send(.setPeer(name: UIDevice.current.name))
+                pushAlertSettings()
                 return
             default:
                 break
@@ -936,6 +985,7 @@ extension SensorLink: CBPeripheralDelegate {
         send(.setInterval(seconds: liveInterval))
         send(.setPeer(name: UIDevice.current.name))
         pushKnownNetworks()
+        pushAlertSettings()
         if liveInterval == 0 {
             send(.scanOnce)
         }

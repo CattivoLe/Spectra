@@ -69,6 +69,16 @@ struct SensorView: View {
                         InfoRow("Scans this session", value: "\(store.scanCount)")
                     }
 
+                    Section {
+                        Picker("Alerts on sensor", selection: $link.alertMode) {
+                            ForEach(SensorLink.AlertMode.allCases) { mode in
+                                Text(mode.label).tag(mode)
+                            }
+                        }
+                    } footer: {
+                        Text("The LED blinks red for a threat, yellow for a warning, orange for a tracker that keeps showing up, green for an open network, blue for a watched Bluetooth device and purple for a watched network.")
+                    }
+
                     if let info = link.info {
                         Section {
                             InfoRow("Firmware") {

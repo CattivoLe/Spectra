@@ -248,6 +248,14 @@ struct SensorProtocolTests {
         #expect(SensorProtocol.Command.startRawCapture(channel: 11, bssid: BSSID(bytes: [0xAA, 0xBB, 0xCC, 0x01, 0x02, 0x03])).data
             == Data([0x0A, 11, 1, 0xAA, 0xBB, 0xCC, 0x01, 0x02, 0x03]))
         #expect(SensorProtocol.Command.stopRawCapture.data == Data([0x0B]))
+        #expect(SensorProtocol.Command.setAlerts(sound: true, light: true).data == Data([0x0C, 0x03]))
+        #expect(SensorProtocol.Command.setAlerts(sound: false, light: true).data == Data([0x0C, 0x02]))
+        #expect(SensorProtocol.Command.setAlerts(sound: false, light: false).data == Data([0x0C, 0x00]))
+        #expect(SensorProtocol.Command.setWatch(addresses: [BSSID(bytes: [0xAA, 0xBB, 0xCC, 0x01, 0x02, 0x03])]).data
+            == Data([0x0D, 1, 0xAA, 0xBB, 0xCC, 0x01, 0x02, 0x03]))
+        #expect(SensorProtocol.Command.setWatch(addresses: []).data == Data([0x0D, 0]))
+        #expect(SensorProtocol.Command.address(fromWatchID: "AA:BB:CC:01:02:03")?.bytes == [0xAA, 0xBB, 0xCC, 0x01, 0x02, 0x03])
+        #expect(SensorProtocol.Command.address(fromWatchID: "8D3E2F4A-1B2C-4D5E-9F00-112233445566") == nil)
         let uploaded = SensorProtocol.Message.knownWifi(index: 0, total: 1, ssid: "Cafe", password: "abc")
         #expect(SensorProtocol.decode(SensorProtocol.encode(uploaded)) == uploaded)
     }

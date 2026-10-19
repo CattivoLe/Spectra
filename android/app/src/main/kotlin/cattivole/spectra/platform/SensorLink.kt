@@ -15,6 +15,7 @@ import android.content.Context
 import android.os.Build
 import cattivole.spectra.core.HistoryStore
 import cattivole.spectra.core.LoraDevice
+import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.DemoSensor
 import cattivole.spectra.core.FirmwareUpdate
 import cattivole.spectra.core.FirmwareUpdateProgress
@@ -83,6 +84,20 @@ class SensorLink(
         private set
     var liveInterval: Int = 30
         private set
+
+    /** How the sensor announces findings on its own. Remembered across launches. */
+    enum class AlertMode(val flags: Int) {
+        SoundAndLight(3), LightOnly(2), SoundOnly(1), Silent(0);
+
+        val sound: Boolean get() = flags and 0x01 != 0
+        val light: Boolean get() = flags and 0x02 != 0
+    }
+
+    var alertMode: AlertMode = AlertMode.SoundAndLight
+        private set
+
+    /** Watched BSSIDs and Bluetooth addresses, in the form the sensor matches. */
+    private var watchedAddresses: List<MacAddress> = emptyList()
 
     // Raw frame capture: a short, thinned sniff of one channel, collected from
     // 0x24 frames and written to a .pcap on the phone.
@@ -159,6 +174,8 @@ class SensorLink(
     init {
         val saved = prefs.getInt(KEY_INTERVAL, 30)
         liveInterval = if (saved in liveIntervals) saved else 30
+        val savedAlerts = prefs.getInt(KEY_ALERTS, AlertMode.SoundAndLight.flags)
+        alertMode = AlertMode.entries.firstOrNull { it.flags == savedAlerts } ?: AlertMode.SoundAndLight
         radio.addListener { result -> onScan(result) }
         radio.onAdapterChange { adapterChanged() }
         refreshAvailability(connectSaved = false)
@@ -334,7 +351,7 @@ class SensorLink(
 
     /** Begin a raw-frame capture on [channel]. [bssid] is an optional filter;
      *  left null, the sensor sends every frame on the channel. */
-    fun startRawCapture(channel: Int, bssid: cattivole.spectra.core.MacAddress? = null) {
+    fun startRawCapture(channel: Int, bssid: MacAddress? = null) {
         if (!isConnected || rawCapturing) return
         rawFrames.clear()
         rawAssembler = cattivole.spectra.core.RawFrameAssembler()
@@ -466,6 +483,26 @@ class SensorLink(
         enqueue(control, SensorProtocol.Command.SetPeer(phoneName(app)).data)
         demo?.intervalSeconds = seconds
         publish()
+    }
+
+    fun setAlertMode(mode: AlertMode) {
+        alertMode = mode
+        prefs.edit().putInt(KEY_ALERTS, mode.flags).apply()
+        enqueue(control, SensorProtocol.Command.SetAlerts(mode.sound, mode.light).data)
+        publish()
+    }
+
+    /** Hands the watch list to the sensor. Ids that are not addresses are skipped. */
+    fun setWatched(ids: Set<String>) {
+        val addresses = ids.mapNotNull(SensorProtocol::addressFromWatchId).sortedBy { it.text }
+        if (addresses == watchedAddresses) return
+        watchedAddresses = addresses
+        enqueue(control, SensorProtocol.Command.SetWatch(addresses).data)
+    }
+
+    private fun pushAlertSettings() {
+        enqueue(control, SensorProtocol.Command.SetAlerts(alertMode.sound, alertMode.light).data)
+        enqueue(control, SensorProtocol.Command.SetWatch(watchedAddresses).data)
     }
 
     fun setDemo(on: Boolean) {
@@ -779,6 +816,7 @@ class SensorLink(
         // The update paused automatic scans; give them back.
         enqueue(control, SensorProtocol.Command.SetInterval(liveInterval).data)
         enqueue(control, SensorProtocol.Command.SetPeer(phoneName(app)).data)
+        pushAlertSettings()
         publish()
     }
 
@@ -902,6 +940,7 @@ class SensorLink(
                 enqueue(control, SensorProtocol.Command.SetInterval(liveInterval).data)
                 enqueue(control, SensorProtocol.Command.SetPeer(phoneName(app)).data)
                 pushKnownNetworks()
+                pushAlertSettings()
                 if (liveInterval == 0) enqueue(control, SensorProtocol.Command.ScanOnce.data)
                 publish()
             }
@@ -994,5 +1033,6 @@ class SensorLink(
         private const val KEY_SENSOR = "lastSensor"
         private const val KEY_SENSOR_NAME = "lastSensorName"
         private const val KEY_INTERVAL = "liveInterval"
+        private const val KEY_ALERTS = "sensorAlertMode"
     }
 }

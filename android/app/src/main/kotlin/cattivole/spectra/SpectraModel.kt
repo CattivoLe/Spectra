@@ -56,6 +56,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         val next = watchedIds.toMutableSet()
         if (!next.add(id)) next.remove(id)
         prefs.edit().putStringSet(WATCHED, next).apply()
+        link.setWatched(next)
         generation += 1
     }
 
@@ -64,6 +65,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     private var savedCheckAt = 0L
 
     init {
+        link.setWatched(watchedIds)
         val bump = {
             generation += 1
             autosaveOnScanFinish()

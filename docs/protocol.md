@@ -1,7 +1,7 @@
 # Spectra BLE protocol
 
 The Cardputer runs a GATT server; the iPhone is the central. Everything is
-little-endian. Version 8.
+little-endian. Version 9.
 
 ## Service
 
@@ -48,6 +48,9 @@ Version 7 adds the Cap LoRa-1262. `lora` is true when the SX1262 answered.
 has a fix less than 30 seconds old. `sats` is the satellite count from the
 latest GGA sentence. All three are omitted when the cap is not fitted.
 
+Version 9 adds `alerts`, the alert mode flags set with control `0x0C`, and
+`watch`, the number of addresses on the sensor's watch list (`0x0D`).
+
 ## Control (write)
 
 First byte is the command.
@@ -65,6 +68,8 @@ First byte is the command.
 | `0x09` | Reset known list | — |
 | `0x0A` | Start raw capture | `u8` channel (1–14, 0 = keep current), `u8` flags (bit0 = filter to the BSSID), `6` BSSID |
 | `0x0B` | Stop raw capture | — |
+| `0x0C` | Set alerts (v9) | `u8` flags: bit0 = sound, bit1 = LED. 0 is silent |
+| `0x0D` | Set watch list (v9) | `u8` count (0–32), then count × `6` address bytes, first octet first |
 
 `0x05` adds one network to the list the sensor shows. Passwords are included
 so a known network can be joined from the picker. `0x09` clears that list;
@@ -94,6 +99,27 @@ is still reported). Frames can be filtered to one BSSID, but the phone normally
 captures everything on the channel. Automatic scans pause while a capture runs,
 the same way a firmware update holds them off. `0x0B` stops the stream, which
 also happens when the phone disconnects.
+
+`0x0C` chooses how the sensor announces what a scan finds on its own. The
+LED blinks red for a critical finding and yellow for a warning, ranked the
+same way as the phone's threat banners; orange for an item tracker (a Find
+My accessory away from its owner, a Samsung SmartTag or a Tile) heard in
+three Bluetooth scans in a row; green for an open network; blue for a
+watched Bluetooth device; purple for a watched Wi-Fi BSSID. Sound and LED
+follow the flags whether or not a phone is linked. The sensor keeps the
+flags across reboot; the default is sound and LED.
+
+`0x0D` replaces the list of watched addresses: Wi-Fi BSSIDs and Bluetooth
+device addresses, written in the order they are printed (`AA:BB:…` sends
+`0xAA` first). The sensor keeps it across reboot and matches it against
+its own Wi-Fi and Bluetooth scans. Phones that only know a Bluetooth device
+by an opaque identifier cannot put it on this list.
+
+After boot the automatic interval waits for a first Wi-Fi scan request,
+from the keyboard (Enter on the Wi-Fi tab) or from `0x01` / `0x02`; from
+then on the interval drives the patrol. A Bluetooth scan asked for on the
+sensor's own keyboard adds Bluetooth to the patrol: the interval then
+alternates a Wi-Fi scan and a Bluetooth scan.
 
 ## Firmware (write)
 
