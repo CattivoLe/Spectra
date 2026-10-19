@@ -18,6 +18,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.GppBad
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Key
@@ -53,6 +56,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -98,6 +102,7 @@ import cattivole.spectra.core.TrackedNetwork
 import cattivole.spectra.core.WifiClient
 import cattivole.spectra.platform.Permissions
 import cattivole.spectra.platform.PhoneWifiScanner
+import cattivole.spectra.platform.SensorLink
 import java.util.Locale
 
 internal enum class WifiSort { SIGNAL, NAME, CHANNEL }
@@ -629,6 +634,9 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
     }
     val reading = network.latest
     val snapshot = entryId != null
+    val context = LocalContext.current
+    // A capture belongs to this screen: stop it when the user leaves.
+    DisposableEffect(Unit) { onDispose { if (!snapshot) model.link.stopRawCapture() } }
     val quality = SignalQuality.of(reading.rssi)
     val qualityColor = Spectra.colors.of(quality)
     val now = if (snapshot) network.lastSeen else rememberNow()
@@ -775,6 +783,9 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
                 if (reading.capabilities and Capabilities.LONG_RANGE != 0) add { InfoRow(tr("Long range"), "802.11 LR") }
             },
         )
+        if (!snapshot && model.link.isConnected) {
+            captureCard(model.link, context, reading.channel, network)
+        }
         card(
             header = tr("Security"),
             key = "security",
@@ -929,6 +940,71 @@ private fun StatusRow(text: String) {
         Icon(Icons.Rounded.Wifi, contentDescription = null, tint = Spectra.colors.fair, modifier = Modifier.size(22.dp))
         Text(text, style = MaterialTheme.typography.bodyLarge)
     }
+}
+
+// Capture raw frames on this network's channel into a .pcap (counterpart of
+// the iOS NetworkDetailView capture section).
+
+private fun LazyListScope.captureCard(
+    link: SensorLink,
+    context: android.content.Context,
+    channel: Int,
+    network: TrackedNetwork,
+) {
+    val rows = buildList<@Composable () -> Unit> {
+        when {
+            link.rawCapturing -> {
+                add { CaptureProgressRow(channel, link.rawFrameCount, link.rawByteCount) }
+                add { ActionRow(tr("Stop capture"), Icons.Rounded.Stop, onClick = { link.stopRawCapture() }, tint = Spectra.colors.danger) }
+            }
+            link.rawFrameCount > 0 -> {
+                add { InfoRow(tr("Captured"), tr("%d frames · %s", link.rawFrameCount, byteSize(link.rawByteCount.toLong()))) }
+                add { ActionRow(tr("Save .pcap"), Icons.Rounded.Download, onClick = { sharePcap(context, link.rawCapturePcap(), captureLabel(network)) }) }
+                add { ActionRow(tr("Capture again"), Icons.Rounded.Refresh, onClick = { link.startRawCapture(channel) }) }
+            }
+            else -> add {
+                ActionRow(tr("Capture traffic → save .pcap"), Icons.Rounded.SettingsInputAntenna, onClick = { link.startRawCapture(channel) })
+            }
+        }
+    }
+    val footer = buildString {
+        append(
+            tr(
+                "Pins the sensor to channel %d and streams the frames it hears into a .pcap for Wireshark. Bluetooth is narrow, so this is a short, thinned sample — not a full capture — and it stops on its own near %d frames.",
+                channel,
+                SensorLink.RAW_FRAME_CAP,
+            ),
+        )
+        if (link.rawDropped) {
+            append(" ")
+            append(tr("Some frames were dropped on the way over Bluetooth, so there are gaps."))
+        }
+    }
+    card(header = tr("Traffic capture"), key = "capture", footer = footer, rows = rows)
+}
+
+@Composable
+private fun CaptureProgressRow(channel: Int, frames: Int, bytes: Int) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+        Column {
+            Text(tr("Capturing on channel %d…", channel), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                tr("%d frames · %s", frames, byteSize(bytes.toLong())),
+                style = MaterialTheme.typography.bodySmall.merge(Tabular),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun captureLabel(network: TrackedNetwork): String {
+    val raw = network.revealedSsid ?: network.latest.ssid ?: network.latest.bssid.text
+    return raw.replace(Regex("[^A-Za-z0-9_-]"), "-").take(24).ifEmpty { "capture" }
 }
 
 private fun reasonText(reason: WifiJoiner.Reason): String = when (reason) {

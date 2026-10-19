@@ -71,6 +71,21 @@ fun shareHistory(context: Context, entries: List<HistoryEntry>) {
     context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
+/** Writes a captured `.pcap` to cacheDir/exports and hands it to a share chooser. */
+fun sharePcap(context: Context, bytes: ByteArray, label: String) {
+    val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+    val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+    val out = File(dir, "spectra-$label-$stamp.pcap")
+    out.writeBytes(bytes)
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", out)
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "application/vnd.tcpdump.pcap"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}
+
 /** A share button that opens a menu of export formats. */
 @Composable
 fun ExportMenu(entries: List<HistoryEntry>) {

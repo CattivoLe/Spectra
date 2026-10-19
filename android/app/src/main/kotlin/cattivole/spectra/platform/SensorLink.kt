@@ -84,6 +84,23 @@ class SensorLink(
     var liveInterval: Int = 30
         private set
 
+    // Raw frame capture: a short, thinned sniff of one channel, collected from
+    // 0x24 frames and written to a .pcap on the phone.
+    var rawCapturing = false
+        private set
+    var rawFrameCount = 0
+        private set
+    var rawByteCount = 0
+        private set
+    /** True once any frame was lost — gaps are expected over BLE. */
+    var rawDropped = false
+        private set
+    private val rawFrames = ArrayList<cattivole.spectra.core.PcapWriter.Frame>()
+    private var rawAssembler = cattivole.spectra.core.RawFrameAssembler()
+    private var rawCaptureStartMs = 0L
+    private var rawFirstDeviceTs: Long? = null
+    private var demoRawJob: Job? = null
+
     val isConnected: Boolean get() = state is State.Connected || state is State.Demo
 
     private val app = context.applicationContext
@@ -287,13 +304,15 @@ class SensorLink(
         publish()
     }
 
-    /** What belongs to one connection: forgotten when it ends. */
+    /** What belongs to one connection: forgotten when it ends. The captured
+     *  frames themselves are kept, so a finished capture can still be saved. */
     private fun resetSession() {
         info = null
         batteryLevel = null
         isCharging = null
         loraDevices = emptyList()
         endLoraScan()
+        endRawCapture()
         capFix = null
         store.abandonScan()
         if (upload != null) failUpdate(FirmwareUpdate.TransferError.LINK_LOST.message)
@@ -311,6 +330,101 @@ class SensorLink(
         armLoraWatch()
         enqueue(control, SensorProtocol.Command.ScanLora.data)
         publish()
+    }
+
+    /** Begin a raw-frame capture on [channel]. [bssid] is an optional filter;
+     *  left null, the sensor sends every frame on the channel. */
+    fun startRawCapture(channel: Int, bssid: cattivole.spectra.core.MacAddress? = null) {
+        if (!isConnected || rawCapturing) return
+        rawFrames.clear()
+        rawAssembler = cattivole.spectra.core.RawFrameAssembler()
+        rawFrameCount = 0
+        rawByteCount = 0
+        rawDropped = false
+        rawCaptureStartMs = System.currentTimeMillis()
+        rawFirstDeviceTs = null
+        rawCapturing = true
+        if (demo != null) {
+            startDemoRawCapture(channel)
+        } else {
+            enqueue(control, SensorProtocol.Command.StartRawCapture(channel, bssid).data)
+        }
+        publish()
+    }
+
+    fun stopRawCapture() {
+        if (!rawCapturing) return
+        rawCapturing = false
+        demoRawJob?.cancel()
+        demoRawJob = null
+        if (demo == null) enqueue(control, SensorProtocol.Command.StopRawCapture.data)
+        publish()
+    }
+
+    /** The captured frames as a `.pcap` (radiotap link type), ready to share. */
+    fun rawCapturePcap(): ByteArray = cattivole.spectra.core.PcapWriter.pcap(rawFrames)
+
+    private fun endRawCapture() {
+        rawCapturing = false
+        demoRawJob?.cancel()
+        demoRawJob = null
+    }
+
+    private fun handleRawFrame(fragment: SensorProtocol.RawFrameFragment) {
+        if (!rawCapturing) return
+        val completed = rawAssembler.ingest(fragment)
+        rawDropped = rawAssembler.dropped > 0
+        if (completed == null) return
+        if (rawFirstDeviceTs == null) rawFirstDeviceTs = completed.timestampMicros
+        val first = rawFirstDeviceTs ?: completed.timestampMicros
+        // Unsigned 32-bit subtraction wraps cleanly across the sensor's clock.
+        val deltaMicros = (completed.timestampMicros - first) and 0xFFFFFFFFL
+        val timestamp = rawCaptureStartMs / 1000.0 + deltaMicros / 1_000_000.0
+        rawFrames.add(
+            cattivole.spectra.core.PcapWriter.Frame(
+                timestamp, completed.channel, completed.rssi, completed.originalLength, completed.bytes,
+            ),
+        )
+        rawFrameCount = rawFrames.size
+        rawByteCount += completed.bytes.size
+        if (rawFrameCount >= RAW_FRAME_CAP || rawByteCount >= RAW_BYTE_CAP) stopRawCapture()
+    }
+
+    /** Feeds synthetic beacons so the capture flow works in demo mode. */
+    private fun startDemoRawCapture(channel: Int) {
+        demoRawJob?.cancel()
+        demoRawJob = scope.launch {
+            var seq = 0
+            val start = System.nanoTime()
+            while (rawCapturing) {
+                val frame = demoBeacon(channel, seq)
+                val micros = ((System.nanoTime() - start) / 1000) and 0xFFFFFFFFL
+                handleRawFrame(
+                    SensorProtocol.RawFrameFragment(
+                        seq = seq, fragmentIndex = 0, fragmentCount = 1,
+                        timestampMicros = micros, channel = channel,
+                        rssi = (-82..-42).random(), originalLength = frame.size, payload = frame,
+                    ),
+                )
+                publish()
+                seq = (seq + 1) and 0xFFFF
+                delay(140)
+            }
+        }
+    }
+
+    private fun demoBeacon(channel: Int, seq: Int): ByteArray {
+        val bssid = byteArrayOf(0x02, 0x00, 0x5E, 0x10, 0x00, (seq % 4).toByte())
+        val ssid = "Spectra-Demo".encodeToByteArray()
+        return byteArrayOf(0x80.toByte(), 0, 0, 0) +
+            byteArrayOf(-1, -1, -1, -1, -1, -1) + // broadcast addr1
+            bssid + bssid +
+            byteArrayOf(0, 0) +                   // sequence control
+            ByteArray(8) +                        // timestamp
+            byteArrayOf(0x64, 0) +                // beacon interval
+            byteArrayOf(0x01, 0x04) +             // capability info
+            byteArrayOf(0x00, ssid.size.toByte()) + ssid +
+            byteArrayOf(0x03, 0x01, channel.toByte())
     }
 
     /** A quiet pass is about forty seconds. Stop if the end notice never arrives. */
@@ -380,6 +494,7 @@ class SensorLink(
             demo?.stop()
             demo = null
             demoJob?.cancel()
+            endRawCapture()
             info = null
             batteryLevel = null
             isCharging = null
@@ -576,6 +691,11 @@ class SensorLink(
                 enqueue(control, SensorProtocol.Command.AckKnown.data)
                 pushKnownNetworks()
             }
+            publish()
+            return
+        }
+        if (message is SensorProtocol.Message.RawFrame) {
+            handleRawFrame(message.fragment)
             publish()
             return
         }
@@ -860,6 +980,9 @@ class SensorLink(
     }
 
     companion object {
+        /** Stop a capture on our own at these, so a run cannot grow without bound. */
+        const val RAW_FRAME_CAP = 2000
+        const val RAW_BYTE_CAP = 1_000_000
         val liveIntervals = listOf(0, 10, 30, 60, 120, 180, 240)
 
         fun intervalTitle(seconds: Int): String = when {

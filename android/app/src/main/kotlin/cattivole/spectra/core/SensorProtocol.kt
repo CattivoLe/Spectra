@@ -43,7 +43,7 @@ data class LoraDevice(
 }
 
 object SensorProtocol {
-    const val VERSION = 7
+    const val VERSION = 8
 
     val SERVICE: UUID = UUID.fromString("53500001-8f2d-4b6a-9c1e-737065637472")
     val INFO: UUID = UUID.fromString("53500002-8f2d-4b6a-9c1e-737065637472")
@@ -65,6 +65,11 @@ object SensorProtocol {
         data object AckKnown : Command()
         /** The next RememberWifi commands replace the list on the sensor. */
         data object ResetKnown : Command()
+        /** Pin the radio to one channel and stream raw frames (`0x24`). [bssid] is
+         *  an optional filter; null sends every frame on the channel. */
+        data class StartRawCapture(val channel: Int, val bssid: MacAddress?) : Command()
+        /** Stop the raw-frame stream. */
+        data object StopRawCapture : Command()
 
         val data: ByteArray
             get() = when (this) {
@@ -82,6 +87,9 @@ object SensorProtocol {
                 is ForgetWifi -> wifiCreds(0x06, ssid, null)
                 AckKnown -> byteArrayOf(0x08)
                 ResetKnown -> byteArrayOf(0x09)
+                is StartRawCapture -> byteArrayOf(0x0A, channel.toU8(), if (bssid == null) 0 else 1) +
+                    (bssid?.bytes ?: ByteArray(6))
+                StopRawCapture -> byteArrayOf(0x0B)
                 is SetPeer -> byteArrayOf(0x07) + name.encodeToByteArray().let { bytes ->
                     val end = utf8Cut(bytes, 31)
                     bytes.copyOf(end)
@@ -160,6 +168,32 @@ object SensorProtocol {
             val detail: String,
             val trailing: String,
         ) : Message()
+        data class RawFrame(val fragment: RawFrameFragment) : Message()
+    }
+
+    /**
+     * One `0x24` notification: a whole captured frame or a slice of one. The
+     * metadata (timestamp, channel, RSSI, original length) rides on fragment 0;
+     * later fragments carry only more bytes. [RawFrameAssembler] stitches them.
+     */
+    data class RawFrameFragment(
+        val seq: Int,
+        val fragmentIndex: Int,
+        val fragmentCount: Int,
+        /** Microseconds since the sensor booted; only meaningful on fragment 0. */
+        val timestampMicros: Long,
+        val channel: Int,
+        val rssi: Int,
+        val originalLength: Int,
+        val payload: ByteArray,
+    ) {
+        override fun equals(other: Any?): Boolean =
+            other is RawFrameFragment && seq == other.seq && fragmentIndex == other.fragmentIndex &&
+                fragmentCount == other.fragmentCount && timestampMicros == other.timestampMicros &&
+                channel == other.channel && rssi == other.rssi &&
+                originalLength == other.originalLength && payload.contentEquals(other.payload)
+
+        override fun hashCode(): Int = seq * 31 + payload.contentHashCode()
     }
 
     private enum class MessageType(val raw: Int) {
@@ -183,6 +217,7 @@ object SensorProtocol {
         GPS(0x21),
         LORA_PROGRESS(0x22),
         KNOWN_WIFI(0x23),
+        RAW_FRAME(0x24),
         ;
 
         companion object {
@@ -196,6 +231,7 @@ object SensorProtocol {
         if (type == MessageType.KNOWN_WIFI) return decodeKnownWifi(data)
         if (type == MessageType.SAVED_GPS) return decodeSavedGps(data)
         if (type == MessageType.GPS) return decodeGps(data)
+        if (type == MessageType.RAW_FRAME) return decodeRawFrame(data)
         if (type == MessageType.SAVED_WIFI || type == MessageType.SAVED_BLE ||
             type == MessageType.SAVED_LAN || type == MessageType.SAVED_LORA
         ) {
@@ -232,7 +268,44 @@ object SensorProtocol {
                 Message.LoraProgress(scanId, data.u32le(3), data.u8(7), data.u16le(8), data.u16le(10))
             }
             MessageType.SAVED_WIFI, MessageType.SAVED_BLE, MessageType.SAVED_LAN, MessageType.SAVED_LORA -> decodeSaved(data)
+            MessageType.RAW_FRAME -> decodeRawFrame(data)
             MessageType.SAVED_GPS, MessageType.GPS, MessageType.KNOWN_WIFI -> null
+        }
+    }
+
+    private fun decodeRawFrame(data: ByteArray): Message.RawFrame? {
+        if (data.size < 5) return null
+        val seq = data.u16le(1)
+        val fragmentIndex = data.u8(3)
+        val fragmentCount = data.u8(4)
+        if (fragmentCount < 1 || fragmentIndex >= fragmentCount) return null
+        return if (fragmentIndex == 0) {
+            if (data.size < 13) return null
+            Message.RawFrame(
+                RawFrameFragment(
+                    seq = seq,
+                    fragmentIndex = 0,
+                    fragmentCount = fragmentCount,
+                    timestampMicros = data.u32le(5),
+                    channel = data.u8(9),
+                    rssi = data.i8(10),
+                    originalLength = data.u16le(11),
+                    payload = data.copyOfRange(13, data.size),
+                ),
+            )
+        } else {
+            Message.RawFrame(
+                RawFrameFragment(
+                    seq = seq,
+                    fragmentIndex = fragmentIndex,
+                    fragmentCount = fragmentCount,
+                    timestampMicros = 0,
+                    channel = 0,
+                    rssi = 0,
+                    originalLength = 0,
+                    payload = data.copyOfRange(5, data.size),
+                ),
+            )
         }
     }
 
@@ -477,6 +550,20 @@ object SensorProtocol {
                 secret.forEach { out.u8(it.toInt() and 0xFF) }
             }
             is Message.Saved -> Unit
+            is Message.RawFrame -> {
+                val f = message.fragment
+                out.u8(MessageType.RAW_FRAME.raw)
+                out.u16(f.seq)
+                out.u8(f.fragmentIndex)
+                out.u8(f.fragmentCount)
+                if (f.fragmentIndex == 0) {
+                    out.u32(f.timestampMicros)
+                    out.u8(f.channel)
+                    out.i8(f.rssi)
+                    out.u16(f.originalLength)
+                }
+                out.bytes(f.payload)
+            }
         }
         return out.toByteArray()
     }

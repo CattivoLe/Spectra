@@ -692,3 +692,12 @@ WEP networks can't be added on this version of Android.	Сети WEP нельз�
 Android would not add this network.	Android не смог добавить эту сеть.
 Spectra is not allowed to change Wi-Fi settings.	Spectra не разрешено менять настройки Wi-Fi.
 Could not join this network.	Не удалось подключиться к этой сети.
+Traffic capture	Захват трафика
+Capture traffic → save .pcap	Захватить трафик → сохранить .pcap
+Capturing on channel %d…	Захват на канале %d…
+%d frames · %s	%d кадров · %s
+Stop capture	Остановить захват
+Save .pcap	Сохранить .pcap
+Capture again	Захватить снова
+Pins the sensor to channel %d and streams the frames it hears into a .pcap for Wireshark. Bluetooth is narrow, so this is a short, thinned sample — not a full capture — and it stops on its own near %d frames.	Закрепляет сенсор на канале %d и передаёт услышанные кадры в .pcap для Wireshark. Канал Bluetooth узкий, поэтому это короткая прореженная выборка, а не полный дамп; захват сам останавливается примерно на %d кадрах.
+Some frames were dropped on the way over Bluetooth, so there are gaps.	Часть кадров потерялась при передаче по Bluetooth, поэтому в записи есть пропуски.

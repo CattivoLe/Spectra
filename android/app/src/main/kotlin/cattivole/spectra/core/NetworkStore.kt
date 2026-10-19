@@ -93,6 +93,7 @@ class NetworkStore {
             is SensorProtocol.Message.LoraProgress,
             is SensorProtocol.Message.SavedPosition, is SensorProtocol.Message.Gps,
             is SensorProtocol.Message.KnownWifi,
+            is SensorProtocol.Message.RawFrame,
             -> Unit
             is SensorProtocol.Message.ScanFinished -> finishSensorScan(message, at)
         }
