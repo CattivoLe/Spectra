@@ -184,6 +184,18 @@ struct SensorView: View {
 //                    Text("Made-up networks with drifting signal, for trying the app without a Cardputer.")
 //                }
 
+                Section {
+                    NavigationLink {
+                        PcapView()
+                    } label: {
+                        Label("Decode a capture (pcap)", systemImage: "doc.text.magnifyingglass")
+                    }
+                } header: {
+                    Text("Tools")
+                } footer: {
+                    Text("Open a .pcap or .pcapng from Wireshark, tcpdump or another capture and read a rough decode on the phone.")
+                }
+
                 Section("About the sensor") {
                     Text("iPhone apps cannot list nearby Wi-Fi networks, so Spectra uses a Cardputer as its radio. Its ESP32-S3 hears the 2.4 GHz band only; 5 GHz networks do not appear.")
                         .font(.subheadline)

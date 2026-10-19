@@ -646,3 +646,34 @@ Name, place or address	Имя, место или адрес
 Supported boards	Поддерживаемые платы
 ESP32-S3, 2.4 GHz	ESP32-S3, 2,4 ГГц
 ESP32-S3, 2.4 GHz, LoRa cap fits this board	ESP32-S3, 2,4 ГГц, сюда ставится плата LoRa
+
+# pcap decoder
+Decode pcap	Разбор pcap
+Open another	Открыть другой
+Choose a capture…	Выбрать файл захвата…
+Open a .pcap or .pcapng saved from Wireshark, tcpdump or the Cardputer. Spectra reads it on the phone and shows a rough decode: protocols, the busiest hosts and the first packets. Nothing leaves the device.	Откройте .pcap или .pcapng из Wireshark, tcpdump или с Cardputer. Spectra разбирает файл на телефоне и показывает приблизительную картину: протоколы, самые активные узлы и первые пакеты. Ничего не покидает устройство.
+Decoding %s…	Разбор %s…
+Choose a file…	Выбрать файл…
+File	Файл
+Format	Формат
+Link layer	Канальный уровень
+Captured	Захвачено
+On the wire	В эфире
+Duration	Длительность
+Started	Начало
+The file parsed, but it holds no packets.	Файл разобран, но пакетов в нём нет.
+Protocols	Протоколы
+Applications	Приложения
+Guessed from well-known ports, so it is a hint, not proof.	Определено по известным портам — это подсказка, а не точность.
+Top hosts	Активные узлы
+%d packets · %s	%d пакетов · %s
+Conversations	Обмены
+Showing the first %d packets. The summary above counts all %d.	Показаны первые %d пакетов. В сводке выше учтены все %d.
+Tools	Инструменты
+Decode a capture (pcap)	Разобрать захват (pcap)
+Open a .pcap or .pcapng from Wireshark, tcpdump or another capture and read a rough decode on the phone.	Откройте .pcap или .pcapng из Wireshark, tcpdump или другого источника и получите приблизительный разбор на телефоне.
+That capture is too large to open on the phone (over 80 MB).	Этот захват слишком большой для телефона (более 80 МБ).
+This is not a pcap or pcapng file.	Это не файл pcap или pcapng.
+This file is too short to be a capture.	Файл слишком короткий для захвата.
+Could not decode this capture.	Не удалось разобрать этот захват.
+Could not read the file.	Не удалось прочитать файл.

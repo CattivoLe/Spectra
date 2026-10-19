@@ -221,8 +221,11 @@ fun SpectraApp(model: SpectraModel) {
                     }
                 }
                 navigation(startDestination = Tab.Sensor.start, route = Tab.Sensor.graph) {
-                    composable(Tab.Sensor.start) { SensorScreen(model) { nav.navigate("flash") } }
+                    composable(Tab.Sensor.start) {
+                        SensorScreen(model, onFlash = { nav.navigate("flash") }, onDecodePcap = { nav.navigate("pcap") })
+                    }
                     composable("flash") { FlashScreen(model) { nav.popBackStack() } }
+                    composable("pcap") { PcapScreen { nav.popBackStack() } }
                 }
             }
         }

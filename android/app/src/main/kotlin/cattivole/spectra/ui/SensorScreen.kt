@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BluetoothDisabled
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.FolderOpen
@@ -98,7 +99,7 @@ internal fun intervalLabel(seconds: Int): String = when {
 private class PendingFirmware(val name: String, val data: ByteArray)
 
 @Composable
-fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}) {
+fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}, onDecodePcap: () -> Unit = {}) {
     model.generation
     // USB attach is not always delivered while the screen is up, so the port is
     // re-read here. An unchanged list does not redraw.
@@ -325,6 +326,13 @@ fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}) {
 //                }
 //            },
 //        )
+        card(
+            header = tr("Tools"),
+            footer = tr("Open a .pcap or .pcapng from Wireshark, tcpdump or another capture and read a rough decode on the phone."),
+            key = "tools",
+            rows = listOf({ ActionRow(tr("Decode a capture (pcap)"), Icons.Rounded.Description, onClick = onDecodePcap) }),
+        )
+
         freeCard("about", header = tr("About the sensor")) {
             Text(
                 tr("Android lists nearby networks by itself, including 5 and 6 GHz. A Cardputer adds what a phone cannot hear: clients, probe requests, deauth frames, hidden names and traffic. Its ESP32-S3 hears the 2.4 GHz band only."),
