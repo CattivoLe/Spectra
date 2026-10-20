@@ -171,8 +171,7 @@ fun SpectraScreen(
 ) {
     val query = searchQuery
     val onQuery = onSearchChange
-    val searching = query != null && onQuery != null
-    val large = onBack == null && !searching
+    val large = onBack == null
     val behavior = if (large) {
         TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
     } else {
@@ -200,38 +199,7 @@ fun SpectraScreen(
         contentWindowInsets = WindowInsets(0),
         topBar = {
             Column(Modifier.background(barColor).fillMaxWidth()) {
-            if (query != null && onQuery != null) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .windowInsetsPadding(TopAppBarDefaults.windowInsets)
-                        .heightIn(min = 48.dp)
-                        .padding(end = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    navigation()
-                    Column(Modifier.padding(start = if (onBack == null) 16.dp else 0.dp).widthIn(max = 132.dp)) {
-                        Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (subtitle != null) {
-                            Text(
-                                subtitle,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    SearchField(
-                        query,
-                        onQuery,
-                        searchPlaceholder,
-                        Modifier.weight(1f),
-                        compact = true,
-                    )
-                    actions()
-                }
-            } else if (large) {
+            if (large) {
                 MediumTopAppBar(
                     title = {
                         Column {
@@ -283,6 +251,12 @@ fun SpectraScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = 4.dp, bottom = 28.dp + bottom),
             ) {
+                // Like the iOS search bar: it sits under the title, scrolls away with the list and is back at the top.
+                if (query != null && onQuery != null) {
+                    item(key = "spectra-search", contentType = "search") {
+                        SearchField(query, onQuery, searchPlaceholder, Modifier.padding(horizontal = 8.dp), compact = true)
+                    }
+                }
                 content()
                 // Empty and no-results states sit under whatever the screen keeps on top.
                 item(key = "spectra-overlay", contentType = "overlay") {
@@ -292,7 +266,12 @@ fun SpectraScreen(
         }
         Box(Modifier.padding(top = padding.calculateTopPadding()).fillMaxSize()) {
             if (fill != null) {
-                Box(Modifier.fillMaxSize(), content = fill)
+                Column(Modifier.fillMaxSize()) {
+                    if (query != null && onQuery != null) {
+                        SearchField(query, onQuery, searchPlaceholder, Modifier.padding(horizontal = 8.dp), compact = true)
+                    }
+                    Box(Modifier.weight(1f).fillMaxWidth(), content = fill)
+                }
             } else if (onRefresh != null) {
                 PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
                     list()

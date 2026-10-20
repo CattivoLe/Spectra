@@ -708,3 +708,14 @@ Light only	Только свет
 Sound only	Только звук
 Silent	Тихо
 The LED blinks red for a threat, yellow for a warning, orange for a tracker that keeps showing up, green for an open network, blue for a watched Bluetooth device and purple for a watched network.	Светодиод мигает красным при угрозе, жёлтым при предупреждении, оранжевым при трекере, который появляется скан за сканом, зелёным при открытой сети, синим при отслеживаемом Bluetooth-устройстве и фиолетовым при отслеживаемой сети.
+Decode	Расшифровать
+Hides the details	Скрывает подробности
+Shows the details	Показывает подробности
+Someone is sending frames that throw devices off the network. It is how handshakes are captured for password cracking and how devices are pushed toward a fake access point. The frames are listed below.	Кто-то рассылает кадры, которые выбрасывают устройства из сети. Так перехватывают рукопожатия для подбора пароля и подталкивают устройства к поддельной точке доступа. Кадры перечислены ниже.
+Copies of one network that differ in security or maker can be an impostor waiting for devices that join by name. Compare the access points below and avoid the one you do not recognise.	Копии одной сети с разной защитой или производителем могут оказаться подделкой, которая ждёт устройства, подключающиеся по имени. Сравните точки доступа ниже и не подключайтесь к незнакомой.
+A network that moves data the whole time may be carrying a camera or microphone feed. Open it below to see which devices are connected.	Сеть, по которой постоянно идут данные, может передавать поток с камеры или микрофона. Откройте её ниже, чтобы увидеть подключённые устройства.
+Check through VPN	Проверять через VPN
+Speed, external address and countries are measured through the VPN tunnel.	Скорость, внешний адрес и страны измеряются через туннель VPN.
+The VPN is bypassed: the check measures the Wi-Fi or Ethernet connection itself.	VPN обходится: проверяется само подключение по Wi‑Fi или Ethernet.
+Once the phone joins, Spectra keeps the password and hands it to the Cardputer too.	Когда телефон подключится, Spectra сохранит пароль и передаст его Cardputer.
+Open in browser	Открыть в браузере

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.FileOpen
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -187,6 +188,7 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
         actions = {
             // Live map is hidden for now.
             // IconButton(onClick = { showLive = true }) { Icon(Icons.Rounded.MyLocation, contentDescription = tr("Live map")) }
+            IconButton(onClick = nav::pcap) { Icon(Icons.Rounded.Description, contentDescription = tr("Decode pcap")) }
             IconButton(onClick = {
                 importFile.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
             }) { Icon(Icons.Rounded.FileOpen, contentDescription = tr("Import")) }

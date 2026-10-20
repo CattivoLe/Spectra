@@ -26,13 +26,22 @@ object Threats {
         val broadcast: Boolean = false,
         val targetBssid: String? = null,
         val name: String? = null,
+        /** The access points the finding is about, strongest first. */
+        val networks: List<MacAddress> = emptyList(),
+        /** The frames behind a deauth finding. */
+        val deauth: DeauthEvent? = null,
     )
 
+    /**
+     * Networks that dropped out of range no longer count, so a finding goes
+     * away once later scans stop hearing what raised it.
+     */
     fun assess(networks: List<TrackedNetwork>, deauths: List<DeauthEvent>): List<Finding> {
+        val present = networks.filter { it.isInRange }
         val findings = mutableListOf<Finding>()
         findings += deauthFindings(deauths)
-        findings += evilTwinFindings(networks)
-        findings += streamingFindings(networks)
+        findings += evilTwinFindings(present)
+        findings += streamingFindings(present)
         return findings.sortedByDescending { it.severity }
     }
 
@@ -46,6 +55,8 @@ object Threats {
                 channel = event.channel,
                 broadcast = event.isBroadcast,
                 targetBssid = event.bssid.text,
+                networks = listOf(event.bssid),
+                deauth = event,
             )
         }
 
@@ -72,6 +83,7 @@ object Threats {
                     ssid = ssid,
                     apCount = members.size,
                     differByAuth = auths.size > 1,
+                    networks = members.sortedByDescending { it.latest.rssi }.map { it.id },
                 )
             }
     }
@@ -85,6 +97,7 @@ object Threats {
                 kind = Kind.STREAMING,
                 severity = Severity.WARNING,
                 name = net.revealedSsid ?: net.latest.ssid ?: net.latest.bssid.text,
+                networks = listOf(net.id),
             )
         }
 }

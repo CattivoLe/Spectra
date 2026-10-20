@@ -5,6 +5,26 @@ enum LANRoute: Hashable {
     case connection
 }
 
+/// Whether the connection check goes through an active VPN or around it, with
+/// a line saying what that changes in the results.
+struct VpnToggle: View {
+    @Binding var viaVpn: Bool
+
+    static let onText: LocalizedStringKey = "Speed, external address and countries are measured through the VPN tunnel."
+    static let offText: LocalizedStringKey = "The VPN is bypassed: the check measures the Wi-Fi or Ethernet connection itself."
+
+    var body: some View {
+        Toggle(isOn: $viaVpn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Check through VPN")
+                Text(viaVpn ? Self.onText : Self.offText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 struct LinkView: View {
     var saved: SavedConnection?
     @Environment(LinkProbe.self) private var probe
@@ -23,14 +43,8 @@ struct LinkView: View {
         let report = probe.report
         List {
             Section {
-                Toggle("Through VPN", isOn: $viaVpn)
+                VpnToggle(viaVpn: $viaVpn)
                     .disabled(probe.running)
-            } footer: {
-                if viaVpn {
-                    Text("The check follows the VPN.")
-                } else {
-                    Text("The check stays on Wi-Fi or Ethernet.")
-                }
             }
             if probe.running {
                 Section {
@@ -99,7 +113,7 @@ struct LinkView: View {
         let report = saved.snapshot
         List {
             Section {
-                Text(saved.viaVpn ? "The check follows the VPN." : "The check stays on Wi-Fi or Ethernet.")
+                Text(saved.viaVpn ? VpnToggle.onText : VpnToggle.offText)
                     .foregroundStyle(.secondary)
             }
             if report.status != nil {

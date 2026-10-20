@@ -1,6 +1,9 @@
 package cattivole.spectra.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +18,7 @@ import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.automirrored.rounded.ManageSearch
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SearchOff
@@ -37,12 +41,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.core.DiscoveredPort
 import cattivole.spectra.core.LanDevice
 import cattivole.spectra.core.NotableDevice
+import cattivole.spectra.core.webAddress
 
 @Composable
 private fun LanDevice.tint(): Color = when {
@@ -231,6 +237,7 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
         return
     }
     val snapshot = entryId != null
+    val context = LocalContext.current
     SpectraScreen(
         title = device.displayName,
         subtitle = if (snapshot) entry?.let { tr("Saved %s", dateTime(it.savedAt)) } else device.ipAddress,
@@ -327,7 +334,18 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
                                 )
                             }
                         } else {
-                            device.openPorts.forEach { port -> add { PortRow(port, device) } }
+                            device.openPorts.forEach { port ->
+                                val url = device.webAddress(port.number)
+                                add {
+                                    PortRow(
+                                        port,
+                                        device,
+                                        onOpen = url?.let {
+                                            { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) } }
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                     if (!snapshot) {
@@ -368,11 +386,14 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
 }
 
 @Composable
-private fun PortRow(port: DiscoveredPort, device: LanDevice) {
+private fun PortRow(port: DiscoveredPort, device: LanDevice, onOpen: (() -> Unit)? = null) {
     val detail = device.profile.banners.firstOrNull { it.port == port.number }?.summary
         ?: device.profile.rtsp.firstOrNull { it.port == port.number }?.summary
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp),
+        Modifier
+            .fillMaxWidth()
+            .then(if (onOpen != null) Modifier.clickable(onClickLabel = tr("Open in browser"), onClick = onOpen) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -386,6 +407,9 @@ private fun PortRow(port: DiscoveredPort, device: LanDevice) {
             if (!detail.isNullOrEmpty()) {
                 Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
+        }
+        if (onOpen != null) {
+            Icon(Icons.Rounded.OpenInBrowser, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
         }
         Box(Modifier.size(8.dp).clip(CircleShape).background(Spectra.colors.success))
     }

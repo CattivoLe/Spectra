@@ -5,8 +5,28 @@ import UniformTypeIdentifiers
 /// a protocol and application breakdown, the busiest endpoints and
 /// conversations, and the first packets. Parsing runs off the main actor.
 struct PcapView: View {
+    /// A capture already in memory, such as one just taken from the sensor.
+    struct Capture: Identifiable, Hashable {
+        let id = UUID()
+        var name: String
+        var data: Data
+    }
+
+    var capture: Capture?
+
     @State private var picking = false
     @State private var phase: Phase = .idle
+    @State private var shareItem: ShareItem?
+
+    private func save(_ capture: Capture) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(capture.name)
+        do {
+            try capture.data.write(to: url, options: .atomic)
+            shareItem = ShareItem(url: url)
+        } catch {
+            // Writing to the temporary directory should not fail; nothing to show if it does.
+        }
+    }
 
     private enum Phase {
         case idle
@@ -47,17 +67,32 @@ struct PcapView: View {
         .navigationTitle("Decode pcap")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if case .loaded = phase {
+            if let capture {
+                // A capture handed over in memory is saved from here; there is no file to swap.
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save .pcap", systemImage: "square.and.arrow.up") { save(capture) }
+                }
+            } else if case .loaded = phase {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Open another", systemImage: "folder") { picking = true }
                 }
             }
         }
+        .shareSheet(item: $shareItem)
         .fileImporter(
             isPresented: $picking,
             allowedContentTypes: captureFileTypes,
             allowsMultipleSelection: false
         ) { load($0) }
+        .task(id: capture?.id) {
+            guard let capture, case .idle = phase else { return }
+            phase = .loading(name: capture.name)
+            let data = capture.data
+            switch await Task.detached(priority: .userInitiated) { Self.analyze(data) }.value {
+            case .ok(let analysis): phase = .loaded(name: capture.name, analysis: analysis)
+            case .error(let message): phase = .failed(message: message)
+            }
+        }
     }
 
     private var idle: some View {
@@ -206,16 +241,20 @@ struct PcapView: View {
             guard data.count <= 80_000_000 else {
                 return .error(String(localized: "That capture is too large to open on the phone (over 80 MB)."))
             }
-            do {
-                return .ok(try PcapAnalyzer.analyze(data))
-            } catch PcapError.notACapture {
-                return .error(String(localized: "This is not a pcap or pcapng file."))
-            } catch PcapError.tooShort {
-                return .error(String(localized: "This file is too short to be a capture."))
-            } catch {
-                return .error(String(localized: "Could not decode this capture."))
-            }
+            return Self.analyze(data)
         }.value
+    }
+
+    nonisolated private static func analyze(_ data: Data) -> LoadOutcome {
+        do {
+            return .ok(try PcapAnalyzer.analyze(data))
+        } catch PcapError.notACapture {
+            return .error(String(localized: "This is not a pcap or pcapng file."))
+        } catch PcapError.tooShort {
+            return .error(String(localized: "This file is too short to be a capture."))
+        } catch {
+            return .error(String(localized: "Could not decode this capture."))
+        }
     }
 }
 

@@ -18,7 +18,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.DeleteSweep
-import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.GppBad
@@ -164,6 +166,7 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
     var knownOnly by rememberSaveable { mutableStateOf(false) }
     var band by rememberSaveable { mutableStateOf<Band?>(null) }
     var menu by rememberSaveable { mutableStateOf(false) }
+    var expandedThreats by remember { mutableStateOf(emptySet<String>()) }
     val knownSsids = model.link.knownSsids()
     val all = store.networks().values
     val showKnown = all.any { it.hasStoredPassword(knownSsids) }
@@ -264,7 +267,33 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
             headerTint = { Spectra.colors.warning },
             headerIcon = Icons.Rounded.Warning,
             dividerInset = 70.dp,
-        ) { ThreatRow(it) }
+        ) { finding ->
+            val open = finding.id in expandedThreats
+            Column {
+                ThreatRow(finding, expanded = open, onClick = {
+                    expandedThreats = if (open) expandedThreats - finding.id else expandedThreats + finding.id
+                })
+                if (open) {
+                    Text(
+                        threatExplanation(finding.kind),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 70.dp, end = 16.dp, bottom = 8.dp),
+                    )
+                    finding.deauth?.let { DeauthRow(it) }
+                    for (id in finding.networks) {
+                        val network = store.network(id) ?: continue
+                        NetworkRow(
+                            network,
+                            onClick = { nav.network(network.id) },
+                            watched = model.isWatched(network.id.text),
+                            known = network.hasStoredPassword(knownSsids),
+                            current = model.wifiJoiner.isCurrent(network),
+                        )
+                    }
+                }
+            }
+        }
         cardSection(
             store.deauthEvents,
             header = tr("Deauth detected"),
@@ -289,6 +318,7 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
                 onClick = { nav.network(network.id) },
                 watched = true,
                 known = network.hasStoredPassword(knownSsids),
+                current = model.wifiJoiner.isCurrent(network),
             )
         }
         cardSection(
@@ -303,6 +333,7 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
                 onClick = { nav.network(network.id) },
                 watched = model.isWatched(network.id.text),
                 known = network.hasStoredPassword(knownSsids),
+                current = model.wifiJoiner.isCurrent(network),
             )
         }
         cardSection(
@@ -437,10 +468,10 @@ private fun ClientTrafficLine(clients: Int, traffic: String?) {
         overflow = TextOverflow.Ellipsis,
         inlineContent = mapOf(
             "clients" to InlineTextContent(mark) {
-                Icon(Icons.Rounded.Person, contentDescription = null, tint = color, modifier = Modifier.fillMaxSize())
+                Icon(Icons.Rounded.Person, contentDescription = null, tint = Spectra.colors.info, modifier = Modifier.fillMaxSize())
             },
             "traffic" to InlineTextContent(mark) {
-                Icon(Icons.Rounded.SwapVert, contentDescription = null, tint = color, modifier = Modifier.fillMaxSize())
+                Icon(Icons.Rounded.SwapVert, contentDescription = null, tint = Spectra.colors.revealed, modifier = Modifier.fillMaxSize())
             },
         ),
     )
@@ -452,7 +483,14 @@ internal fun networkName(network: TrackedNetwork): String = network.revealedSsid
 }
 
 @Composable
-fun NetworkRow(network: TrackedNetwork, onClick: () -> Unit, now: Long = System.currentTimeMillis(), watched: Boolean = false, known: Boolean = false) {
+fun NetworkRow(
+    network: TrackedNetwork,
+    onClick: () -> Unit,
+    now: Long = System.currentTimeMillis(),
+    watched: Boolean = false,
+    known: Boolean = false,
+    current: Boolean = false,
+) {
     val reading = network.latest
     val hidden = reading.ssid == null && network.revealedSsid == null
     val (lock, lockTint) = securityIcon(reading)
@@ -491,6 +529,7 @@ fun NetworkRow(network: TrackedNetwork, onClick: () -> Unit, now: Long = System.
                 }
             },
             badges = {
+                if (current) Pill(tr("Connected"), Spectra.colors.success, filled = true)
                 Icon(lock, contentDescription = reading.auth.name, tint = lockTint, modifier = Modifier.size(15.dp))
                 if (known) {
                     Icon(Icons.Rounded.Key, contentDescription = tr("Password saved"), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(15.dp))
@@ -510,8 +549,17 @@ fun NetworkRow(network: TrackedNetwork, onClick: () -> Unit, now: Long = System.
     }
 }
 
+internal fun threatExplanation(kind: Threats.Kind): String = when (kind) {
+    Threats.Kind.DEAUTH_ATTACK ->
+        tr("Someone is sending frames that throw devices off the network. It is how handshakes are captured for password cracking and how devices are pushed toward a fake access point. The frames are listed below.")
+    Threats.Kind.EVIL_TWIN ->
+        tr("Copies of one network that differ in security or maker can be an impostor waiting for devices that join by name. Compare the access points below and avoid the one you do not recognise.")
+    Threats.Kind.STREAMING ->
+        tr("A network that moves data the whole time may be carrying a camera or microphone feed. Open it below to see which devices are connected.")
+}
+
 @Composable
-fun ThreatRow(finding: Threats.Finding) {
+fun ThreatRow(finding: Threats.Finding, expanded: Boolean = false, onClick: (() -> Unit)? = null) {
     val tint = if (finding.severity == Threats.Severity.CRITICAL) Spectra.colors.danger else Spectra.colors.warning
     val icon = when (finding.kind) {
         Threats.Kind.DEAUTH_ATTACK -> Icons.Rounded.GppBad
@@ -535,7 +583,24 @@ fun ThreatRow(finding: Threats.Finding) {
         Threats.Kind.STREAMING ->
             tr("%s is moving data continuously — a camera or microphone may be streaming.", finding.name ?: "")
     }
-    ListRow(title = title, subtitle = detail, leading = { IconTile(icon, tint) })
+    ListRow(
+        title = title,
+        subtitle = detail,
+        subtitleLines = if (expanded) 4 else 2,
+        leading = { IconTile(icon, tint) },
+        trailing = if (onClick != null) {
+            {
+                Icon(
+                    if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                    contentDescription = if (expanded) tr("Hides the details") else tr("Shows the details"),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            null
+        },
+        onClick = onClick,
+    )
 }
 
 @Composable
@@ -634,7 +699,6 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
     }
     val reading = network.latest
     val snapshot = entryId != null
-    val context = LocalContext.current
     // A capture belongs to this screen: stop it when the user leaves.
     DisposableEffect(Unit) { onDispose { if (!snapshot) model.link.stopRawCapture() } }
     val quality = SignalQuality.of(reading.rssi)
@@ -784,7 +848,7 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
             },
         )
         if (!snapshot && model.link.isConnected) {
-            captureCard(model.link, context, reading.channel, network)
+            captureCard(model.link, reading.channel, network, onDecode = { nav.decodeCapture(captureLabel(network)) })
         }
         card(
             header = tr("Security"),
@@ -802,7 +866,11 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
                 method = reading.auth.joinMethod,
                 joiner = model.wifiJoiner,
                 onConnectOpen = { model.wifiJoiner.join(ssid, null, false) },
-                onNeedPassword = { wep -> passphrase = ""; pendingWep = wep; pendingJoin = ssid },
+                onNeedPassword = { wep ->
+                    passphrase = model.link.knownPassword(ssid).orEmpty()
+                    pendingWep = wep
+                    pendingJoin = ssid
+                },
             )
         }
         cardSection(
@@ -912,7 +980,7 @@ private fun LazyListScope.connectionCard(
         footer = when (method) {
             AuthMode.JoinMethod.OPEN -> tr("This network is open. Android will ask you to confirm before joining.")
             AuthMode.JoinMethod.UNSUPPORTED -> null
-            else -> tr("The password is handed straight to Android and is not stored by Spectra.")
+            else -> tr("Once the phone joins, Spectra keeps the password and hands it to the Cardputer too.")
         },
         rows = rows,
     )
@@ -947,23 +1015,26 @@ private fun StatusRow(text: String) {
 
 private fun LazyListScope.captureCard(
     link: SensorLink,
-    context: android.content.Context,
     channel: Int,
     network: TrackedNetwork,
+    onDecode: () -> Unit,
 ) {
+    // The sensor keeps one capture; another network's screen starts fresh.
+    val mine = link.rawCaptureNetwork == network.id
+    val start = { link.startRawCapture(channel, network = network.id) }
     val rows = buildList<@Composable () -> Unit> {
         when {
-            link.rawCapturing -> {
+            link.rawCapturing && mine -> {
                 add { CaptureProgressRow(channel, link.rawFrameCount, link.rawByteCount) }
                 add { ActionRow(tr("Stop capture"), Icons.Rounded.Stop, onClick = { link.stopRawCapture() }, tint = Spectra.colors.danger) }
             }
-            link.rawFrameCount > 0 -> {
+            mine && link.rawFrameCount > 0 -> {
                 add { InfoRow(tr("Captured"), tr("%d frames · %s", link.rawFrameCount, byteSize(link.rawByteCount.toLong()))) }
-                add { ActionRow(tr("Save .pcap"), Icons.Rounded.Download, onClick = { sharePcap(context, link.rawCapturePcap(), captureLabel(network)) }) }
-                add { ActionRow(tr("Capture again"), Icons.Rounded.Refresh, onClick = { link.startRawCapture(channel) }) }
+                add { ActionRow(tr("Decode"), Icons.Rounded.Description, onClick = onDecode) }
+                add { ActionRow(tr("Capture again"), Icons.Rounded.Refresh, onClick = start) }
             }
             else -> add {
-                ActionRow(tr("Capture traffic → save .pcap"), Icons.Rounded.SettingsInputAntenna, onClick = { link.startRawCapture(channel) })
+                ActionRow(tr("Capture traffic → save .pcap"), Icons.Rounded.SettingsInputAntenna, onClick = start)
             }
         }
     }
@@ -975,7 +1046,7 @@ private fun LazyListScope.captureCard(
                 SensorLink.RAW_FRAME_CAP,
             ),
         )
-        if (link.rawDropped) {
+        if (mine && link.rawDropped) {
             append(" ")
             append(tr("Some frames were dropped on the way over Bluetooth, so there are gaps."))
         }

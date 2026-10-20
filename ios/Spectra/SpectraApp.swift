@@ -10,6 +10,7 @@ struct SpectraApp: App {
     @State private var bleScanner = BLEScanner()
     @State private var location = LocationService()
     @State private var watchList = WatchList()
+    @State private var joiner = WiFiJoiner()
 
     init() {
         let store = NetworkStore()
@@ -30,10 +31,14 @@ struct SpectraApp: App {
                 .environment(bleScanner)
                 .environment(location)
                 .environment(watchList)
+                .environment(joiner)
                 .onChange(of: watchList.ids, initial: true) { _, ids in
                     link.setWatched(ids)
                 }
                 .task {
+                    joiner.onJoined = { [weak link] ssid, password in
+                        link?.rememberJoined(ssid: ssid, password: password)
+                    }
                     history.locationProvider = { [weak location] in
                         location?.coordinate.map { ($0.latitude, $0.longitude) }
                     }

@@ -151,18 +151,11 @@ struct DeviceDetailView: View {
                             .font(.subheadline)
                     } else {
                         ForEach(device.openPorts) { port in
-                            HStack(spacing: 12) {
-                                Text(port.number, format: .number.grouping(.never))
-                                    .font(.body.monospacedDigit().weight(.semibold))
-                                    .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
-                                Text(port.service)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                Spacer(minLength: 8)
-                                Image(systemName: "circle.fill")
-                                    .font(.system(size: 8))
-                                    .foregroundStyle(.green)
+                            if let url = webAddress(port.number, on: device) {
+                                Link(destination: url) { portRow(port, web: true) }
+                                    .accessibilityHint(Text("Opens \(url.absoluteString) in the browser"))
+                            } else {
+                                portRow(port, web: false)
                             }
                         }
                     }
@@ -208,6 +201,45 @@ struct DeviceDetailView: View {
         .sensoryFeedback(trigger: device.portScanFraction == nil) { wasIdle, isIdle in
             !wasIdle && isIdle ? .success : nil
         }
+    }
+
+    private func portRow(_ port: DiscoveredPort, web: Bool) -> some View {
+        HStack(spacing: 12) {
+            Text(port.number, format: .number.grouping(.never))
+                .font(.body.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Text(port.service)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            if web {
+                Image(systemName: "safari")
+                    .foregroundStyle(.tint)
+            }
+            Image(systemName: "circle.fill")
+                .font(.system(size: 8))
+                .foregroundStyle(.green)
+        }
+    }
+
+    /// The browser address of a port that speaks HTTP: the banner grab says
+    /// so, or the port is one web servers commonly use.
+    private func webAddress(_ number: Int, on device: LANDevice) -> URL? {
+        let https: Bool
+        if let banner = device.profile.banners.first(where: { $0.port == number }) {
+            https = banner.secure
+        } else if LANProbes.secureWeb.contains(number) {
+            https = true
+        } else if LANProbes.plainWeb.contains(number) {
+            https = false
+        } else {
+            return nil
+        }
+        let scheme = https ? "https" : "http"
+        let isDefault = (https && number == 443) || (!https && number == 80)
+        return URL(string: isDefault ? "\(scheme)://\(device.ipAddress)" : "\(scheme)://\(device.ipAddress):\(number)")
     }
 
     private func serviceDetail(_ service: ServiceAdvertisement) -> String {

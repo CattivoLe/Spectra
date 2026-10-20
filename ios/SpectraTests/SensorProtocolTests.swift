@@ -364,6 +364,18 @@ struct NetworkStoreTests {
         #expect(store.networks.values.first?.isInRange == true)
     }
 
+    @Test func networkLeavesTheListAfterEnoughMisses() {
+        let store = NetworkStore()
+        scan(store, id: 1, [reading(1, rssi: -60), reading(2, rssi: -70)])
+        for id in 2 ..< UInt16(NetworkStore.scansBeforeRemoval + 1) {
+            scan(store, id: id, [reading(1, rssi: -60)])
+            #expect(store.networks[BSSID(bytes: [0, 0, 0, 0, 0, 2])] != nil)
+        }
+        scan(store, id: 99, [reading(1, rssi: -60)])
+        #expect(store.networks[BSSID(bytes: [0, 0, 0, 0, 0, 2])] == nil)
+        #expect(store.networks.count == 1)
+    }
+
     @Test func trafficAppliedOnScanFinished() {
         let store = NetworkStore()
         let bssid = BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x00, 0xA0])

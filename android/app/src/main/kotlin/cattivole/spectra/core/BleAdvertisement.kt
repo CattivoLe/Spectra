@@ -533,5 +533,7 @@ class BleDevice(
 
     companion object {
         const val NEARBY_WINDOW_MS = 20_000L
+        /** Quiet for this long while the scan runs and the row leaves the list. */
+        const val REMOVAL_WINDOW_MS = 120_000L
     }
 }

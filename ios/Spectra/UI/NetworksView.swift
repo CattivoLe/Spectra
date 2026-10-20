@@ -6,8 +6,11 @@ struct NetworksView: View {
     @Environment(NetworkStore.self) private var store
     @Environment(SensorLink.self) private var link
     @Environment(WatchList.self) private var watchList
+    @Environment(WiFiJoiner.self) private var joiner
+    @Environment(\.scenePhase) private var scenePhase
     @State private var search = ""
     @State private var showChannels = false
+    @State private var expandedThreats: Set<String> = []
     @AppStorage("networkSort") private var sort: Sort = .signal
     @AppStorage("showOutOfRange") private var showOutOfRange = false
 
@@ -26,6 +29,10 @@ struct NetworksView: View {
 
     private var threats: [Threats.Finding] {
         Threats.assess(networks: Array(store.networks.values), deauths: store.deauthEvents)
+    }
+
+    private func isCurrent(_ network: TrackedNetwork) -> Bool {
+        joiner.isCurrent(network)
     }
 
     private var watching: [TrackedNetwork] {
@@ -60,7 +67,25 @@ struct NetworksView: View {
                 if !threats.isEmpty {
                     Section {
                         ForEach(threats) { finding in
-                            ThreatRow(finding: finding)
+                            let open = expandedThreats.contains(finding.id)
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    if open { expandedThreats.remove(finding.id) } else { expandedThreats.insert(finding.id) }
+                                }
+                            } label: {
+                                ThreatRow(finding: finding, isExpanded: open)
+                            }
+                            .buttonStyle(.plain)
+                            if open {
+                                if let event = finding.deauth {
+                                    DeauthRow(event: event)
+                                }
+                                ForEach(finding.networks.compactMap { store.networks[$0] }) { network in
+                                    NavigationLink(value: network.id) {
+                                        NetworkRow(network: network, isCurrent: isCurrent(network))
+                                    }
+                                }
+                            }
                         }
                     } header: {
                         Label("Threats", systemImage: "exclamationmark.triangle.fill")
@@ -72,7 +97,7 @@ struct NetworksView: View {
                     Section {
                         ForEach(watching) { network in
                             NavigationLink(value: network.id) {
-                                NetworkRow(network: network)
+                                NetworkRow(network: network, isCurrent: isCurrent(network))
                             }
                         }
                     } header: {
@@ -98,7 +123,7 @@ struct NetworksView: View {
                     Section {
                         ForEach(visible) { network in
                             NavigationLink(value: network.id) {
-                                NetworkRow(network: network)
+                                NetworkRow(network: network, isCurrent: isCurrent(network))
                             }
                         }
                     } header: {
@@ -142,6 +167,10 @@ struct NetworksView: View {
             }
             .searchable(text: $search, prompt: Text("Name or BSSID"))
             .refreshable { link.scanNow() }
+            .task(id: store.scanCount) { await joiner.refreshCurrent() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { Task { await joiner.refreshCurrent() } }
+            }
             .navigationTitle("Wi‑Fi")
             .navigationDestination(for: BSSID.self) { id in
                 NetworkDetailView(id: id)
@@ -302,9 +331,11 @@ struct SensorBar: View {
     }
 }
 
-/// One live security finding, colored by severity.
+/// One live security finding, colored by severity. Expanded, it says what the
+/// finding means; the rows under it list what raised it.
 struct ThreatRow: View {
     var finding: Threats.Finding
+    var isExpanded = false
 
     private var color: Color {
         finding.severity == .critical ? .red : .orange
@@ -330,14 +361,41 @@ struct ThreatRow: View {
                 Text(finding.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if isExpanded {
+                    Text(explanation)
+                        .font(.caption)
+                        .padding(.top, 4)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
         }
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(isExpanded ? Text("Hides the details") : Text("Shows the details"))
+    }
+
+    private var explanation: LocalizedStringKey {
+        switch finding.kind {
+        case .deauthAttack:
+            "Someone is sending frames that throw devices off the network. It is how handshakes are captured for password cracking and how devices are pushed toward a fake access point. The frames are listed below."
+        case .evilTwin:
+            "Copies of one network that differ in security or maker can be an impostor waiting for devices that join by name. Compare the access points below and avoid the one you do not recognise."
+        case .streaming:
+            "A network that moves data the whole time may be carrying a camera or microphone feed. Open it below to see which devices are connected."
+        }
     }
 }
 
 struct NetworkRow: View {
     var network: TrackedNetwork
+    /// The phone is on this access point.
+    var isCurrent = false
     @Environment(WatchList.self) private var watchList
 
     private var isWatched: Bool { watchList.isWatched(network.latest.bssid.description) }
@@ -363,6 +421,16 @@ struct NetworkRow: View {
                             .font(.caption2)
                             .foregroundStyle(.yellow)
                     }
+                    if isCurrent {
+                        Text("Connected")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(.green, in: .capsule)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
                 }
                 Group {
                     if network.wasInLastScan {
@@ -371,15 +439,17 @@ struct NetworkRow: View {
                             HStack(spacing: 8) {
                                 if !network.clients.isEmpty {
                                     HStack(spacing: 2) {
-                                        Image(systemName: "person")
+                                        Image(systemName: "person.fill")
                                             .imageScale(.small)
+                                            .foregroundStyle(.blue)
                                         Text("\(network.clients.count)")
                                     }
                                 }
                                 if let traffic = network.traffic {
                                     HStack(spacing: 2) {
-                                        Image(systemName: "arrow.up.and.down")
+                                        Image(systemName: "arrow.up.arrow.down")
                                             .imageScale(.small)
+                                            .foregroundStyle(.purple)
                                         Text(traffic.formattedBytes)
                                     }
                                 }

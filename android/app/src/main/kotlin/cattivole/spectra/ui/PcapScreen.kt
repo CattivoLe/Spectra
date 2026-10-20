@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -27,6 +28,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,12 +63,18 @@ private sealed interface PcapPhase {
  * Imports a `.pcap`/`.pcapng` and shows an approximate decode: a summary, a
  * protocol and application breakdown, the busiest endpoints and conversations,
  * and the first packets. Parsing runs off the main thread. Mirrors iOS `PcapView`.
+ * [capture] opens a capture already in memory (name and bytes) instead of a file;
+ * [onSave] then takes the place of opening another file.
  */
 @Composable
-fun PcapScreen(onBack: () -> Unit) {
+fun PcapScreen(onBack: () -> Unit, capture: Pair<String, ByteArray>? = null, onSave: (() -> Unit)? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var phase by remember { mutableStateOf<PcapPhase>(PcapPhase.Idle) }
+    var phase by remember { mutableStateOf<PcapPhase>(capture?.let { PcapPhase.Loading(it.first) } ?: PcapPhase.Idle) }
+    LaunchedEffect(capture) {
+        val (name, bytes) = capture ?: return@LaunchedEffect
+        phase = withContext(Dispatchers.Default) { analyze(bytes, name) }
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -82,7 +90,11 @@ fun PcapScreen(onBack: () -> Unit) {
         tr("Decode pcap"),
         onBack = onBack,
         actions = {
-            if (phase is PcapPhase.Loaded) {
+            if (onSave != null) {
+                IconButton(onClick = onSave) {
+                    Icon(Icons.Rounded.Download, contentDescription = tr("Save .pcap"))
+                }
+            } else if (phase is PcapPhase.Loaded) {
                 IconButton(onClick = { pick() }) {
                     Icon(Icons.Rounded.FolderOpen, contentDescription = tr("Open another"))
                 }
@@ -261,6 +273,10 @@ private fun queryName(context: Context, uri: Uri): String? = runCatching {
 private fun readAndAnalyze(context: Context, uri: Uri, name: String): PcapPhase {
     val bytes = runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
         ?: return PcapPhase.Failed(tr("Could not read the file."))
+    return analyze(bytes, name)
+}
+
+private fun analyze(bytes: ByteArray, name: String): PcapPhase {
     if (bytes.size > 80_000_000) {
         return PcapPhase.Failed(tr("That capture is too large to open on the phone (over 80 MB)."))
     }

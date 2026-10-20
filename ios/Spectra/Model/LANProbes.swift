@@ -67,8 +67,8 @@ nonisolated enum LANProbes {
 
     // MARK: HTTP
 
-    private static let plainWeb: Set<Int> = [80, 81, 8000, 8001, 8008, 8080, 8081, 8123, 8888, 9000, 9090, 32400, 5000, 1400]
-    private static let secureWeb: Set<Int> = [443, 8443, 5001]
+    static let plainWeb: Set<Int> = [80, 81, 8000, 8001, 8008, 8080, 8081, 8123, 8888, 9000, 9090, 32400, 5000, 1400]
+    static let secureWeb: Set<Int> = [443, 8443, 5001]
 
     private static func httpBanners(_ ip: String, ports: Set<Int>) -> [HTTPBanner] {
         var banners: [HTTPBanner] = []

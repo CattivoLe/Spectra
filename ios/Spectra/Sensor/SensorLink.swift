@@ -43,6 +43,8 @@ final class SensorLink: NSObject {
     private(set) var loraTune: (freqKHz: UInt32, spreadingFactor: Int, step: Int, total: Int)?
     private var loraWatch: Task<Void, Never>?
     private let knownNetworks = KnownNetworks()
+    /// Bumped when the stored passwords change, so views reading them redraw.
+    private var knownRevision = 0
     struct CapFix: Equatable {
         var latitude: Double
         var longitude: Double
@@ -62,6 +64,8 @@ final class SensorLink: NSObject {
     /// True once any frame was lost — the capture has gaps, which is expected
     /// over BLE and worth saying in the UI.
     private(set) var rawDropped = false
+    /// The network whose card started the current or last capture.
+    private(set) var rawCaptureNetwork: BSSID?
     private var rawFrames: [PcapWriter.Frame] = []
     private var rawAssembler = RawFrameAssembler()
     private var rawCaptureStart: Date?
@@ -266,9 +270,11 @@ final class SensorLink: NSObject {
     }
 
     /// Begin a raw-frame capture on `channel`. `bssid` is an optional filter;
-    /// left nil, the sensor sends every frame on the channel.
-    func startRawCapture(channel: Int, bssid: BSSID? = nil) {
+    /// left nil, the sensor sends every frame on the channel. `network` is the
+    /// card the capture was started from, which alone shows its frames.
+    func startRawCapture(channel: Int, bssid: BSSID? = nil, network: BSSID? = nil) {
         guard isConnected, !rawCapturing else { return }
+        rawCaptureNetwork = network
         rawFrames.removeAll(keepingCapacity: true)
         rawAssembler = RawFrameAssembler()
         rawFrameCount = 0
@@ -439,6 +445,21 @@ final class SensorLink: NSObject {
         }
     }
 
+    /// The stored password for this network name, or nil when none was saved.
+    func knownPassword(for ssid: String) -> String? {
+        _ = knownRevision
+        return knownNetworks.all().first { $0.ssid == ssid && !$0.password.isEmpty }?.password
+    }
+
+    /// A password that just put the phone on `ssid`. Kept with the sensor's
+    /// list and handed to the Cardputer, so either can rejoin.
+    func rememberJoined(ssid: String, password: String) {
+        guard !password.isEmpty else { return }
+        knownNetworks.remember(ssid: ssid, password: password)
+        knownRevision += 1
+        send(.rememberWifi(ssid: ssid, password: password))
+    }
+
     // MARK: Plumbing
 
     /// The sensor draws this list. Eighty is as many as its screen buffer keeps.
@@ -509,6 +530,7 @@ final class SensorLink: NSObject {
             }
             if case .knownWifi(let index, let total, let ssid, let password) = message {
                 knownNetworks.remember(ssid: ssid, password: password)
+                knownRevision += 1
                 if index + 1 == total {
                     send(.ackKnown)
                     pushKnownNetworks()

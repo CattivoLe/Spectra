@@ -245,6 +245,20 @@ class CoreTest {
     }
 
     @Test
+    fun networkLeavesTheListAfterEnoughMissesAndIsHandedOver() {
+        val store = NetworkStore()
+        val evicted = mutableListOf<MacAddress>()
+        store.onEvict = { gone -> evicted += gone.map { it.id } }
+        val mac = MacAddress(byteArrayOf(0x10, 0x20, 0x30, 0x40, 0x50, 0x61))
+        store.applyPhoneSnapshot(listOf(PhoneWifi.reading(mac.text, "Cafe", -60, 2437, "[WPA2-PSK-CCMP][ESS]", 20)!!))
+        repeat(NetworkStore.SCANS_BEFORE_REMOVAL - 1) { store.applyPhoneSnapshot(emptyList()) }
+        assertNotNull(store.network(mac))
+        store.applyPhoneSnapshot(emptyList())
+        assertNull(store.network(mac))
+        assertEquals(listOf(mac), evicted)
+    }
+
+    @Test
     fun phoneCapabilitiesAndChannel() {
         assertEquals(36, PhoneWifi.channel(5180))
         assertEquals(6, PhoneWifi.channel(2437))

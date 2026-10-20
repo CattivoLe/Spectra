@@ -39,13 +39,16 @@ import java.util.Locale
 fun LazyListScope.connectionEntry(model: SpectraModel, nav: Navigator) {
     val link = model.connection
     card(header = tr("Connection"), key = "connection", rows = buildList {
-        add {
-            ListRow(
-                title = connectionTitle(link),
-                subtitle = connectionDetail(link),
-                leading = { IconTile(Icons.Rounded.Public, connectionTint(link)) },
-                onClick = { nav.connection() },
-            )
+        // There is nothing to open until the internet has been checked once.
+        if (link.report != null || link.running) {
+            add {
+                ListRow(
+                    title = connectionTitle(link),
+                    subtitle = connectionDetail(link),
+                    leading = { IconTile(Icons.Rounded.Public, connectionTint(link)) },
+                    onClick = { nav.connection() },
+                )
+            }
         }
         add { VpnSwitch(link) }
         if (link.running) {
@@ -119,10 +122,7 @@ fun SavedLinkScreen(model: SpectraModel, nav: Navigator, entryId: String, checke
         onBack = nav::back,
     ) {
         card(key = "route", rows = listOf {
-            InfoRow(
-                tr("Through VPN"),
-                if (saved.viaVpn) tr("The check follows the VPN.") else tr("The check stays on Wi-Fi or Ethernet."),
-            )
+            NoteRow(vpnRouteText(saved.viaVpn), warning = false)
         })
         connectionCards(report)
     }
@@ -241,6 +241,13 @@ private fun LazyListScope.remoteCard(report: LinkReport) {
     )
 }
 
+private fun vpnRouteText(viaVpn: Boolean): String =
+    if (viaVpn) {
+        tr("Speed, external address and countries are measured through the VPN tunnel.")
+    } else {
+        tr("The VPN is bypassed: the check measures the Wi-Fi or Ethernet connection itself.")
+    }
+
 @Composable
 private fun VpnSwitch(link: LinkProbe) {
     Row(
@@ -249,9 +256,9 @@ private fun VpnSwitch(link: LinkProbe) {
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(tr("Through VPN"), style = MaterialTheme.typography.bodyLarge)
+            Text(tr("Check through VPN"), style = MaterialTheme.typography.bodyLarge)
             Text(
-                if (link.viaVpn) tr("The check follows the VPN.") else tr("The check stays on Wi-Fi or Ethernet."),
+                vpnRouteText(link.viaVpn),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

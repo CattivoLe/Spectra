@@ -59,6 +59,8 @@ final class BLEScanner: NSObject {
     /// (opening a device, for instance) does not turn the radio back on.
     private var pausedByUser = false
     private var ticker: Timer?
+    /// When the running scan started; a device is only judged gone on time it could have been heard.
+    private var scanningSince: Date?
 
     func start() {
         pausedByUser = false
@@ -158,6 +160,7 @@ final class BLEScanner: NSObject {
 
     private func beginScanIfPossible() {
         guard wantsScan, let central, central.state == .poweredOn else { return }
+        if !isScanning { scanningSince = .now }
         if !central.isScanning {
             central.scanForPeripherals(
                 withServices: nil,
@@ -171,9 +174,25 @@ final class BLEScanner: NSObject {
         guard ticker == nil else { return }
         ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.now = .now
+                guard let self else { return }
+                self.now = .now
+                self.dropSilent()
             }
         }
+    }
+
+    /// Only a running scan can tell that a device left, so a stopped list stays as it is.
+    private func dropSilent() {
+        guard isScanning, let scanningSince else { return }
+        let gone = devices.values.filter {
+            $0.id != gattDeviceID && now.timeIntervalSince(max($0.lastSeen, scanningSince)) > BLEDevice.removalWindow
+        }
+        guard !gone.isEmpty else { return }
+        for device in gone {
+            devices[device.id] = nil
+            peripherals[device.id] = nil
+        }
+        hasDevices = !devices.isEmpty
     }
 
     private func remember(

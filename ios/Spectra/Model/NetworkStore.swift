@@ -74,6 +74,8 @@ struct TrackedNetwork: Identifiable, Equatable, Codable {
 @Observable
 final class NetworkStore {
     static let scansBeforeOutOfRange = 3
+    /// Gone from the list after this many scans in a row without it.
+    static let scansBeforeRemoval = 6
     static let samplesKept = 120
 
     private(set) var networks: [BSSID: TrackedNetwork] = [:]
@@ -148,6 +150,8 @@ final class NetworkStore {
                 for id in networks.keys where !seenInCurrentScan.contains(id) {
                     networks[id]?.missedScans += 1
                 }
+                // History already holds them: every finished scan is saved while they are listed.
+                networks = networks.filter { $0.value.missedScans < Self.scansBeforeRemoval }
                 assignClients()
                 aggregateProbes()
                 deauthEvents = pendingDeauths.sorted { $0.count > $1.count }

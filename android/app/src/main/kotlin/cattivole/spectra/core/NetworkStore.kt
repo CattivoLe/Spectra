@@ -39,6 +39,9 @@ class NetworkStore {
 
     private val listeners = mutableListOf<() -> Unit>()
 
+    /** Gets networks just before they leave the list, so History can keep them. */
+    var onEvict: ((List<TrackedNetwork>) -> Unit)? = null
+
     fun observe(listener: () -> Unit): () -> Unit {
         listeners.add(listener)
         return { listeners.remove(listener) }
@@ -113,7 +116,15 @@ class NetworkStore {
         for (id in phone.keys) {
             if (id !in seen) phone[id]?.let { it.missedScans += 1 }
         }
+        evictGone(phone)
         publish()
+    }
+
+    private fun evictGone(from: MutableMap<MacAddress, TrackedNetwork>) {
+        val gone = from.values.filter { it.missedScans >= SCANS_BEFORE_REMOVAL }
+        if (gone.isEmpty()) return
+        onEvict?.invoke(gone)
+        gone.forEach { from.remove(it.id) }
     }
 
     fun clear() {
@@ -139,6 +150,7 @@ class NetworkStore {
             for (id in sensor.keys) {
                 if (id !in seenInCurrentScan) sensor[id]?.let { it.missedScans += 1 }
             }
+            evictGone(sensor)
             assignClients()
             aggregateProbes()
             deauthEvents = pendingDeauths.sortedByDescending { it.count }
@@ -245,6 +257,8 @@ class NetworkStore {
 
     companion object {
         const val SCANS_BEFORE_OUT_OF_RANGE = 3
+        /** Gone from the list after this many passes in a row without it. */
+        const val SCANS_BEFORE_REMOVAL = 6
         const val SAMPLES_KEPT = 120
     }
 }

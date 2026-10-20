@@ -57,9 +57,32 @@ class DeviceBleScanner(
     private val ticker = object : Runnable {
         override fun run() {
             now = System.currentTimeMillis()
+            dropSilent()
             if (onTab) publish()
             clock?.postDelayed(this, 1000)
         }
+    }
+
+    /** Gets devices just before they leave the list, so History can keep them. */
+    var onEvict: ((List<BleDevice>) -> Unit)? = null
+
+    /** A device held open over GATT, which often stops advertising while connected. */
+    var keep: () -> String? = { null }
+
+    /** When the running scan started; a device is only judged gone on time it could have been heard. */
+    private var scanningSince = 0L
+
+    /** Only a running scan can tell that a device left, so a stopped list stays as it is. */
+    private fun dropSilent() {
+        if (state !is State.Scanning) return
+        val held = keep()
+        val gone = rows.values.filter {
+            it.address != held && now - maxOf(it.lastSeen, scanningSince) > BleDevice.REMOVAL_WINDOW_MS
+        }
+        if (gone.isEmpty()) return
+        onEvict?.invoke(gone)
+        gone.forEach { rows.remove(it.address) }
+        devices = rows.toMap()
     }
 
     /** Busy airwaves deliver hundreds of packets a second; the list redraws a few times a second. */
@@ -195,6 +218,7 @@ class DeviceBleScanner(
         if (missing != null) {
             state = State.Unavailable(missing)
         } else {
+            if (state !is State.Scanning) scanningSince = System.currentTimeMillis()
             state = State.Scanning
             link.noteDeviceScan(true)
             if (classicInquiry) startClassic()

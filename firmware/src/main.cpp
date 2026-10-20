@@ -3933,6 +3933,8 @@ void setup() {
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.fillScreen(TFT_BLACK);
+  // M5Unified starts the RGB LED at 63 of 255; alerts should be seen across a room.
+  M5.Led.setBrightness(255);
 
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();

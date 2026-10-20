@@ -99,6 +99,10 @@ class Navigator(private val nav: NavHostController) {
         nav.navigate(if (entry == null) "ble/${Uri.encode(address)}" else "saved/ble/${Uri.encode(entry)}/${Uri.encode(address)}")
 
     fun channels() = nav.navigate("channels")
+    fun pcap() = nav.navigate("pcap")
+
+    /** Decodes the sensor's last raw capture, shown under [name]. */
+    fun decodeCapture(name: String) = nav.navigate("capture-pcap/${Uri.encode(name)}")
     fun history(id: String) = nav.navigate("history/${Uri.encode(id)}")
     fun sensorTab() = openTab(nav, Tab.Sensor)
 }
@@ -199,6 +203,11 @@ fun SpectraApp(model: SpectraModel) {
                     composable("network/{id}") { NetworkDetail(model, navigator, it.mac("id"), entryId = null) }
                     composable("client/{mac}") { ClientDetail(model, navigator, it.mac("mac"), entryId = null) }
                     composable("channels") { ChannelsScreen(model, navigator) }
+                    composable("capture-pcap/{name}") {
+                        val label = it.text("name")
+                        val capture = remember { "$label.pcap" to model.link.rawCapturePcap() }
+                        PcapScreen(navigator::back, capture, onSave = { sharePcap(context, capture.second, label) })
+                    }
                 }
                 navigation(startDestination = Tab.Lan.start, route = Tab.Lan.graph) {
                     composable(Tab.Lan.start) { LanScreen(model, navigator) }
@@ -211,6 +220,7 @@ fun SpectraApp(model: SpectraModel) {
                 }
                 navigation(startDestination = Tab.History.start, route = Tab.History.graph) {
                     composable(Tab.History.start) { HistoryScreen(model, navigator) }
+                    composable("pcap") { PcapScreen(navigator::back) }
                     composable("history/{id}") { HistoryDetail(model, navigator, it.text("id")) }
                     composable("saved/network/{entry}/{id}") { NetworkDetail(model, navigator, it.mac("id"), it.text("entry")) }
                     composable("saved/client/{entry}/{mac}") { ClientDetail(model, navigator, it.mac("mac"), it.text("entry")) }
@@ -222,10 +232,9 @@ fun SpectraApp(model: SpectraModel) {
                 }
                 navigation(startDestination = Tab.Sensor.start, route = Tab.Sensor.graph) {
                     composable(Tab.Sensor.start) {
-                        SensorScreen(model, onFlash = { nav.navigate("flash") }, onDecodePcap = { nav.navigate("pcap") })
+                        SensorScreen(model, onFlash = { nav.navigate("flash") })
                     }
                     composable("flash") { FlashScreen(model) { nav.popBackStack() } }
-                    composable("pcap") { PcapScreen { nav.popBackStack() } }
                 }
             }
         }

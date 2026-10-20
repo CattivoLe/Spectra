@@ -83,6 +83,12 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         }
         usb.observe(bump)
         radio.onAdapterChange { ble.availabilityChanged() }
+        // Rows that leave the live lists stay in History.
+        store.onEvict = { gone -> if (autosaveHistory) history.upsertNetworks(gone, PHONE_SOURCE) }
+        ble.onEvict = { gone -> if (autosaveHistory) history.upsertBluetooth(gone, PHONE_SOURCE) }
+        ble.keep = { gatt.deviceAddress }
+        wifiJoiner.onJoined = { ssid, password -> link.rememberJoined(ssid, password) }
+        wifiJoiner.start()
         phone.start()
     }
 
@@ -148,6 +154,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         phone.stop()
+        wifiJoiner.stop()
         gatt.disconnect()
         ble.shutdown()
         lan.stop()

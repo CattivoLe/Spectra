@@ -7,5 +7,10 @@
 	     on the target in Xcode (Signing & Capabilities); no request to Apple. -->
 	<key>com.apple.developer.networking.HotspotConfiguration</key>
 	<true/>
+	<!-- Lets NEHotspotNetwork.fetchCurrent name the network the phone is on,
+	     including ones Spectra did not configure, so the list can mark it.
+	     Free capability: "Access Wi-Fi Information". -->
+	<key>com.apple.developer.networking.wifi-info</key>
+	<true/>
 </dict>
 </plist>

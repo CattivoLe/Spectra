@@ -18,7 +18,21 @@ data class DiscoveredPort(val number: Int, val service: String) {
         )
 
         fun serviceName(port: Int): String = commonPorts.firstOrNull { it.first == port }?.second ?: "TCP"
+
+        /** Ports that usually answer a browser, as on iOS. */
+        val plainWeb = setOf(80, 81, 8000, 8001, 8008, 8080, 8081, 8123, 8888, 9000, 9090, 32400, 5000, 1400)
+        val secureWeb = setOf(443, 8443, 5001)
     }
+}
+
+/** The browser address of [port] when it speaks HTTP, default ports left out; null otherwise. */
+fun LanDevice.webAddress(port: Int): String? {
+    val banner = profile.banners.firstOrNull { it.port == port }
+    if (banner == null && port !in DiscoveredPort.plainWeb && port !in DiscoveredPort.secureWeb) return null
+    val secure = banner?.secure ?: (port in DiscoveredPort.secureWeb)
+    val scheme = if (secure) "https" else "http"
+    val default = if (secure) 443 else 80
+    return if (port == default) "$scheme://$ipAddress" else "$scheme://$ipAddress:$port"
 }
 
 data class SubnetInfo(

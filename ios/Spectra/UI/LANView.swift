@@ -113,17 +113,20 @@ struct LANView: View {
 
     private var connectionSection: some View {
         Section {
-            NavigationLink(value: LANRoute.connection) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(connectionTitle(probe))
-                        .font(.body.weight(.medium))
-                    Text(connectionDetail(probe))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+            // There is nothing to open until the internet has been checked once.
+            if probe.report != nil || probe.running {
+                NavigationLink(value: LANRoute.connection) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(connectionTitle(probe))
+                            .font(.body.weight(.medium))
+                        Text(connectionDetail(probe))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
             }
-            Toggle("Through VPN", isOn: $viaVpn)
+            VpnToggle(viaVpn: $viaVpn)
                 .disabled(probe.running)
             if probe.running {
                 ProgressView(value: probe.fraction)

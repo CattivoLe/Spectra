@@ -25,6 +25,22 @@ struct ThreatsTests {
         #expect(twin?.severity == .critical)
     }
 
+    @Test func evilTwinGoesAwayWhenACopyIsOutOfRange() {
+        var gone = ap([0xBB, 0, 0, 0, 0, 0x02], ssid: "CoffeeWiFi", auth: .open)
+        gone.missedScans = NetworkStore.scansBeforeOutOfRange
+        let networks = [ap([0xAA, 0, 0, 0, 0, 0x01], ssid: "CoffeeWiFi", auth: .wpa2PSK), gone]
+        #expect(Threats.assess(networks: networks, deauths: []).contains { $0.kind == .evilTwin } == false)
+    }
+
+    @Test func evilTwinListsItsAccessPoints() {
+        let networks = [
+            ap([0xAA, 0, 0, 0, 0, 0x01], ssid: "CoffeeWiFi", auth: .wpa2PSK),
+            ap([0xBB, 0, 0, 0, 0, 0x02], ssid: "CoffeeWiFi", auth: .open),
+        ]
+        let twin = Threats.assess(networks: networks, deauths: []).first { $0.kind == .evilTwin }
+        #expect(Set(twin?.networks ?? []) == Set(networks.map(\.id)))
+    }
+
     @Test func sameSsidSameVendorAndAuthIsNotFlagged() {
         // A normal roaming/mesh network: same SSID, same OUI, same security.
         let networks = [

@@ -202,12 +202,18 @@ class HistoryStore(context: Context) {
 
     // MARK: Phone-side autosave (upsert)
 
-    fun upsertNetworks(store: NetworkStore, source: String) {
-        val networks = store.networks().values.sortedWith(
+    fun upsertNetworks(store: NetworkStore, source: String) =
+        upsertNetworks(store.networks().values, source, store.probingDevices, store.deauthEvents)
+
+    fun upsertNetworks(
+        all: Collection<TrackedNetwork>,
+        source: String,
+        probes: List<ProbingDevice> = emptyList(),
+        deauths: List<DeauthEvent> = emptyList(),
+    ) {
+        val networks = all.sortedWith(
             compareByDescending<TrackedNetwork> { it.isInRange }.thenByDescending { it.latest.rssi },
         )
-        val probes = store.probingDevices
-        val deauths = store.deauthEvents
         if (networks.isEmpty() && probes.isEmpty() && deauths.isEmpty()) return
         val here = phoneLocation()
         upsert(

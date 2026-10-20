@@ -16,10 +16,10 @@ struct NetworkDetailView: View {
 
     @Environment(NetworkStore.self) private var store
     @Environment(SensorLink.self) private var link
-    @State private var joiner = WiFiJoiner()
+    @Environment(WiFiJoiner.self) private var joiner
     @State private var pendingJoin: PendingJoin?
     @State private var passphrase = ""
-    @State private var captureShare: ShareItem?
+    @State private var decoding: PcapView.Capture?
 
     /// A secured network waiting for its password before the join is applied.
     private struct PendingJoin: Identifiable {
@@ -94,6 +94,13 @@ struct NetworkDetailView: View {
                 if network.revealedSSID != nil {
                     InfoRow("Broadcast name", value: String(localized: "Hidden"))
                 }
+                if let ssid = network.revealedSSID ?? reading.ssid, let password = link.knownPassword(for: ssid) {
+                    InfoRow("Password") {
+                        Text(password)
+                            .monospaced()
+                            .textSelection(.enabled)
+                    }
+                }
                 InfoRow("BSSID") {
                     Text(reading.bssid.description)
                         .monospaced()
@@ -135,7 +142,7 @@ struct NetworkDetailView: View {
             }
 
             if snapshot == nil, link.isConnected {
-                captureSection(channel: reading.channel)
+                captureSection(network)
             }
 
             Section("Security") {
@@ -193,7 +200,9 @@ struct NetworkDetailView: View {
         }
         .navigationTitle(network.revealedSSID ?? reading.displayName)
         .navigationBarTitleDisplayMode(.inline)
-        .shareSheet(item: $captureShare)
+        .navigationDestination(item: $decoding) { capture in
+            PcapView(capture: capture)
+        }
         .onDisappear { link.stopRawCapture() }
         .task { await joiner.refreshCurrent() }
         .alert(
@@ -249,7 +258,7 @@ struct NetworkDetailView: View {
             case .unsupported:
                 Text("Enterprise and other 802.1X networks have to be joined from Settings.")
             case .psk, .wep:
-                Text("The password is handed straight to iOS and is not stored by Spectra.")
+                Text("Once the iPhone joins, Spectra keeps the password and hands it to the Cardputer too.")
             }
         }
     }
@@ -267,7 +276,7 @@ struct NetworkDetailView: View {
             }
         case .psk, .wep:
             Button {
-                passphrase = ""
+                passphrase = link.knownPassword(for: ssid) ?? ""
                 pendingJoin = PendingJoin(ssid: ssid, isWEP: method == .wep, hidden: hidden)
             } label: {
                 Label("Enter password & connect", systemImage: "wifi")
@@ -278,9 +287,12 @@ struct NetworkDetailView: View {
     // MARK: Capture traffic → .pcap
 
     @ViewBuilder
-    private func captureSection(channel: Int) -> some View {
+    private func captureSection(_ network: TrackedNetwork) -> some View {
+        let channel = network.latest.channel
+        // A capture started from another network's card is not this one's to show.
+        let mine = link.rawCaptureNetwork == network.id
         Section {
-            if link.rawCapturing {
+            if mine, link.rawCapturing {
                 HStack(spacing: 10) {
                     ProgressView()
                     VStack(alignment: .leading, spacing: 2) {
@@ -295,23 +307,23 @@ struct NetworkDetailView: View {
                 } label: {
                     Label("Stop capture", systemImage: "stop.circle")
                 }
-            } else if link.rawFrameCount > 0 {
+            } else if mine, link.rawFrameCount > 0 {
                 InfoRow("Captured") {
                     Text("\(link.rawFrameCount) frames · \(captureBytes(link.rawByteCount))")
                 }
                 Button {
-                    saveCapture()
+                    decoding = PcapView.Capture(name: captureFileName(), data: link.rawCapturePcap())
                 } label: {
-                    Label("Save .pcap", systemImage: "square.and.arrow.up")
+                    Label("Decode", systemImage: "doc.text.magnifyingglass")
                 }
                 Button {
-                    link.startRawCapture(channel: channel)
+                    link.startRawCapture(channel: channel, network: network.id)
                 } label: {
                     Label("Capture again", systemImage: "arrow.clockwise")
                 }
             } else {
                 Button {
-                    link.startRawCapture(channel: channel)
+                    link.startRawCapture(channel: channel, network: network.id)
                 } label: {
                     Label("Capture traffic → save .pcap", systemImage: "dot.radiowaves.left.and.right")
                 }
@@ -321,7 +333,7 @@ struct NetworkDetailView: View {
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Pins the sensor to channel \(channel) and streams the frames it hears into a .pcap for Wireshark. Bluetooth is narrow, so this is a short, thinned sample — not a full capture — and it stops on its own near \(SensorLink.rawFrameCap) frames.")
-                if link.rawDropped {
+                if mine, link.rawDropped {
                     Text("Some frames were dropped on the way over Bluetooth, so there are gaps.")
                 }
             }
@@ -332,17 +344,8 @@ struct NetworkDetailView: View {
         Int64(count).formatted(.byteCount(style: .file))
     }
 
-    private func saveCapture() {
-        let data = link.rawCapturePcap()
-        let stamp = Self.fileStamp.string(from: .now)
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("spectra-capture-\(stamp).pcap")
-        do {
-            try data.write(to: url, options: .atomic)
-            captureShare = ShareItem(url: url)
-        } catch {
-            // Writing to the temporary directory should not fail; nothing to show if it does.
-        }
+    private func captureFileName() -> String {
+        "spectra-capture-\(Self.fileStamp.string(from: .now)).pcap"
     }
 
     private static let fileStamp: DateFormatter = {

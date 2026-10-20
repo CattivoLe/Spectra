@@ -54,6 +54,8 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
     /// Where this scan was saved. The phone's own fix, or the cap's fix on a sensor capture.
     var latitude: Double?
     var longitude: Double?
+    /// The phone this session came from, when it was imported from a shared file.
+    var importedFrom: String?
 
     var itemCount: Int {
         switch kind {
@@ -106,7 +108,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, kind, savedAt, source, captureID, placeKey, placeLabel,
-             lines, networks, probes, deauths, lan, bluetooth, connections, latitude, longitude
+             lines, networks, probes, deauths, lan, bluetooth, connections, latitude, longitude, importedFrom
     }
 
     func encode(to encoder: Encoder) throws {
@@ -127,6 +129,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         try box.encode(connections, forKey: .connections)
         try box.encodeIfPresent(latitude, forKey: .latitude)
         try box.encodeIfPresent(longitude, forKey: .longitude)
+        try box.encodeIfPresent(importedFrom, forKey: .importedFrom)
     }
 
     /// Older files only have `lines`. Missing keys stay empty.
@@ -148,6 +151,7 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
         connections = try box.decodeIfPresent([SavedConnection].self, forKey: .connections) ?? []
         latitude = try box.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try box.decodeIfPresent(Double.self, forKey: .longitude)
+        importedFrom = try box.decodeIfPresent(String.self, forKey: .importedFrom)
     }
 }
 
@@ -456,11 +460,37 @@ final class HistoryStore {
         persist()
     }
 
-    func clear() {
-        entries = []
-        partials = [:]
-        pendingFix = [:]
+    /// Clears one shelf: this phone's own sessions, or the imported ones.
+    func clear(imported: Bool = false) {
+        entries.removeAll { ($0.importedFrom != nil) == imported }
+        if !imported {
+            partials = [:]
+            pendingFix = [:]
+        }
         persist()
+    }
+
+    /// Adds the sessions of a shared history file (from this app or the
+    /// Android one) to the imported shelf. Sessions already here, by id or
+    /// by sensor capture, are skipped. Returns how many were added, or nil
+    /// when the file is not a Spectra history.
+    func importDocument(_ data: Data) -> Int? {
+        guard let (from, decoded) = HistoryDocument.decode(data) else { return nil }
+        let origin = from ?? String(localized: "Imported")
+        var ids = Set(entries.map(\.id))
+        var captures = Set(entries.compactMap(\.captureID))
+        var fresh: [HistoryEntry] = []
+        for var entry in decoded {
+            guard ids.insert(entry.id).inserted else { continue }
+            if let capture = entry.captureID, !captures.insert(capture).inserted { continue }
+            if entry.importedFrom == nil { entry.importedFrom = origin }
+            fresh.append(entry)
+        }
+        guard !fresh.isEmpty else { return 0 }
+        entries = (fresh + entries).sorted { $0.savedAt > $1.savedAt }
+        trim()
+        persist()
+        return fresh.count
     }
 
     // MARK: - Session upsert
@@ -487,7 +517,7 @@ final class HistoryStore {
         // drift across a bucket edge does not start a fresh card.
         let hereIsGeo = placeKey.isEmpty || placeKey.hasPrefix("geo:")
         if let index = entries.firstIndex(where: { entry in
-            guard entry.kind == kind, entry.captureID == nil,
+            guard entry.kind == kind, entry.captureID == nil, entry.importedFrom == nil,
                   Calendar.current.isDate(entry.savedAt, inSameDayAs: now) else { return false }
             if (entry.placeKey ?? "") == placeKey { return true }
             guard hereIsGeo, let lat = latitude, let lon = longitude,

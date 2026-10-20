@@ -48,6 +48,18 @@ nonisolated struct AccessPointReading: Equatable, Codable, Sendable {
 nonisolated struct BSSID: Hashable, Codable, Sendable, CustomStringConvertible {
     var bytes: [UInt8]
 
+    init(bytes: [UInt8]) {
+        self.bytes = bytes
+    }
+
+    /// Parses "aa:bb:cc:dd:ee:ff". iOS drops leading zeros ("0:1a:…"), so each part may be one digit.
+    init?(string: String) {
+        let parts = string.split(whereSeparator: { $0 == ":" || $0 == "-" })
+        let bytes = parts.compactMap { UInt8($0, radix: 16) }
+        guard parts.count == 6, bytes.count == 6 else { return nil }
+        self.bytes = bytes
+    }
+
     var description: String {
         bytes.map { String(format: "%02X", $0) }.joined(separator: ":")
     }

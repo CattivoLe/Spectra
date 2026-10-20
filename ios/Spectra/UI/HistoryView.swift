@@ -1,5 +1,6 @@
 import MapKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// How the saved sessions are grouped on screen.
 enum HistoryGrouping: String, CaseIterable, Identifiable {
@@ -15,15 +16,27 @@ struct HistoryView: View {
     @AppStorage("autosaveHistory") private var autosave = true
     @State private var confirmClear = false
     @State private var showSettings = false
-    /// Expanded group keys. Empty means every group starts collapsed.
-    @State private var expanded: Set<String> = []
+    /// Expanded group keys. Today starts open; every other group stays folded until tapped.
+    @State private var expanded: Set<String> = [Self.dateGroupID(Calendar.current.startOfDay(for: .now))]
     @State private var path = NavigationPath()
     @State private var selectedPin: HistoryPin?
     @State private var showUnlocated = false
     @State private var camera: MapCameraPosition = .automatic
     @State private var shareItem: ShareItem?
+    @State private var showPcap = false
+    /// Shows the sessions imported from another phone instead of this iPhone's own.
+    @State private var importedShelf = false
+    @State private var importing = false
+    @State private var importResult: String?
     // Live map is hidden for now.
     // @State private var showLive = false
+
+    private var hasImported: Bool { history.entries.contains { $0.importedFrom != nil } }
+
+    private var shown: [HistoryEntry] {
+        let imported = importedShelf && hasImported
+        return history.entries.filter { ($0.importedFrom != nil) == imported }
+    }
 
     /// One collapsible group of sessions: a day, or a place.
     private struct Group: Identifiable {
@@ -47,7 +60,7 @@ struct HistoryView: View {
 
     /// Saved scans that carry a fix, one point per place (~55 m).
     private var pins: [HistoryPin] {
-        let located = history.entries.filter { $0.latitude != nil && $0.longitude != nil }
+        let located = shown.filter { $0.latitude != nil && $0.longitude != nil }
         let buckets = Dictionary(grouping: located) { entry -> String in
             let scale = 2000.0
             let lat = Int(((entry.latitude ?? 0) * scale).rounded())
@@ -69,7 +82,7 @@ struct HistoryView: View {
     }
 
     private var unlocated: [HistoryEntry] {
-        history.entries.filter { $0.latitude == nil || $0.longitude == nil }.sorted { $0.savedAt > $1.savedAt }
+        shown.filter { $0.latitude == nil || $0.longitude == nil }.sorted { $0.savedAt > $1.savedAt }
     }
 
     private var showsMap: Bool { grouping == .place && !pins.isEmpty }
@@ -83,17 +96,48 @@ struct HistoryView: View {
                     sessionList
                 }
             }
+            .safeAreaInset(edge: .top) {
+                if hasImported {
+                    Picker("Shelf", selection: $importedShelf) {
+                        Text("This iPhone").tag(false)
+                        Text("Imported").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                    .padding(.bottom, 6)
+                }
+            }
             .navigationTitle("History")
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.json, .data]) { result in
+                guard case .success(let url) = result else { return }
+                importHistory(from: url)
+            }
+            .alert(
+                "Import",
+                isPresented: Binding(get: { importResult != nil }, set: { if !$0 { importResult = nil } })
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(importResult ?? "")
+            }
             .navigationDestination(for: UUID.self) { id in
                 HistoryDetailView(id: id)
             }
+            .navigationDestination(isPresented: $showPcap) {
+                PcapView()
+            }
             .confirmationDialog("Clear history?", isPresented: $confirmClear, titleVisibility: .visible) {
                 Button("Clear history", role: .destructive) {
-                    history.clear()
+                    history.clear(imported: importedShelf && hasImported)
+                    if !hasImported { importedShelf = false }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Saved scans from this iPhone and the Cardputer are removed.")
+                if importedShelf && hasImported {
+                    Text("Imported scans are removed. Scans on this iPhone stay.")
+                } else {
+                    Text("Saved scans from this iPhone and the Cardputer are removed.")
+                }
             }
             .sheet(isPresented: $showSettings) {
                 HistorySettingsView(autosave: $autosave)
@@ -117,7 +161,13 @@ struct HistoryView: View {
         // ToolbarItem(placement: .topBarLeading) {
         //     Button("Live map", systemImage: "location.circle") { showLive = true }
         // }
-        if !history.entries.isEmpty {
+        ToolbarItem(placement: .topBarLeading) {
+            Button("Decode pcap", systemImage: "doc.text.magnifyingglass") { showPcap = true }
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            Button("Import", systemImage: "square.and.arrow.down") { importing = true }
+        }
+        if !shown.isEmpty {
             ToolbarItem(placement: .topBarTrailing) {
                 groupingButton(.date)
             }
@@ -128,15 +178,15 @@ struct HistoryView: View {
                 ToolbarSpacer(.fixed, placement: .topBarTrailing)
             }
         }
-        if !history.entries.isEmpty {
+        if !shown.isEmpty {
             ToolbarItem(placement: .topBarTrailing) {
-                exportMenu(entries: history.entries)
+                exportMenu(entries: shown)
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button("Settings", systemImage: "gearshape") { showSettings = true }
         }
-        if !history.entries.isEmpty {
+        if !shown.isEmpty {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Clear", systemImage: "trash", role: .destructive) {
                     confirmClear = true
@@ -146,16 +196,20 @@ struct HistoryView: View {
     }
 
     private func exportMenu(entries: [HistoryEntry]) -> some View {
-        Menu {
-            ForEach(Exporter.Format.allCases) { format in
-                Button(format.label) {
-                    let file = Exporter.file(format, from: entries)
-                    if let url = writeExport(file) { shareItem = ShareItem(url: url) }
-                }
-            }
-        } label: {
-            Label("Export", systemImage: "square.and.arrow.up")
+        HistoryExportMenu(entries: entries, shareItem: $shareItem)
+    }
+
+    private func importHistory(from url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url), let added = history.importDocument(data) else {
+            importResult = String(localized: "Could not read that file.")
+            return
         }
+        if added > 0 { importedShelf = true }
+        importResult = added == 0
+            ? String(localized: "Nothing new in that file.")
+            : String(localized: "Imported \(added) scans.")
     }
 
     private func groupingButton(_ mode: HistoryGrouping) -> some View {
@@ -204,7 +258,7 @@ struct HistoryView: View {
             }
         }
         .overlay {
-            if history.entries.isEmpty {
+            if shown.isEmpty {
                 ContentUnavailableView(
                     "Nothing saved",
                     systemImage: "clock.arrow.circlepath",
@@ -265,10 +319,10 @@ struct HistoryView: View {
 
     private func byDate() -> [Group] {
         let calendar = Calendar.current
-        let buckets = Dictionary(grouping: history.entries) { calendar.startOfDay(for: $0.savedAt) }
+        let buckets = Dictionary(grouping: shown) { calendar.startOfDay(for: $0.savedAt) }
         return buckets.keys.sorted(by: >).map { day in
             Group(
-                id: "date:\(day.timeIntervalSince1970)",
+                id: Self.dateGroupID(day),
                 label: Self.dayLabel(day),
                 entries: (buckets[day] ?? []).sorted { $0.savedAt > $1.savedAt }
             )
@@ -276,7 +330,7 @@ struct HistoryView: View {
     }
 
     private func byPlace() -> [Group] {
-        let buckets = Dictionary(grouping: history.entries) { entry in
+        let buckets = Dictionary(grouping: shown) { entry in
             entry.placeLabel ?? entry.placeKey ?? ""
         }
         return buckets
@@ -289,6 +343,8 @@ struct HistoryView: View {
             }
             .sorted { ($0.entries.first?.savedAt ?? .distantPast) > ($1.entries.first?.savedAt ?? .distantPast) }
     }
+
+    private static func dateGroupID(_ day: Date) -> String { "date:\(day.timeIntervalSince1970)" }
 
     private static func dayLabel(_ day: Date) -> String {
         let calendar = Calendar.current
@@ -482,16 +538,7 @@ struct HistoryDetailView: View {
         .toolbar {
             if let entry {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        ForEach(Exporter.Format.allCases) { format in
-                            Button(format.label) {
-                                let file = Exporter.file(format, from: [entry])
-                                if let url = writeExport(file) { shareItem = ShareItem(url: url) }
-                            }
-                        }
-                    } label: {
-                        Label("Export", systemImage: "square.and.arrow.up")
-                    }
+                    HistoryExportMenu(entries: [entry], shareItem: $shareItem)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Delete", systemImage: "trash", role: .destructive) {
@@ -634,5 +681,34 @@ struct HistoryDetailView: View {
 
     private func savedFooter(_ entry: HistoryEntry) -> some View {
         Text("\(entry.source) · \(entry.savedAt.formatted(date: .abbreviated, time: .shortened))")
+    }
+}
+
+/// Export formats for saved sessions. "Spectra" is the full history file the
+/// iPhone and Android apps import from each other; the rest are for other tools.
+struct HistoryExportMenu: View {
+    var entries: [HistoryEntry]
+    @Binding var shareItem: ShareItem?
+
+    var body: some View {
+        Menu {
+            Button("Spectra") { share(HistoryDocument.file(entries, from: origin)) }
+            ForEach(Exporter.Format.allCases) { format in
+                Button(format.label) { share(Exporter.file(format, from: entries)) }
+            }
+        } label: {
+            Label("Export", systemImage: "square.and.arrow.up")
+        }
+    }
+
+    /// Imported sessions from one phone keep that phone's name; anything else is this iPhone's.
+    private var origin: String {
+        let origins = Set(entries.map(\.importedFrom))
+        if origins.count == 1, let only = origins.first ?? nil { return only }
+        return UIDevice.current.name
+    }
+
+    private func share(_ file: Exporter.File) {
+        if let url = writeExport(file) { shareItem = ShareItem(url: url) }
     }
 }

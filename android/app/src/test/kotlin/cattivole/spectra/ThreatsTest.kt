@@ -6,6 +6,7 @@ import cattivole.spectra.core.Capabilities
 import cattivole.spectra.core.Cipher
 import cattivole.spectra.core.DeauthEvent
 import cattivole.spectra.core.MacAddress
+import cattivole.spectra.core.NetworkStore
 import cattivole.spectra.core.RadioSource
 import cattivole.spectra.core.SecondaryChannel
 import cattivole.spectra.core.Threats
@@ -49,6 +50,24 @@ class ThreatsTest {
             net(byteArrayOf(0xAA.toByte(), 0xBB.toByte(), 0xCC.toByte(), 0, 0, 2), "HomeMesh", AuthMode.WPA2_PSK),
         )
         assertNull(Threats.assess(networks, emptyList()).firstOrNull { it.kind == Threats.Kind.EVIL_TWIN })
+    }
+
+    @Test
+    fun evilTwinGoesAwayWhenACopyIsOutOfRange() {
+        val gone = net(byteArrayOf(0xBB.toByte(), 0, 0, 0, 0, 2), "CoffeeWiFi", AuthMode.OPEN)
+        gone.missedScans = NetworkStore.SCANS_BEFORE_OUT_OF_RANGE
+        val networks = listOf(net(byteArrayOf(0xAA.toByte(), 0, 0, 0, 0, 1), "CoffeeWiFi", AuthMode.WPA2_PSK), gone)
+        assertNull(Threats.assess(networks, emptyList()).firstOrNull { it.kind == Threats.Kind.EVIL_TWIN })
+    }
+
+    @Test
+    fun evilTwinListsItsAccessPoints() {
+        val networks = listOf(
+            net(byteArrayOf(0xAA.toByte(), 0, 0, 0, 0, 1), "CoffeeWiFi", AuthMode.WPA2_PSK),
+            net(byteArrayOf(0xBB.toByte(), 0, 0, 0, 0, 2), "CoffeeWiFi", AuthMode.OPEN),
+        )
+        val twin = Threats.assess(networks, emptyList()).first { it.kind == Threats.Kind.EVIL_TWIN }
+        assertEquals(networks.map { it.id }.toSet(), twin.networks.toSet())
     }
 
     @Test

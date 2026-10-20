@@ -22,13 +22,20 @@ enum Threats {
         var severity: Severity
         var title: String
         var detail: String
+        /// The access points the finding is about, strongest first.
+        var networks: [BSSID] = []
+        /// The frames behind a deauth finding.
+        var deauth: DeauthEvent?
     }
 
+    /// Networks that dropped out of range no longer count, so a finding goes
+    /// away once later scans stop hearing what raised it.
     static func assess(networks: [TrackedNetwork], deauths: [DeauthEvent]) -> [Finding] {
+        let present = networks.filter(\.isInRange)
         var findings: [Finding] = []
         findings += deauthFindings(deauths)
-        findings += evilTwinFindings(networks)
-        findings += streamingFindings(networks)
+        findings += evilTwinFindings(present)
+        findings += streamingFindings(present)
         return findings.sorted { $0.severity > $1.severity }
     }
 
@@ -42,7 +49,9 @@ enum Threats {
                 detail: String(
                     format: String(localized: "%d frames on channel %d — devices are being forced off %@."),
                     event.count, event.channel, event.isBroadcast ? String(localized: "the network") : event.bssid.description
-                )
+                ),
+                networks: [event.bssid],
+                deauth: event
             )
         }
     }
@@ -71,7 +80,8 @@ enum Threats {
                     format: String(localized: "“%@” is on %d access points with %@."),
                     ssid, members.count,
                     auths.count > 1 ? String(localized: "different security") : String(localized: "different makers")
-                )
+                ),
+                networks: members.sorted { $0.latest.rssi > $1.latest.rssi }.map(\.id)
             ))
         }
         return findings
@@ -89,7 +99,8 @@ enum Threats {
                 detail: String(
                     format: String(localized: "%@ is moving data continuously — a camera or microphone may be streaming."),
                     name
-                )
+                ),
+                networks: [network.id]
             )
         }
     }

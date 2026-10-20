@@ -14,6 +14,9 @@ final class BLEDevice: Identifiable {
     /// Quiet for longer than this and the row dims. Long enough for a slow
     /// beacon, short enough that a device which left does not stay "nearby".
     static let nearbyWindow: TimeInterval = 20
+    /// Quiet for this long while the scan runs and the row leaves the list.
+    /// History keeps it: the list is saved more often than this.
+    static let removalWindow: TimeInterval = 120
 
     let id: UUID
     var localName: String?

@@ -110,6 +110,9 @@ class SensorLink(
     /** True once any frame was lost — gaps are expected over BLE. */
     var rawDropped = false
         private set
+    /** The network whose screen started the current or last capture. */
+    var rawCaptureNetwork: MacAddress? = null
+        private set
     private val rawFrames = ArrayList<cattivole.spectra.core.PcapWriter.Frame>()
     private var rawAssembler = cattivole.spectra.core.RawFrameAssembler()
     private var rawCaptureStartMs = 0L
@@ -129,6 +132,18 @@ class SensorLink(
     /** The stored password for this network name, or null when none was saved. */
     fun knownPassword(ssid: String): String? =
         knownNetworks.all().firstOrNull { it.first == ssid && it.second.isNotEmpty() }?.second
+
+    /**
+     * A password that just put the phone on [ssid]. Kept with the sensor's
+     * list and handed to the Cardputer, so either can rejoin.
+     */
+    fun rememberJoined(ssid: String, password: String) {
+        if (password.isEmpty()) return
+        knownNetworks.remember(ssid, password)
+        control?.let { enqueue(it, SensorProtocol.Command.RememberWifi(ssid, password).data) }
+        publish()
+    }
+
     private val prefs = app.getSharedPreferences("spectra", Context.MODE_PRIVATE)
     private val adapter: BluetoothAdapter? =
         app.getSystemService(BluetoothManager::class.java)?.adapter
@@ -144,6 +159,8 @@ class SensorLink(
     private var firmwareChar: BluetoothGattCharacteristic? = null
     private var results: BluetoothGattCharacteristic? = null
     private var mtu = 23
+    /** The name the sensor reports over GATT this session. */
+    private var gapName: String? = null
     private var userDisconnected = false
     private var shouldReconnect = false
     /**
@@ -351,8 +368,9 @@ class SensorLink(
 
     /** Begin a raw-frame capture on [channel]. [bssid] is an optional filter;
      *  left null, the sensor sends every frame on the channel. */
-    fun startRawCapture(channel: Int, bssid: MacAddress? = null) {
+    fun startRawCapture(channel: Int, bssid: MacAddress? = null, network: MacAddress? = bssid) {
         if (!isConnected || rawCapturing) return
+        rawCaptureNetwork = network
         rawFrames.clear()
         rawAssembler = cattivole.spectra.core.RawFrameAssembler()
         rawFrameCount = 0
@@ -824,6 +842,7 @@ class SensorLink(
     private fun closeGatt() {
         val current = gatt
         gatt = null
+        gapName = null
         control = null
         firmwareChar = null
         results = null
@@ -929,7 +948,9 @@ class SensorLink(
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             scope.launch {
                 if (gatt != this@SensorLink.gatt) return@launch
-                val name = gatt.device.name ?: (state as? State.Connecting)?.name ?: gatt.device.address
+                // Android caches a device's name from its first pairing or scan, so the
+                // sensor's own GAP name wins over it.
+                val name = gapName ?: (state as? State.Connecting)?.name ?: gatt.device.name ?: gatt.device.address
                 prefs.edit()
                     .putString(KEY_SENSOR, gatt.device.address)
                     .putString(KEY_SENSOR_NAME, name)
@@ -980,6 +1001,11 @@ class SensorLink(
 
     @SuppressLint("MissingPermission")
     private fun onInfo(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+        if (characteristic.uuid == GAP_DEVICE_NAME) {
+            gapName = value.toString(Charsets.UTF_8).trim { it <= ' ' || it == '\u0000' }.ifEmpty { null }
+            subscribe(gatt)
+            return
+        }
         if (characteristic.uuid == SensorProtocol.INFO) {
             val parsed = SensorInfo.decode(value.toString(Charsets.UTF_8))
             info = parsed
@@ -989,7 +1015,8 @@ class SensorLink(
                 capFix = CapFix(parsed.latitude, parsed.longitude, parsed.satellites ?: 0)
             }
         }
-        subscribe(gatt)
+        val nameChar = gatt.getService(GAP_SERVICE)?.getCharacteristic(GAP_DEVICE_NAME)
+        if (nameChar == null || !gatt.readCharacteristic(nameChar)) subscribe(gatt)
     }
 
     @SuppressLint("MissingPermission")
@@ -1030,6 +1057,8 @@ class SensorLink(
             else -> "Every $seconds s"
         }
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+        private val GAP_SERVICE: UUID = UUID.fromString("00001800-0000-1000-8000-00805f9b34fb")
+        private val GAP_DEVICE_NAME: UUID = UUID.fromString("00002a00-0000-1000-8000-00805f9b34fb")
         private const val KEY_SENSOR = "lastSensor"
         private const val KEY_SENSOR_NAME = "lastSensorName"
         private const val KEY_INTERVAL = "liveInterval"
