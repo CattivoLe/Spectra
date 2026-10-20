@@ -179,6 +179,7 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
         if (lan.widePrefix) {
             card(key = "wide", rows = listOf { NoteRow(tr("The prefix is wider than /20, so only the local /24 is walked."), warning = false) })
         }
+        trafficEntry(model, nav)
         connectionEntry(model, nav)
         cardSection(
             visible,

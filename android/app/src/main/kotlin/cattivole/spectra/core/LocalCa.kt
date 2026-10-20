@@ -1,0 +1,328 @@
+package cattivole.spectra.core
+
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.math.BigInteger
+import java.net.InetAddress
+import java.security.KeyFactory
+import java.security.KeyPairGenerator
+import java.security.MessageDigest
+import java.security.PrivateKey
+import java.security.PublicKey
+import java.security.SecureRandom
+import java.security.Signature
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
+import java.security.spec.PKCS8EncodedKeySpec
+import java.security.spec.X509EncodedKeySpec
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
+import java.util.concurrent.ConcurrentHashMap
+import java.security.KeyStore
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
+
+/**
+ * The certificate this app signs for itself. The private key stays in the
+ * app's files. Only [certificate] is handed to the system installer.
+ *
+ * A leaf for each server name is signed by that same key, so traffic can be
+ * read when the phone trusts this certificate. Most apps ignore a user
+ * certificate; trusting it as a system certificate is a separate step.
+ */
+class LocalCa private constructor(
+    private val caKey: PrivateKey,
+    private val caPublic: PublicKey,
+    val certificate: X509Certificate,
+    private val leafKey: PrivateKey,
+    private val leafPublic: PublicKey,
+) {
+    private val contexts = ConcurrentHashMap<String, SSLContext>()
+
+    fun certificateDer(): ByteArray = certificate.encoded
+
+    fun fingerprint(): String = sha256(certificate.encoded).joinToString(":") { "%02X".format(it) }
+
+    /**
+     * OpenSSL `subject_hash_old`: the filename of this certificate in the
+     * system store (`hash.0`). MD5 of the subject as it is encoded in the
+     * certificate, first four bytes little-endian.
+     */
+    fun subjectHash(): String = subjectHashOld(certificate.encoded)
+
+    /** Base64 SHA-256 of the subject public key. Chrome's SPKI ignore list uses this. */
+    fun spkiSha256(): String = java.util.Base64.getEncoder().encodeToString(sha256(certificate.publicKey.encoded))
+
+    /** A certificate for [host], signed by this authority. */
+    fun leaf(host: String): X509Certificate {
+        val name = host.ifBlank { "spectra" }
+        val now = System.currentTimeMillis()
+        val san = san(name)
+        val subject = derName(name.take(64))
+        val tbs = tbsCertificate(
+            serial = BigInteger(64, random).abs() + BigInteger.ONE,
+            issuer = derName(AUTHORITY),
+            subject = subject,
+            publicKey = leafPublic,
+            notBefore = now - 3_600_000L,
+            notAfter = now + 366L * 24 * 3_600_000L,
+            extensions = cat(
+                extension("2.5.29.19", false, Der.seq(Der.bool(false))),
+                extension("2.5.29.15", false, Der.bitString(byteArrayOf(0xA0.toByte()))),
+                extension("2.5.29.37", false, Der.seq(Der.oid("1.3.6.1.5.5.7.3.1"))),
+                extension("2.5.29.14", false, Der.octet(ski(leafPublic))),
+                extension("2.5.29.35", false, Der.seq(Der.raw(0x80, ski(caPublic)))),
+                extension("2.5.29.17", false, san),
+            ),
+            issuerKey = caKey,
+        )
+        return parse(tbs)
+    }
+
+    /** TLS context that presents [leaf] for [host] to the phone. */
+    fun contextFor(host: String): SSLContext = contexts.getOrPut(host) {
+        val cert = leaf(host)
+        val store = KeyStore.getInstance("PKCS12")
+        store.load(null, null)
+        store.setKeyEntry("leaf", leafKey, STORE_PASSWORD, arrayOf(cert, certificate))
+        val keys = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+        keys.init(store, STORE_PASSWORD)
+        SSLContext.getInstance("TLS").apply { init(keys.keyManagers, null, random) }
+    }
+
+    private fun persist(dir: File) {
+        dir.mkdirs()
+        File(dir, "ca.pk8").writeBytes(caKey.encoded)
+        File(dir, "ca.crt").writeBytes(certificate.encoded)
+        File(dir, "leaf.pk8").writeBytes(leafKey.encoded)
+        File(dir, "leaf.pub").writeBytes(leafPublic.encoded)
+    }
+
+    companion object {
+        const val AUTHORITY = "Spectra"
+        private val STORE_PASSWORD = "spectra".toCharArray()
+        private val random = SecureRandom()
+        private val gate = Any()
+        private val open = HashMap<String, LocalCa>()
+
+        /** The default trust store, used for the real server. */
+        fun trustDefault(): SSLContext = SSLContext.getInstance("TLS").apply { init(null, null, null) }
+
+        /** A context that trusts exactly [certificate]. Tests use this for the far side. */
+        fun trusting(certificate: X509Certificate): SSLContext {
+            val store = KeyStore.getInstance("PKCS12")
+            store.load(null, null)
+            store.setCertificateEntry("ca", certificate)
+            val trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+            trust.init(store)
+            return SSLContext.getInstance("TLS").apply { init(null, trust.trustManagers, null) }
+        }
+
+        fun open(dir: File): LocalCa = synchronized(gate) {
+            val key = dir.canonicalPath
+            open[key]?.let { return it }
+            val loaded = if (File(dir, "ca.crt").isFile) read(dir) else create(dir)
+            open[key] = loaded
+            loaded
+        }
+
+        /** Drops the in-memory copy so the next [open] reads the files again. */
+        fun forget(dir: File) {
+            synchronized(gate) { open.remove(dir.canonicalPath) }
+        }
+
+        private fun create(dir: File): LocalCa {
+            val keys = KeyPairGenerator.getInstance("RSA").apply { initialize(2048, random) }
+            val ca = keys.generateKeyPair()
+            val leaf = keys.generateKeyPair()
+            val now = System.currentTimeMillis()
+            val subject = derName(AUTHORITY)
+            val tbs = tbsCertificate(
+                serial = BigInteger(64, random).abs() + BigInteger.ONE,
+                issuer = subject,
+                subject = subject,
+                publicKey = ca.public,
+                notBefore = now - 86_400_000L,
+                notAfter = now + 10L * 366 * 24 * 3_600_000L,
+                extensions = cat(
+                    extension("2.5.29.19", true, Der.seq(Der.bool(true))),
+                    extension("2.5.29.15", true, Der.bitString(byteArrayOf(0x06), unused = 1)),
+                    extension("2.5.29.14", false, Der.octet(ski(ca.public))),
+                ),
+                issuerKey = ca.private,
+            )
+            val created = LocalCa(ca.private, ca.public, parse(tbs), leaf.private, leaf.public)
+            created.persist(dir)
+            return created
+        }
+
+        private fun read(dir: File): LocalCa {
+            val factory = KeyFactory.getInstance("RSA")
+            val caKey = factory.generatePrivate(PKCS8EncodedKeySpec(File(dir, "ca.pk8").readBytes()))
+            val cert = parse(File(dir, "ca.crt").readBytes())
+            val leafKey = factory.generatePrivate(PKCS8EncodedKeySpec(File(dir, "leaf.pk8").readBytes()))
+            val leafPublic = factory.generatePublic(X509EncodedKeySpec(File(dir, "leaf.pub").readBytes()))
+            return LocalCa(caKey, cert.publicKey, cert, leafKey, leafPublic)
+        }
+    }
+}
+
+private fun tbsCertificate(
+    serial: BigInteger,
+    issuer: ByteArray,
+    subject: ByteArray,
+    publicKey: PublicKey,
+    notBefore: Long,
+    notAfter: Long,
+    extensions: ByteArray,
+    issuerKey: PrivateKey,
+): ByteArray {
+    val info = Der.seq(
+        cat(
+            Der.explicit(0, Der.integer(BigInteger.valueOf(2))),
+            Der.integer(serial),
+            sha256WithRsa(),
+            issuer,
+            Der.seq(cat(Der.utcTime(notBefore), Der.utcTime(notAfter))),
+            subject,
+            publicKey.encoded,
+            Der.explicit(3, Der.seq(extensions)),
+        ),
+    )
+    val signature = Signature.getInstance("SHA256withRSA").run {
+        initSign(issuerKey)
+        update(info)
+        sign()
+    }
+    return Der.seq(cat(info, sha256WithRsa(), Der.bitString(signature)))
+}
+
+private fun parse(der: ByteArray): X509Certificate =
+    CertificateFactory.getInstance("X.509").generateCertificate(der.inputStream()) as X509Certificate
+
+private fun derName(cn: String): ByteArray =
+    Der.seq(Der.set(Der.seq(cat(Der.oid("2.5.4.3"), Der.printable(cn)))))
+
+private fun san(host: String): ByteArray {
+    val address = numericAddress(host)
+    val name = if (address != null) Der.raw(0x87, address.address) else Der.raw(0x82, host.toByteArray(Charsets.US_ASCII))
+    return Der.seq(name)
+}
+
+private fun numericAddress(host: String): InetAddress? {
+    if (host.any { it != ':' && it != '.' && !it.isDigit() && it !in 'a'..'f' && it !in 'A'..'F' }) return null
+    val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return null
+    val printed = address.hostAddress ?: return null
+    if (host.contains(':')) return address.takeIf { printed.contains(':') }
+    return address.takeIf { printed == host }
+}
+
+private fun extension(oid: String, critical: Boolean, value: ByteArray): ByteArray {
+    val parts = cat(Der.oid(oid), if (critical) Der.bool(true) else ByteArray(0), Der.octet(value))
+    return Der.seq(parts)
+}
+
+private fun sha256WithRsa(): ByteArray = Der.seq(cat(Der.oid("1.2.840.113549.1.1.11"), Der.nullBytes()))
+
+private fun ski(key: PublicKey): ByteArray = sha1(key.encoded)
+
+private fun sha1(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-1").digest(bytes)
+
+private fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
+
+/**
+ * The hash Android uses as the filename in `/system/etc/security/cacerts`.
+ * It is the MD5 of the subject field exactly as encoded in the certificate.
+ */
+internal fun subjectHashOld(certificateDer: ByteArray): String {
+    val digest = MessageDigest.getInstance("MD5").digest(subjectField(certificateDer))
+    val value = (digest[0].toLong() and 0xff) or
+        ((digest[1].toLong() and 0xff) shl 8) or
+        ((digest[2].toLong() and 0xff) shl 16) or
+        ((digest[3].toLong() and 0xff) shl 24)
+    return "%08x".format(value)
+}
+
+private fun subjectField(certificateDer: ByteArray): ByteArray {
+    val certificate = readTlv(certificateDer, 0)
+    val info = readTlv(certificate.body, 0)
+    var at = 0
+    if (info.body[at].toInt() and 0xff == 0xA0) at += readTlv(info.body, at).total
+    repeat(4) { at += readTlv(info.body, at).total }
+    return readTlv(info.body, at).bytes
+}
+
+private class Tlv(val body: ByteArray, val bytes: ByteArray) {
+    val total: Int get() = bytes.size
+}
+
+private fun readTlv(bytes: ByteArray, start: Int): Tlv {
+    var index = start + 1
+    var length = bytes[index].toInt() and 0xff
+    index++
+    if (length and 0x80 != 0) {
+        val count = length and 0x7f
+        length = 0
+        repeat(count) {
+            length = (length shl 8) or (bytes[index].toInt() and 0xff)
+            index++
+        }
+    }
+    val body = bytes.copyOfRange(index, index + length)
+    return Tlv(body, bytes.copyOfRange(start, index + length))
+}
+
+private fun cat(vararg parts: ByteArray): ByteArray {
+    val out = ByteArrayOutputStream()
+    parts.forEach { out.write(it) }
+    return out.toByteArray()
+}
+
+private object Der {
+    fun seq(body: ByteArray): ByteArray = tl(0x30, body)
+    fun set(body: ByteArray): ByteArray = tl(0x31, body)
+    fun integer(value: BigInteger): ByteArray = tl(0x02, value.toByteArray())
+    fun bool(value: Boolean): ByteArray = tl(0x01, byteArrayOf(if (value) 0xFF.toByte() else 0))
+    fun octet(body: ByteArray): ByteArray = tl(0x04, body)
+    fun nullBytes(): ByteArray = byteArrayOf(0x05, 0x00)
+    fun printable(text: String): ByteArray = tl(0x13, text.toByteArray(Charsets.US_ASCII))
+    fun bitString(body: ByteArray, unused: Int = 0): ByteArray = tl(0x03, byteArrayOf(unused.toByte()) + body)
+    fun explicit(tag: Int, body: ByteArray): ByteArray = tl(0xA0 or tag, body)
+    fun raw(tag: Int, body: ByteArray): ByteArray = tl(tag, body)
+
+    fun utcTime(millis: Long): ByteArray {
+        val format = SimpleDateFormat("yyMMddHHmmss'Z'", Locale.US)
+        format.timeZone = TimeZone.getTimeZone("UTC")
+        return tl(0x17, format.format(Date(millis)).toByteArray(Charsets.US_ASCII))
+    }
+
+    fun oid(dotted: String): ByteArray {
+        val parts = dotted.split('.').map { it.toInt() }
+        val body = ByteArrayOutputStream()
+        body.write(parts[0] * 40 + parts[1])
+        for (part in parts.drop(2)) writeBase128(body, part)
+        return tl(0x06, body.toByteArray())
+    }
+
+    private fun writeBase128(out: ByteArrayOutputStream, value: Int) {
+        var shift = 28
+        while (shift > 0 && value ushr shift == 0) shift -= 7
+        while (shift > 0) {
+            out.write((value ushr shift) and 0x7F or 0x80)
+            shift -= 7
+        }
+        out.write(value and 0x7F)
+    }
+
+    private fun tl(tag: Int, body: ByteArray): ByteArray = byteArrayOf(tag.toByte()) + length(body.size) + body
+
+    private fun length(size: Int): ByteArray = when {
+        size < 0x80 -> byteArrayOf(size.toByte())
+        size <= 0xFF -> byteArrayOf(0x81.toByte(), size.toByte())
+        size <= 0xFFFF -> byteArrayOf(0x82.toByte(), (size shr 8).toByte(), size.toByte())
+        else -> byteArrayOf(0x83.toByte(), (size shr 16).toByte(), (size shr 8).toByte(), size.toByte())
+    }
+}

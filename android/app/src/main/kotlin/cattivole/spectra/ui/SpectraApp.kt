@@ -92,6 +92,25 @@ class Navigator(private val nav: NavHostController) {
 
     fun connection() = nav.navigate("connection")
 
+    fun traffic() = nav.navigate("traffic")
+
+    fun savedTraffic(id: String) = nav.navigate("traffic/saved/${Uri.encode(id)}")
+
+    fun trafficFlow(id: Long, exchange: Int? = null) =
+        nav.navigate(if (exchange == null) "traffic/flow/$id" else "traffic/flow/$id/e/$exchange")
+
+    fun savedTrafficFlow(session: String, id: Long, exchange: Int? = null) =
+        nav.navigate(
+            if (exchange == null) "traffic/saved/${Uri.encode(session)}/flow/$id"
+            else "traffic/saved/${Uri.encode(session)}/flow/$id/e/$exchange",
+        )
+
+    fun trafficJson(id: Long, exchange: Int, session: String? = null) =
+        nav.navigate(
+            if (session == null) "traffic/flow/$id/e/$exchange/json"
+            else "traffic/saved/${Uri.encode(session)}/flow/$id/e/$exchange/json",
+        )
+
     fun savedConnection(entry: String, checkedAt: Long) =
         nav.navigate("saved/connection/${Uri.encode(entry)}/$checkedAt")
 
@@ -213,6 +232,51 @@ fun SpectraApp(model: SpectraModel) {
                     composable(Tab.Lan.start) { LanScreen(model, navigator) }
                     composable("host/{ip}") { LanDetail(model, navigator, it.text("ip"), entryId = null) }
                     composable("connection") { LinkScreen(model, navigator) }
+                    composable("traffic") { SnifferScreen(model, navigator, sessionId = null) }
+                    composable("traffic/saved/{id}") { SnifferScreen(model, navigator, sessionId = it.text("id")) }
+                    composable("traffic/flow/{id}/e/{exchange}/json") {
+                        TrafficJsonScreen(
+                            model, navigator,
+                            it.arguments?.getString("id")?.toLongOrNull() ?: -1L,
+                            it.arguments?.getString("exchange")?.toIntOrNull() ?: 0,
+                            sessionId = null,
+                        )
+                    }
+                    composable("traffic/saved/{id}/flow/{flow}/e/{exchange}/json") {
+                        TrafficJsonScreen(
+                            model, navigator,
+                            it.arguments?.getString("flow")?.toLongOrNull() ?: -1L,
+                            it.arguments?.getString("exchange")?.toIntOrNull() ?: 0,
+                            sessionId = it.text("id"),
+                        )
+                    }
+                    composable("traffic/flow/{id}/e/{exchange}") {
+                        TrafficFlowScreen(
+                            model, navigator,
+                            it.arguments?.getString("id")?.toLongOrNull() ?: -1L,
+                            sessionId = null,
+                            exchange = it.arguments?.getString("exchange")?.toIntOrNull(),
+                        )
+                    }
+                    composable("traffic/saved/{id}/flow/{flow}/e/{exchange}") {
+                        TrafficFlowScreen(
+                            model, navigator,
+                            it.arguments?.getString("flow")?.toLongOrNull() ?: -1L,
+                            sessionId = it.text("id"),
+                            exchange = it.arguments?.getString("exchange")?.toIntOrNull(),
+                        )
+                    }
+                    composable("traffic/flow/{id}") {
+                        TrafficFlowScreen(model, navigator, it.arguments?.getString("id")?.toLongOrNull() ?: -1L, sessionId = null)
+                    }
+                    composable("traffic/saved/{id}/flow/{flow}") {
+                        TrafficFlowScreen(
+                            model,
+                            navigator,
+                            it.arguments?.getString("flow")?.toLongOrNull() ?: -1L,
+                            sessionId = it.text("id"),
+                        )
+                    }
                 }
                 navigation(startDestination = Tab.Bluetooth.start, route = Tab.Bluetooth.graph) {
                     composable(Tab.Bluetooth.start) { BluetoothScreen(model, navigator) }

@@ -719,3 +719,99 @@ Speed, external address and countries are measured through the VPN tunnel.	Ск�
 The VPN is bypassed: the check measures the Wi-Fi or Ethernet connection itself.	VPN обходится: проверяется само подключение по Wi‑Fi или Ethernet.
 Once the phone joins, Spectra keeps the password and hands it to the Cardputer too.	Когда телефон подключится, Spectra сохранит пароль и передаст его Cardputer.
 Open in browser	Открыть в браузере
+Traffic	Трафик
+Recording…	Запись…
+Start recording	Начать запись
+Stop recording	Остановить запись
+%d connections	Соединений: %d
+Forward this phone's connections and list them	Проксировать соединения этого телефона и показать их списком
+Waiting for connections	Жду соединения
+Connections show up here as this phone opens them.	Соединения появятся здесь, когда этот телефон их откроет.
+No connections yet	Пока нет соединений
+Start a recording to list the connections this phone opens.	Начните запись, чтобы увидеть соединения, которые открывает этот телефон.
+Host, app or address	Имя, приложение или адрес
+Save recording	Сохранить запись
+Recording saved	Запись сохранена
+Nothing to save	Нечего сохранять
+Clear connections	Очистить соединения
+Clear connections?	Очистить соединения?
+The list on screen is removed. A saved recording stays.	Список на экране удаляется. Сохранённая запись остаётся.
+Saved recordings	Сохранённые записи
+Delete recording	Удалить запись
+Delete this recording?	Удалить эту запись?
+The saved connection list is removed.	Сохранённый список соединений будет удалён.
+Recording traffic	Запись трафика
+This phone's connections are being forwarded.	Соединения этого телефона проксируются.
+Shown while Spectra is forwarding this phone's traffic.	Показывается, пока Spectra проксирует трафик этого телефона.
+Could not start the recording.	Не удалось начать запись.
+The VPN permission was denied.	Разрешение на VPN не дано.
+Sent	Отправлено
+Received	Получено
+Source port	Порт источника
+Destination	Назначение
+Application	Приложение
+Server name	Имя сервера
+Request	Запрос
+Last packet	Последний пакет
+Still open	Ещё открыто
+Closed	Закрыто
+State	Состояние
+Up %s · down %s	отправлено %s · получено %s
+Share	Поделиться
+Start a new recording?	Начать новую запись?
+The connections on screen are not saved.	Соединения на экране не сохранены.
+Save and start	Сохранить и начать
+Start over	Начать заново
+Connections are forwarded. A name is taken from DNS or the TLS handshake, not from decrypted traffic.	Соединения проксируются. Имя берётся из DNS или из рукопожатия TLS, а не из расшифрованного трафика.
+Multicast, including device discovery, is not forwarded while recording.	Широковещательный трафик, в том числе поиск устройств, во время записи не проксируется.
+This saved recording is no longer here.	Этой сохранённой записи больше нет.
+This connection is no longer in the list.	Этого соединения больше нет в списке.
+Copy name	Копировать имя
+Copy address	Копировать адрес
+Keep at top	Держать вверху
+Stop keeping at top	Больше не держать вверху
+Parameters	Параметры
+Request headers	Заголовки запроса
+Response headers	Заголовки ответа
+Response JSON	JSON ответа
+Status	Статус
+%d requests	Запросов: %d
+Nothing in this filter	В этом фильтре пусто
+No connection matches these filters.	Ни одно соединение не подходит под эти фильтры.
+Connections are forwarded. Names, headers, parameters and JSON come from cleartext DNS and HTTP, not from decrypted TLS.	Соединения проксируются. Имена, заголовки, параметры и JSON берутся из открытых DNS и HTTP, а не из расшифрованного TLS.
+The body was cut short, so the JSON may be incomplete.	Тело обрезано, поэтому JSON может быть неполным.
+No JSON	Нет JSON
+No JSON in this response.	В этом ответе нет JSON.
+Copy	Копировать
+Copy request	Копировать запрос
+Decrypt TLS	Расшифровывать TLS
+Install certificate	Установить сертификат
+Fingerprint	Отпечаток
+TLS stays encrypted. Headers and JSON are shown only for cleartext DNS and HTTP.	TLS остаётся зашифрованным. Заголовки и JSON видны только у открытых DNS и HTTP.
+New connections are decrypted with the Spectra certificate. Install it on this phone. An app that ignores user certificates closes the connection.	Новые соединения расшифровываются сертификатом Spectra. Установите его на этот телефон. Приложение, которое не доверяет пользовательским сертификатам, закроет соединение.
+New connections are decrypted. Firefox shows them. Chrome and most apps ignore a user certificate and close the connection.	Новые соединения расшифровываются. Firefox их показывает. Chrome и большинство приложений не доверяют пользовательскому сертификату и закрывают соединение.
+New connections are decrypted. Install the system certificate so other apps trust Spectra. Firefox trusts the file in Downloads.	Новые соединения расшифровываются. Установите системный сертификат, чтобы остальные приложения доверяли Spectra. Firefox доверяет файлу в «Загрузках».
+Install system certificate	Установить системный сертификат
+Remove system certificate	Убрать системный сертификат
+Install the system certificate?	Установить системный сертификат?
+Root is required. Spectra is added to the system certificate store until the phone restarts, and apps trust it. The private key stays in this app.	Нужен root. Spectra попадает в системное хранилище сертификатов до перезагрузки телефона, и приложения ей доверяют. Приватный ключ остаётся в этом приложении.
+Remove the system certificate?	Убрать системный сертификат?
+Spectra is taken out of the system store. Apps stop trusting it after they are opened again.	Spectra убирается из системного хранилища. Приложения перестают ей доверять после того, как их откроют снова.
+Install	Установить
+Remove	Убрать
+Installing the certificate…	Сертификат устанавливается…
+System certificate	Системный сертификат
+The system certificate is installed. Open each app again so it trusts Spectra. This lasts until the phone restarts. Chrome has to be restarted too.	Системный сертификат установлен. Откройте каждое приложение заново, чтобы оно доверяло Spectra. Это действует до перезагрузки телефона. Chrome тоже нужно перезапустить.
+The system certificate was removed.	Системный сертификат убран.
+Root access was denied.	Доступ root отклонён.
+This Android version keeps certificates where nsenter is required, and nsenter was not found.	На этой версии Android сертификаты лежат там, куда нужен nsenter, а его нет.
+The system certificate store was not found.	Системное хранилище сертификатов не найдено.
+The existing certificates could not be copied, so nothing was changed.	Существующие сертификаты не удалось скопировать, поэтому ничего не изменено.
+The certificate store could not be mounted, so nothing was changed.	Хранилище сертификатов не удалось смонтировать, поэтому ничего не изменено.
+Zygote was not found, so apps would not see the certificate. Nothing was changed.	Zygote не найден, поэтому приложения не увидели бы сертификат. Ничего не изменено.
+The system certificate could not be changed.	Системный сертификат не удалось изменить.
+This app did not trust the Spectra certificate.	Это приложение не доверилось сертификату Spectra.
+Install the certificate in Settings	Установите сертификат в настройках
+Android does not let an app install a CA certificate. spectra-ca.crt is in Downloads. In Settings open Security, then Encryption and credentials, Install a certificate, CA certificate, and choose that file.	Android не даёт приложению установить сертификат ЦС. Файл spectra-ca.crt лежит в «Загрузках». В настройках откройте «Безопасность», затем «Шифрование и учётные данные», «Установить сертификат», «Сертификат ЦС» и выберите этот файл.
+The certificate could not be saved.	Не удалось сохранить сертификат.
+Open settings	Открыть настройки

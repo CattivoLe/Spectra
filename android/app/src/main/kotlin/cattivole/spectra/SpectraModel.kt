@@ -12,6 +12,7 @@ import cattivole.spectra.platform.DeviceBleScanner
 import cattivole.spectra.platform.LanScanner
 import cattivole.spectra.platform.LinkProbe
 import cattivole.spectra.platform.PhoneWifiScanner
+import cattivole.spectra.platform.TrafficSniffer
 import cattivole.spectra.platform.WifiJoiner
 import cattivole.spectra.platform.SensorLink
 import cattivole.spectra.platform.UsbEspFlasher
@@ -29,6 +30,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     val ble = DeviceBleScanner(app, radio, link)
     val gatt = BleGattClient(app)
     val lan = LanScanner(app)
+    val traffic = TrafficSniffer(app)
     val connection = LinkProbe(app, lan)
     val usb = UsbEspFlasher(app)
     val wifiJoiner = WifiJoiner(app)
@@ -77,6 +79,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         ble.observe(bump)
         gatt.observe(bump)
         lan.observe(bump)
+        traffic.observe(bump)
         connection.observe {
             bump()
             saveFinishedConnection()
@@ -158,6 +161,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         gatt.disconnect()
         ble.shutdown()
         lan.stop()
+        traffic.close()
         connection.stop()
         link.close()
         usb.close()
