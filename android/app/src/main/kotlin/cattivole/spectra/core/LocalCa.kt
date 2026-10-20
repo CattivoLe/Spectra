@@ -27,11 +27,11 @@ import javax.net.ssl.TrustManagerFactory
 
 /**
  * The certificate this app signs for itself. The private key stays in the
- * app's files. Only [certificate] is handed to the system installer.
+ * app's files.
  *
  * A leaf for each server name is signed by that same key, so traffic can be
- * read when the phone trusts this certificate. Most apps ignore a user
- * certificate; trusting it as a system certificate is a separate step.
+ * read when the phone trusts this certificate. Apps that do not trust it
+ * close the connection.
  */
 class LocalCa private constructor(
     private val caKey: PrivateKey,
@@ -45,16 +45,6 @@ class LocalCa private constructor(
     fun certificateDer(): ByteArray = certificate.encoded
 
     fun fingerprint(): String = sha256(certificate.encoded).joinToString(":") { "%02X".format(it) }
-
-    /**
-     * OpenSSL `subject_hash_old`: the filename of this certificate in the
-     * system store (`hash.0`). MD5 of the subject as it is encoded in the
-     * certificate, first four bytes little-endian.
-     */
-    fun subjectHash(): String = subjectHashOld(certificate.encoded)
-
-    /** Base64 SHA-256 of the subject public key. Chrome's SPKI ignore list uses this. */
-    fun spkiSha256(): String = java.util.Base64.getEncoder().encodeToString(sha256(certificate.publicKey.encoded))
 
     /** A certificate for [host], signed by this authority. */
     fun leaf(host: String): X509Certificate {
@@ -232,48 +222,6 @@ private fun ski(key: PublicKey): ByteArray = sha1(key.encoded)
 private fun sha1(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-1").digest(bytes)
 
 private fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
-
-/**
- * The hash Android uses as the filename in `/system/etc/security/cacerts`.
- * It is the MD5 of the subject field exactly as encoded in the certificate.
- */
-internal fun subjectHashOld(certificateDer: ByteArray): String {
-    val digest = MessageDigest.getInstance("MD5").digest(subjectField(certificateDer))
-    val value = (digest[0].toLong() and 0xff) or
-        ((digest[1].toLong() and 0xff) shl 8) or
-        ((digest[2].toLong() and 0xff) shl 16) or
-        ((digest[3].toLong() and 0xff) shl 24)
-    return "%08x".format(value)
-}
-
-private fun subjectField(certificateDer: ByteArray): ByteArray {
-    val certificate = readTlv(certificateDer, 0)
-    val info = readTlv(certificate.body, 0)
-    var at = 0
-    if (info.body[at].toInt() and 0xff == 0xA0) at += readTlv(info.body, at).total
-    repeat(4) { at += readTlv(info.body, at).total }
-    return readTlv(info.body, at).bytes
-}
-
-private class Tlv(val body: ByteArray, val bytes: ByteArray) {
-    val total: Int get() = bytes.size
-}
-
-private fun readTlv(bytes: ByteArray, start: Int): Tlv {
-    var index = start + 1
-    var length = bytes[index].toInt() and 0xff
-    index++
-    if (length and 0x80 != 0) {
-        val count = length and 0x7f
-        length = 0
-        repeat(count) {
-            length = (length shl 8) or (bytes[index].toInt() and 0xff)
-            index++
-        }
-    }
-    val body = bytes.copyOfRange(index, index + length)
-    return Tlv(body, bytes.copyOfRange(start, index + length))
-}
 
 private fun cat(vararg parts: ByteArray): ByteArray {
     val out = ByteArrayOutputStream()

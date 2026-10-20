@@ -774,6 +774,9 @@ Parameters	Параметры
 Request headers	Заголовки запроса
 Response headers	Заголовки ответа
 Response JSON	JSON ответа
+Response	Ответ
+This response has no body.	В этом ответе нет тела.
+The body is encoded as %s and is not text.	Тело сжато как %s и это не текст.
 Status	Статус
 %d requests	Запросов: %d
 Nothing in this filter	В этом фильтре пусто
@@ -791,6 +794,7 @@ TLS stays encrypted. Headers and JSON are shown only for cleartext DNS and HTTP.
 New connections are decrypted with the Spectra certificate. Install it on this phone. An app that ignores user certificates closes the connection.	Новые соединения расшифровываются сертификатом Spectra. Установите его на этот телефон. Приложение, которое не доверяет пользовательским сертификатам, закроет соединение.
 New connections are decrypted. Firefox shows them. Chrome and most apps ignore a user certificate and close the connection.	Новые соединения расшифровываются. Firefox их показывает. Chrome и большинство приложений не доверяют пользовательскому сертификату и закрывают соединение.
 New connections are decrypted. Install the system certificate so other apps trust Spectra. Firefox trusts the file in Downloads.	Новые соединения расшифровываются. Установите системный сертификат, чтобы остальные приложения доверяли Spectra. Firefox доверяет файлу в «Загрузках».
+New connections are decrypted with the Spectra certificate. An app that does not trust it closes the connection.	Новые соединения расшифровываются сертификатом Spectra. Приложение, которое ему не доверяет, закрывает соединение.
 Install system certificate	Установить системный сертификат
 Remove system certificate	Убрать системный сертификат
 Install the system certificate?	Установить системный сертификат?

@@ -1,11 +1,8 @@
 package cattivole.spectra.ui
 
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.provider.MediaStore
-import android.provider.Settings
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.IosShare
@@ -27,7 +24,6 @@ import cattivole.spectra.core.HistoryStore
 import cattivole.spectra.platform.phoneName
 import java.io.File
 import java.text.SimpleDateFormat
-import java.util.Base64
 import java.util.Date
 import java.util.Locale
 
@@ -103,42 +99,6 @@ fun shareTextFile(context: Context, name: String, contents: String) {
     }
     context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
-
-/**
- * Writes the CA certificate into Downloads as `spectra-ca.crt`.
- * Android refuses to install a CA from an app, so the user picks this file in Settings.
- */
-fun saveCaCertificate(context: Context, der: ByteArray): Boolean {
-    if (Build.VERSION.SDK_INT < 29) return false
-    val pem = certificatePem(der).toByteArray(Charsets.US_ASCII)
-    return runCatching {
-        val resolver = context.contentResolver
-        val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        runCatching { resolver.delete(collection, "${MediaStore.MediaColumns.DISPLAY_NAME}=?", arrayOf(CA_FILE)) }
-        val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, CA_FILE)
-            put(MediaStore.MediaColumns.MIME_TYPE, "application/x-x509-ca-cert")
-            put(MediaStore.MediaColumns.IS_PENDING, 1)
-        }
-        val uri = resolver.insert(collection, values) ?: return false
-        resolver.openOutputStream(uri)?.use { it.write(pem) } ?: return false
-        values.clear()
-        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-        resolver.update(uri, values, null, null)
-        true
-    }.getOrDefault(false)
-}
-
-fun openSecuritySettings(context: Context) {
-    runCatching { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) }
-}
-
-private fun certificatePem(der: ByteArray): String {
-    val body = Base64.getEncoder().encodeToString(der).chunked(64).joinToString("\n")
-    return "-----BEGIN CERTIFICATE-----\n$body\n-----END CERTIFICATE-----\n"
-}
-
-private const val CA_FILE = "spectra-ca.crt"
 
 /** A share button that opens a menu of export formats. */
 @Composable

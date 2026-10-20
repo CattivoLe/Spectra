@@ -5,7 +5,9 @@ import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.net.URLDecoder
+import org.brotli.dec.BrotliInputStream
 import java.util.zip.GZIPInputStream
+import java.util.zip.Inflater
 import java.util.zip.InflaterInputStream
 import kotlin.math.min
 
@@ -22,7 +24,8 @@ data class HttpField(val name: String, val value: String) {
 
 /**
  * One cleartext HTTP request and, once it has arrived, its response.
- * [responseJson] is set only when the body is JSON and was not cut short.
+ * [responseJson] is the response body when it is JSON. A cut body is the
+ * part that fit, and [responseCut] says the rest was dropped.
  */
 data class HttpExchange(
     val method: String,
@@ -78,8 +81,8 @@ fun TrafficFlow.kind(): TrafficKind = when {
 
 /**
  * Splits a cleartext HTTP byte stream into requests and responses.
- * Bodies are kept only up to a cap; a larger body is skipped so the next
- * message still lines up, and its JSON is not shown.
+ * A body larger than [BODY_CAP] is stored only up to that cap, so the next
+ * message still lines up. Anything under the cap is kept whole.
  */
 class HttpAssembler {
     private val client = ByteCursor()
@@ -164,9 +167,10 @@ class HttpAssembler {
                 }
                 Step.RESPONSE_BODY -> {
                     if (!responseBody.pump(server)) return
-                    val decoded = if (responseBody.cut) null else inflate(responseBody.bytes(), responseHeaders)
+                    val decoded = inflate(responseBody.bytes(), responseHeaders)
                     val json = decoded?.let { prettyJson(it) }
-                    publish(status, responseHeaders, json?.first, responseBody.cut || json?.second == true, complete = true)
+                    val shown = json?.first ?: decoded?.let { readableText(it) }
+                    publish(status, responseHeaders, shown, responseBody.cut || json?.second == true, complete = true)
                     step = Step.REQUEST_HEADERS
                 }
             }
@@ -174,7 +178,7 @@ class HttpAssembler {
     }
 
     private fun publish(status: Int?, responseHeaders: List<HttpField>, body: String?, cut: Boolean, complete: Boolean = false) {
-        val raw = if (requestBody.cut) ByteArray(0) else inflate(requestBody.bytes(), requestHeaders)
+        val raw = if (requestBody.cut) ByteArray(0) else inflate(requestBody.bytes(), requestHeaders) ?: ByteArray(0)
         val parameters = buildList {
             if (isForm(requestHeaders)) addAll(formFields(raw))
             if (isJsonType(requestHeaders)) addAll(jsonFields(raw))
@@ -198,10 +202,9 @@ class HttpAssembler {
 
     private companion object {
         const val MAX_EXCHANGES = 24
-        const val BODY_CAP = 64 * 1024
+        const val BODY_CAP = 4 * 1024 * 1024
         const val HEADER_CAP = 32 * 1024
         const val FIELD_CAP = 40
-        const val JSON_CAP = 48_000
         val METHODS = setOf("GET", "POST", "HEAD", "PUT", "DELETE", "PATCH", "OPTIONS", "CONNECT", "TRACE")
         val HEADER_END = byteArrayOf(13, 10, 13, 10)
         val LINE_END = byteArrayOf(13, 10)
@@ -395,7 +398,7 @@ private fun headerFields(lines: List<String>): List<HttpField> = lines.mapNotNul
     val colon = line.indexOf(':')
     if (colon <= 0) return@mapNotNull null
     HttpField(line.substring(0, colon).trim(), line.substring(colon + 1).trim())
-}.take(40)
+}
 
 private fun queryFields(target: String): List<HttpField> {
     val query = target.substringAfter('?', "")
@@ -430,29 +433,54 @@ private fun isForm(headers: List<HttpField>): Boolean =
 private fun isJsonType(headers: List<HttpField>): Boolean =
     headers.any { it.name.equals("Content-Type", true) && it.value.contains("json", true) }
 
-private fun inflate(body: ByteArray, headers: List<HttpField>): ByteArray {
+private fun inflate(body: ByteArray, headers: List<HttpField>): ByteArray? {
     if (body.isEmpty()) return body
     val encoding = headers.firstOrNull { it.name.equals("Content-Encoding", true) }?.value?.lowercase().orEmpty()
-    return try {
+    val decoded = try {
         when {
-            "gzip" in encoding -> GZIPInputStream(ByteArrayInputStream(body)).use { it.readBytes() }
-            "deflate" in encoding -> InflaterInputStream(ByteArrayInputStream(body)).use { it.readBytes() }
+            "br" in encoding || "brotli" in encoding -> BrotliInputStream(ByteArrayInputStream(body)).use { it.readBytes() }
+            "gzip" in encoding || (body.size > 2 && body[0] == 0x1f.toByte() && body[1] == 0x8b.toByte()) ->
+                GZIPInputStream(ByteArrayInputStream(body)).use { it.readBytes() }
+            "deflate" in encoding -> inflateDeflate(body)
             else -> body
         }
     } catch (_: Exception) {
         body
     }
+    return decoded
+}
+
+/** Text worth showing. Binary bodies, including ones we could not decompress, are skipped. */
+private fun readableText(body: ByteArray): String? {
+    if (body.isEmpty()) return null
+    val text = body.toString(Charsets.UTF_8).trimStart('\uFEFF').trim()
+    if (text.isEmpty()) return null
+    val sample = text.take(512)
+    var bad = 0
+    for (char in sample) {
+        if (char == '\uFFFD' || (char.code < 32 && char != '\n' && char != '\r' && char != '\t')) bad++
+    }
+    if (bad > sample.length / 10) return null
+    return text
+}
+
+private fun inflateDeflate(body: ByteArray): ByteArray = try {
+    InflaterInputStream(ByteArrayInputStream(body)).use { it.readBytes() }
+} catch (_: Exception) {
+    InflaterInputStream(ByteArrayInputStream(body), Inflater(true)).use { it.readBytes() }
 }
 
 private fun prettyJson(body: ByteArray): Pair<String, Boolean>? {
-    val text = body.toString(Charsets.UTF_8).trim()
+    var text = body.toString(Charsets.UTF_8).trimStart('\uFEFF').trim()
+    if (text.startsWith(")]}',")) text = text.removePrefix(")]}',").trim()
+    if (text.startsWith("while(1);")) text = text.removePrefix("while(1);").trim()
     if (!text.startsWith("{") && !text.startsWith("[")) return null
     val pretty = try {
         if (text.startsWith("{")) JSONObject(text).toString(2) else JSONArray(text).toString(2)
     } catch (_: Exception) {
-        return null
+        return text to false
     }
-    return if (pretty.length > 48_000) pretty.take(48_000) to true else pretty to false
+    return pretty to false
 }
 
 private fun decode(text: String): String = try {

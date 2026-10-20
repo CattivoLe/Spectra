@@ -28,7 +28,6 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Save
-import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.WifiTethering
 import androidx.compose.material3.AlertDialog
@@ -43,7 +42,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -59,11 +57,6 @@ import cattivole.spectra.core.HttpExchange
 import cattivole.spectra.core.HttpField
 import cattivole.spectra.core.TrafficFlow
 import cattivole.spectra.core.TrafficKind
-import cattivole.spectra.platform.SystemCertResult
-import cattivole.spectra.platform.SystemCertificate
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import cattivole.spectra.core.TrafficSession
 import cattivole.spectra.core.kind
 import cattivole.spectra.platform.TrafficSniffer
@@ -131,14 +124,6 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
     var confirmClear by rememberSaveable { mutableStateOf(false) }
     var confirmDelete by rememberSaveable { mutableStateOf(false) }
     var confirmNew by rememberSaveable { mutableStateOf(false) }
-    var explainCert by rememberSaveable { mutableStateOf(false) }
-    var certSaved by rememberSaveable { mutableStateOf(false) }
-    var confirmSystem by rememberSaveable { mutableStateOf(false) }
-    var confirmRemoveSystem by rememberSaveable { mutableStateOf(false) }
-    var systemBusy by rememberSaveable { mutableStateOf(false) }
-    var removingSystem by rememberSaveable { mutableStateOf(false) }
-    var systemResult by rememberSaveable { mutableStateOf<String?>(null) }
-    val jobs = rememberCoroutineScope()
     val notify = LocalNotify.current
     val context = LocalContext.current
     val begin = rememberTrafficConsent(traffic)
@@ -197,87 +182,6 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
                 }) { Text(tr("Delete"), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(tr("Cancel")) } },
-        )
-    }
-    if (explainCert) {
-        AlertDialog(
-            onDismissRequest = { explainCert = false },
-            icon = { Icon(Icons.Rounded.Lock, null) },
-            title = { Text(tr("Install the certificate in Settings")) },
-            text = {
-                Text(
-                    if (certSaved) {
-                        tr("Android does not let an app install a CA certificate. spectra-ca.crt is in Downloads. In Settings open Security, then Encryption and credentials, Install a certificate, CA certificate, and choose that file.")
-                    } else {
-                        tr("The certificate could not be saved.")
-                    },
-                )
-            },
-            confirmButton = {
-                if (certSaved) {
-                    TextButton(onClick = {
-                        explainCert = false
-                        openSecuritySettings(context)
-                    }) { Text(tr("Open settings")) }
-                }
-            },
-            dismissButton = { TextButton(onClick = { explainCert = false }) { Text(tr("Cancel")) } },
-        )
-    }
-    if (confirmSystem) {
-        AlertDialog(
-            onDismissRequest = { confirmSystem = false },
-            icon = { Icon(Icons.Rounded.Security, null) },
-            title = { Text(tr("Install the system certificate?")) },
-            text = { Text(tr("Root is required. Spectra is added to the system certificate store until the phone restarts, and apps trust it. The private key stays in this app.")) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmSystem = false
-                    val authority = traffic.authority() ?: return@TextButton
-                    removingSystem = false
-                    systemBusy = true
-                    jobs.launch {
-                        val outcome = withContext(Dispatchers.IO) { SystemCertificate.install(authority) }
-                        if (outcome == SystemCertResult.Installed) traffic.setDecryptTls(true)
-                        systemResult = outcome.name
-                        systemBusy = false
-                    }
-                }) { Text(tr("Install")) }
-            },
-            dismissButton = { TextButton(onClick = { confirmSystem = false }) { Text(tr("Cancel")) } },
-        )
-    }
-    if (confirmRemoveSystem) {
-        AlertDialog(
-            onDismissRequest = { confirmRemoveSystem = false },
-            icon = { Icon(Icons.Rounded.Security, null) },
-            title = { Text(tr("Remove the system certificate?")) },
-            text = { Text(tr("Spectra is taken out of the system store. Apps stop trusting it after they are opened again.")) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmRemoveSystem = false
-                    removingSystem = true
-                    systemBusy = true
-                    jobs.launch {
-                        val outcome = withContext(Dispatchers.IO) { SystemCertificate.remove() }
-                        systemResult = outcome.name
-                        systemBusy = false
-                    }
-                }) { Text(tr("Remove"), color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { confirmRemoveSystem = false }) { Text(tr("Cancel")) } },
-        )
-    }
-    systemResult?.let { name ->
-        val outcome = runCatching { SystemCertResult.valueOf(name) }.getOrNull()
-        AlertDialog(
-            onDismissRequest = { systemResult = null },
-            icon = { Icon(Icons.Rounded.Security, null) },
-            title = { Text(tr("System certificate")) },
-            text = { Text(tr(systemMessage(outcome))) },
-            confirmButton = {
-                TextButton(onClick = { systemResult = null }) { Text(tr("Done")) }
-            },
         )
     }
     if (confirmNew) {
@@ -423,35 +327,6 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
                     add { TlsSwitch(traffic) }
                     traffic.certificateFingerprint()?.let { digest ->
                         add { InfoRow(tr("Fingerprint"), digest, mono = true, copyable = true) }
-                    }
-                    add {
-                        ActionRow(
-                            if (systemBusy && !removingSystem) tr("Installing the certificate…") else tr("Install system certificate"),
-                            Icons.Rounded.Security,
-                            enabled = !systemBusy && traffic.authority() != null,
-                            onClick = { confirmSystem = true },
-                        )
-                    }
-                    add {
-                        ActionRow(
-                            tr("Remove system certificate"),
-                            Icons.Rounded.Security,
-                            enabled = !systemBusy,
-                            onClick = { confirmRemoveSystem = true },
-                        )
-                    }
-                    add {
-                        ActionRow(
-                            tr("Install certificate"),
-                            Icons.Rounded.Lock,
-                            enabled = traffic.certificateDer() != null,
-                            onClick = {
-                                val der = traffic.certificateDer() ?: return@ActionRow
-                                certSaved = saveCaCertificate(context, der)
-                                if (certSaved) traffic.setDecryptTls(true)
-                                explainCert = true
-                            },
-                        )
                     }
                 },
             )
@@ -617,18 +492,30 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
                     rows = buildList { for (field in http.responseHeaders) add { FieldRow(field) } },
                 )
             }
-            if (http.responseJson != null || http.responseCut) {
-                card(key = "json", rows = buildList {
+            card(
+                header = tr("Response"),
+                key = "response",
+                rows = buildList {
                     if (http.responseCut) add { NoteRow(tr("The body was cut short, so the JSON may be incomplete."), warning = true) }
-                    if (http.responseJson != null) {
+                    val body = http.responseJson
+                    if (body != null) {
                         add {
-                            ActionRow(tr("Response JSON"), Icons.Rounded.DataObject, onClick = {
-                                nav.trafficJson(flow.id, exchange, sessionId)
-                            })
+                            SelectionContainer(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                Text(body, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                            }
+                        }
+                    } else {
+                        val encoding = http.responseHeaders.firstOrNull { it.name.equals("Content-Encoding", true) }?.value
+                        add {
+                            NoteRow(
+                                if (encoding.isNullOrBlank()) tr("This response has no body.")
+                                else tr("The body is encoded as %s and is not text.", encoding),
+                                warning = encoding != null,
+                            )
                         }
                     }
-                })
-            }
+                },
+            )
         }
         card(
             header = tr("Observed"),
@@ -693,18 +580,6 @@ private fun FlowRow(
     }
 }
 
-private fun systemMessage(result: SystemCertResult?): String = when (result) {
-    SystemCertResult.Installed -> "The system certificate is installed. Open each app again so it trusts Spectra. This lasts until the phone restarts. Chrome has to be restarted too."
-    SystemCertResult.Removed -> "The system certificate was removed."
-    SystemCertResult.NoRoot -> "Root access was denied."
-    SystemCertResult.NoNsenter -> "This Android version keeps certificates where nsenter is required, and nsenter was not found."
-    SystemCertResult.NoStore -> "The system certificate store was not found."
-    SystemCertResult.CopyFailed -> "The existing certificates could not be copied, so nothing was changed."
-    SystemCertResult.MountFailed -> "The certificate store could not be mounted, so nothing was changed."
-    SystemCertResult.NoZygote -> "Zygote was not found, so apps would not see the certificate. Nothing was changed."
-    else -> "The system certificate could not be changed."
-}
-
 @Composable
 private fun TlsSwitch(traffic: TrafficSniffer) {
     Row(
@@ -716,7 +591,7 @@ private fun TlsSwitch(traffic: TrafficSniffer) {
             Text(tr("Decrypt TLS"), style = MaterialTheme.typography.bodyLarge)
             Text(
                 if (traffic.decryptTls) {
-                    tr("New connections are decrypted. Install the system certificate so other apps trust Spectra. Firefox trusts the file in Downloads.")
+                    tr("New connections are decrypted with the Spectra certificate. An app that does not trust it closes the connection.")
                 } else {
                     tr("TLS stays encrypted. Headers and JSON are shown only for cleartext DNS and HTTP.")
                 },

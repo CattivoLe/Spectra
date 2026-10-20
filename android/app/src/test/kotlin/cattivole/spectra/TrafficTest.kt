@@ -1,5 +1,6 @@
 package cattivole.spectra
 
+import cattivole.spectra.core.AcceptEncodingStrip
 import cattivole.spectra.core.HttpAssembler
 import cattivole.spectra.core.HttpExchange
 import cattivole.spectra.core.HttpField
@@ -11,9 +12,6 @@ import cattivole.spectra.core.TrafficHints
 import cattivole.spectra.core.TrafficKind
 import cattivole.spectra.core.TrafficSession
 import cattivole.spectra.core.kind
-import cattivole.spectra.platform.SystemCertificate
-import java.util.Base64
-import java.util.concurrent.TimeUnit
 import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.util.ArrayDeque
@@ -203,6 +201,20 @@ class TrafficTest {
         assertEquals(200, done.status)
         assertTrue(done.responseJson!!.contains("\"ok\": true"))
         assertFalse(done.responseCut)
+        val big = HttpAssembler()
+        val wide = buildString {
+            append('{')
+            for (i in 1..3000) {
+                if (i > 1) append(',')
+                append("\"k$i\":\"v$i\"")
+            }
+            append('}')
+        }
+        big.client("GET /big HTTP/1.1\r\nHost: h\r\n\r\n".toByteArray())
+        big.server("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${wide.toByteArray().size}\r\n\r\n$wide".toByteArray())
+        val whole = big.exchanges().single()
+        assertFalse(whole.responseCut)
+        assertTrue(whole.responseJson!!.contains("\"k3000\""))
     }
 
     @Test
@@ -283,35 +295,49 @@ class TrafficTest {
         LocalCa.forget(dir)
         val again = LocalCa.open(dir)
         assertTrue(ca.certificate.encoded.contentEquals(again.certificate.encoded))
-        val hash = ca.subjectHash()
-        assertEquals(8, hash.length)
-        assertTrue(hash.all { it in '0'..'9' || it in 'a'..'f' })
-        val der = java.io.File(dir, "ca.der")
-        der.writeBytes(ca.certificate.encoded)
-        val openssl = ProcessBuilder("openssl", "x509", "-inform", "DER", "-in", der.path, "-noout", "-subject_hash_old")
-            .redirectErrorStream(true)
-            .start()
-        assertTrue(openssl.waitFor(5, TimeUnit.SECONDS))
-        assertEquals(openssl.inputStream.bufferedReader().readText().trim(), hash)
     }
 
     @Test
-    fun systemScriptCopiesTheStoreAndKeepsTheKey() {
-        val pem = "-----BEGIN CERTIFICATE-----\nQUJD\n-----END CERTIFICATE-----"
-        val script = SystemCertificate.installScript(pem, "abcdef01", "spki+value=")
-        assertTrue(script.contains("HASH=abcdef01"))
-        assertTrue(script.contains("\$HASH.0"))
-        assertTrue(script.contains("--rbind"))
-        assertTrue(script.contains("nsenter"))
-        assertTrue(script.contains("spectra: copy-failed"))
-        assertTrue(script.contains("spki+value="))
-        assertFalse(script.contains("PRIVATE"))
-        assertTrue(script.contains(Base64.getEncoder().encodeToString(pem.toByteArray())))
-        val file = java.io.File.createTempFile("spectra-ca", ".sh")
-        file.writeText(script)
-        val check = ProcessBuilder("sh", "-n", file.absolutePath).redirectErrorStream(true).start()
-        val syntax = check.inputStream.bufferedReader().readText()
-        assertTrue(syntax, check.waitFor(5, TimeUnit.SECONDS) && check.exitValue() == 0)
+    fun jsonWithXssiPrefixAndBrotliBody() {
+        val assembler = HttpAssembler()
+        assembler.client("GET /p HTTP/1.1\r\nHost: h\r\n\r\n".toByteArray())
+        val prefixed = ")]}',\n{\"ok\":true}"
+        assembler.server("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${prefixed.toByteArray().size}\r\n\r\n$prefixed".toByteArray())
+        assertTrue(assembler.exchanges().single().responseJson!!.contains("\"ok\": true"))
+        val page = HttpAssembler()
+        page.client("GET /page HTTP/1.1\r\nHost: h\r\n\r\n".toByteArray())
+        val html = "<html><body>hello</body></html>"
+        page.server("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${html.length}\r\n\r\n$html".toByteArray())
+        assertTrue(page.exchanges().single().responseJson!!.contains("hello"))
+        val stream = HttpAssembler()
+        stream.client("GET /events HTTP/1.1\r\nHost: h\r\n\r\n".toByteArray())
+        val events = "data: {\"ok\":true}\n\n"
+        stream.server("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: ${events.length}\r\n\r\n$events".toByteArray())
+        assertTrue(stream.exchanges().single().responseJson!!.contains("\"ok\":true"))
+        val brotli = HttpAssembler()
+        brotli.client("GET /b HTTP/1.1\r\nHost: h\r\n\r\n".toByteArray())
+        val compressed = byteArrayOf(0x0f, 0x05, 0x80.toByte(), 0x7b, 0x22, 0x6f, 0x6b, 0x22, 0x3a, 0x74, 0x72, 0x75, 0x65, 0x7d, 0x03)
+        val head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: br\r\nContent-Length: ${compressed.size}\r\n\r\n"
+        brotli.server(head.toByteArray() + compressed)
+        assertTrue(brotli.exchanges().single().responseJson!!.contains("\"ok\": true"))
+    }
+
+    @Test
+    fun acceptEncodingIsRewrittenButTheBodyIsKept() {
+        val strip = AcceptEncodingStrip()
+        val body = "{\"ok\":true}"
+        val request = "POST /api HTTP/1.1\r\nHost: example.com\r\nAccept-Encoding: gzip, deflate, br\r\nContent-Length: ${body.length}\r\n\r\n$body"
+        val out = StringBuilder()
+        request.chunked(5).forEach { piece ->
+            strip.feed(piece.toByteArray()).forEach { out.append(String(it, Charsets.ISO_8859_1)) }
+        }
+        assertTrue(out.contains("Accept-Encoding: identity"))
+        assertFalse(out.contains("br"))
+        assertTrue(out.endsWith(body))
+        val next = strip.feed("GET /next HTTP/1.1\r\nHost: example.com\r\nAccept-Encoding: gzip\r\n\r\n".toByteArray())
+        val second = next.joinToString("") { String(it, Charsets.ISO_8859_1) }
+        assertTrue(second.contains("GET /next"))
+        assertTrue(second.contains("Accept-Encoding: identity"))
     }
 
     @Test

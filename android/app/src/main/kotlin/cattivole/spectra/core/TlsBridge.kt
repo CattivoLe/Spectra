@@ -32,6 +32,7 @@ class TlsBridge(
     }
     private val fromClient = PacketBuf()
     private val fromServer = PacketBuf()
+    private val requests = AcceptEncodingStrip()
     private val toServerApp = ArrayDeque<ByteBuffer>()
     private val toClientApp = ArrayDeque<ByteBuffer>()
     private var dead = false
@@ -57,6 +58,7 @@ class TlsBridge(
     fun clientClosed() {
         if (dead) return
         try {
+            requests.finish().forEach { toServerApp.add(ByteBuffer.wrap(it)) }
             serverEngine.closeOutbound()
             spin()
         } catch (_: SSLException) {
@@ -140,7 +142,8 @@ class TlsBridge(
                 app.flip()
                 app.get(plain)
                 onPlain(plain)
-                pending.add(ByteBuffer.wrap(plain))
+                val forward = if (engine === clientEngine) requests.feed(plain) else listOf(plain)
+                forward.forEach { pending.add(ByteBuffer.wrap(it)) }
             }
             return result.bytesConsumed() > 0 || result.bytesProduced() > 0
         } finally {

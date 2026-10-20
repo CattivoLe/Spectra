@@ -138,10 +138,6 @@ class TrafficSniffer(context: Context) {
         }
     }
 
-    fun certificateDer(): ByteArray? = CaptureBus.authority?.certificateDer()
-
-    fun authority(): LocalCa? = CaptureBus.authority
-
     fun certificateFingerprint(): String? = CaptureBus.authority?.fingerprint()
 
     fun start() {
