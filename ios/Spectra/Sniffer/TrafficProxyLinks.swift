@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 
 /// One TCP connection: speaks the phone's side of TCP in user space (SYN/ACK,
 /// sequence/acknowledgement, windows) while replaying the payload over an
@@ -214,11 +215,13 @@ final class TCPLink {
             )
             mitm = bridge
             held = nil
+            snifferLog.debug("startMITM ok host=\(host, privacy: .public)")
             bridge.fromClient(hello)
             return true
         } catch {
             mitm = nil
             flow.refused = true
+            snifferLog.error("startMITM failed host=\(host, privacy: .public): \(String(describing: error), privacy: .public)")
             return false
         }
     }

@@ -2,6 +2,9 @@ import Foundation
 import NIOCore
 import NIOEmbedded
 import NIOSSL
+import os
+
+let snifferLog = Logger(subsystem: "cattivole.Spectra", category: "sniffer")
 
 /// Speaks TLS to the phone with our certificate and TLS to the origin with the
 /// system trust store. The cleartext unwrapped on each side is the HTTP that
@@ -45,8 +48,7 @@ nonisolated final class TLSBridge {
         // Phone side: terminate the phone's TLS, surface its request cleartext.
         try phoneSide.pipeline.syncOperations.addHandler(NIOSSLServerHandler(context: serverContext))
         try phoneSide.pipeline.syncOperations.addHandler(PlainTap(
-            onData: { [weak self] in self?.clientPlain($0) },
-            onClosed: { }
+            label: "phone", onData: { [weak self] in self?.clientPlain($0) }, onClosed: { }
         ))
 
         // Origin side: open our own TLS to the origin, surface its response.
@@ -55,9 +57,11 @@ nonisolated final class TLSBridge {
             try NIOSSLClientHandler(context: clientContext, serverHostname: hostname)
         )
         try originSide.pipeline.syncOperations.addHandler(PlainTap(
-            onData: { [weak self] in self?.serverPlain($0) },
+            label: "origin", onData: { [weak self] in self?.serverPlain($0) },
             onClosed: { [weak self] in self?.onServerClosed() }
         ))
+
+        snifferLog.debug("TLSBridge start host=\(host, privacy: .public) sni=\(hostname ?? "-", privacy: .public)")
 
         // Both channels must be active for the handshakes to run; the client side
         // starts its ClientHello toward the origin as soon as it is active.
@@ -96,6 +100,7 @@ nonisolated final class TLSBridge {
     // MARK: Internals
 
     private func clientPlain(_ bytes: [UInt8]) {
+        snifferLog.debug("TLSBridge request plaintext \(bytes.count) B → origin")
         onClientPlain(bytes)
         // The forwarded copy is where Accept-Encoding stripping will go (not yet
         // ported); for now the request is forwarded unchanged to the origin.
@@ -103,6 +108,7 @@ nonisolated final class TLSBridge {
     }
 
     private func serverPlain(_ bytes: [UInt8]) {
+        snifferLog.debug("TLSBridge response plaintext \(bytes.count) B → phone")
         onServerPlain(bytes)
         writeApp(phoneSide, bytes)
     }
@@ -141,6 +147,7 @@ nonisolated final class TLSBridge {
         while moved && !dead && guardCount < 1024 {
             guardCount += 1
             moved = false
+            loop.run()   // fire NIOSSL's deferred handshake/promise work
             while let out = try? phoneSide.readOutbound(as: ByteBuffer.self) {
                 toClient(Array(buffer: out)); moved = true
             }
@@ -158,13 +165,16 @@ nonisolated final class TLSBridge {
     }
 }
 
-/// Captures the cleartext a TLS channel unwraps, and notes close.
+/// Captures the cleartext a TLS channel unwraps, notes close, and logs TLS
+/// handshake completion / errors (the key signal for diagnosing a stalled MITM).
 private nonisolated final class PlainTap: ChannelInboundHandler {
     typealias InboundIn = ByteBuffer
+    private let label: String
     private let onData: ([UInt8]) -> Void
     private let onClosed: () -> Void
 
-    init(onData: @escaping ([UInt8]) -> Void, onClosed: @escaping () -> Void) {
+    init(label: String, onData: @escaping ([UInt8]) -> Void, onClosed: @escaping () -> Void) {
+        self.label = label
         self.onData = onData
         self.onClosed = onClosed
     }
@@ -174,6 +184,18 @@ private nonisolated final class PlainTap: ChannelInboundHandler {
         if let bytes = buffer.readBytes(length: buffer.readableBytes), !bytes.isEmpty {
             onData(bytes)
         }
+    }
+
+    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        // Logs TLS handshake-completed / shutdown events (from NIOTLS) without
+        // needing to import that module — the description is enough to diagnose.
+        snifferLog.debug("TLSBridge \(self.label, privacy: .public) event: \(String(describing: event), privacy: .public)")
+        context.fireUserInboundEventTriggered(event)
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        snifferLog.error("TLSBridge \(self.label, privacy: .public) TLS error: \(String(describing: error), privacy: .public)")
+        context.fireErrorCaught(error)
     }
 
     func channelInactive(context: ChannelHandlerContext) {
