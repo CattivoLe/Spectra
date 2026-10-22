@@ -74,12 +74,14 @@ nonisolated final class TLSBridge {
     /// Ciphertext the phone sent. Decrypted to the request, re-encrypted to the origin.
     func fromClient(_ data: [UInt8]) {
         guard !dead, !data.isEmpty else { return }
+        snifferLog.debug("bridge fromClient \(data.count) B")
         feed(phoneSide, data)
     }
 
     /// Ciphertext the origin sent. Decrypted to the response, re-encrypted to the phone.
     func fromServer(_ data: [UInt8]) {
         guard !dead, !data.isEmpty else { return }
+        snifferLog.debug("bridge fromServer \(data.count) B")
         feed(originSide, data)
     }
 
@@ -149,10 +151,14 @@ nonisolated final class TLSBridge {
             moved = false
             loop.run()   // fire NIOSSL's deferred handshake/promise work
             while let out = try? phoneSide.readOutbound(as: ByteBuffer.self) {
-                toClient(Array(buffer: out)); moved = true
+                let bytes = Array(buffer: out)
+                snifferLog.debug("bridge toClient \(bytes.count) B")
+                toClient(bytes); moved = true
             }
             while let out = try? originSide.readOutbound(as: ByteBuffer.self) {
-                toServer(Array(buffer: out)); moved = true
+                let bytes = Array(buffer: out)
+                snifferLog.debug("bridge toServer \(bytes.count) B")
+                toServer(bytes); moved = true
             }
         }
     }
