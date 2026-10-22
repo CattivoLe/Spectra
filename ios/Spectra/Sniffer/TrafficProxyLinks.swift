@@ -53,10 +53,16 @@ final class TCPLink {
             self.proxy.loop.execute {
                 switch state {
                 case .ready:
+                    snifferLog.debug("upstream ready \(self.flow.destination, privacy: .public):\(self.dstPort) pending=\(self.outbound.count)")
                     self.connected = true
                     self.flushRemote()
                     self.receiveLoop()
-                case .failed, .cancelled:
+                case .waiting(let error):
+                    snifferLog.error("upstream waiting \(self.flow.destination, privacy: .public):\(self.dstPort): \(String(describing: error), privacy: .public)")
+                case .failed(let error):
+                    snifferLog.error("upstream failed \(self.flow.destination, privacy: .public):\(self.dstPort): \(String(describing: error), privacy: .public)")
+                    self.fail()
+                case .cancelled:
                     self.fail()
                 default:
                     break
@@ -98,6 +104,7 @@ final class TCPLink {
             self.proxy.loop.execute {
                 if let content, !content.isEmpty {
                     let bytes = [UInt8](content)
+                    snifferLog.debug("upstream recv \(bytes.count) B from \(self.flow.destination, privacy: .public):\(self.dstPort) mitm=\(self.mitm != nil)")
                     if let bridge = self.mitm {
                         self.flow.received += Int64(bytes.count); self.flow.lastAt = TrafficProxyNow(); self.proxy.markDirty()
                         bridge.fromServer(bytes)

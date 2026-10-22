@@ -2,6 +2,7 @@ import Foundation
 import Network
 import NIOCore
 import NIOPosix
+import os
 
 /// User-space TCP/UDP NAT for the packet tunnel. IP packets captured from the
 /// phone are parsed, each connection is replayed over an `NWConnection` kept off
@@ -167,6 +168,8 @@ nonisolated final class TrafficProxy {
         let rows = shown.map { $0.snapshot() }
             .sorted { a, b in a.closed == b.closed ? a.lastAt > b.lastAt : (!a.closed && b.closed) }
             .prefix(Self.maxShown)
+        let tcp = rows.filter { $0.proto == "TCP" }.count
+        snifferLog.debug("publish \(rows.count) flows (tcp=\(tcp), udp=\(rows.count - tcp))")
         onFlows(Array(rows))
     }
 
