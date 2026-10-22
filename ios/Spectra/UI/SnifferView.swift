@@ -7,6 +7,18 @@ import SwiftUI
 struct SnifferView: View {
     @Environment(TrafficSniffer.self) private var sniffer
     @State private var exportItem: ShareItem?
+    @State private var kindFilter: TrafficKind?
+    @State private var search = ""
+
+    /// Flows after the protocol filter and the host/request search.
+    private var filtered: [TrafficFlow] {
+        sniffer.flows.filter { flow in
+            (kindFilter == nil || flow.kind == kindFilter)
+                && (search.isEmpty
+                    || flow.title.localizedCaseInsensitiveContains(search)
+                    || (flow.request ?? "").localizedCaseInsensitiveContains(search))
+        }
+    }
 
     var body: some View {
         @Bindable var sniffer = sniffer
@@ -21,6 +33,9 @@ struct SnifferView: View {
                 if sniffer.running || !sniffer.flows.isEmpty {
                     Button("Save session", action: sniffer.saveCurrent)
                         .disabled(sniffer.flows.isEmpty)
+                }
+                if !sniffer.flows.isEmpty {
+                    Button("Clear", role: .destructive, action: sniffer.clear)
                 }
                 if let error = sniffer.error {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -48,8 +63,13 @@ struct SnifferView: View {
             }
 
             if !sniffer.flows.isEmpty {
-                Section("\(sniffer.flows.count) connections") {
-                    ForEach(sniffer.flows) { flow in
+                Section(filtered.count == sniffer.flows.count
+                        ? "\(sniffer.flows.count) connections"
+                        : "\(filtered.count) of \(sniffer.flows.count) connections") {
+                    if filtered.isEmpty {
+                        Text("Nothing matches the filter.").foregroundStyle(.secondary).font(.footnote)
+                    }
+                    ForEach(filtered) { flow in
                         NavigationLink { FlowDetailView(flow: flow) } label: { FlowRow(flow: flow) }
                     }
                 }
@@ -70,7 +90,23 @@ struct SnifferView: View {
             }
         }
         .navigationTitle("Traffic")
-        .shareSheet(item: $exportItem)
+        .searchable(text: $search, prompt: "Host or request")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Picker("Protocol", selection: $kindFilter) {
+                        Text("All").tag(TrafficKind?.none)
+                        ForEach([TrafficKind.http, .tls, .dns, .tcp, .udp], id: \.self) { kind in
+                            Text(kind.rawValue.uppercased()).tag(TrafficKind?.some(kind))
+                        }
+                    }
+                } label: {
+                    Label("Filter", systemImage: kindFilter == nil
+                          ? "line.3.horizontal.decrease.circle"
+                          : "line.3.horizontal.decrease.circle.fill")
+                }
+            }
+        }
     }
 
     private func writeCertificate() -> ShareItem? {

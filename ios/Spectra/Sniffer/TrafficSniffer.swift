@@ -61,6 +61,15 @@ final class TrafficSniffer {
         pollTask = nil
     }
 
+    /// Empties the live list. While recording, the extension keeps publishing,
+    /// so the list refills from new traffic; most useful once stopped.
+    func clear() {
+        flows = []
+        if let url = containerURL()?.appendingPathComponent("live.json") {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     private func loadOrCreateManager() async throws -> NETunnelProviderManager {
         let existing = try await NETunnelProviderManager.loadAllFromPreferences()
         let manager = existing.first ?? NETunnelProviderManager()
