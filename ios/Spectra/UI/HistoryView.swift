@@ -23,7 +23,8 @@ struct HistoryView: View {
     @State private var showUnlocated = false
     @State private var camera: MapCameraPosition = .automatic
     @State private var shareItem: ShareItem?
-    @State private var showPcap = false
+    @State private var pickingPcap = false
+    @State private var pcapURL: URL?
     /// Shows the sessions imported from another phone instead of this iPhone's own.
     @State private var importedShelf = false
     @State private var importing = false
@@ -123,8 +124,15 @@ struct HistoryView: View {
             .navigationDestination(for: UUID.self) { id in
                 HistoryDetailView(id: id)
             }
-            .navigationDestination(isPresented: $showPcap) {
-                PcapView()
+            .navigationDestination(item: $pcapURL) { url in
+                PcapView(fileURL: url)
+            }
+            .fileImporter(
+                isPresented: $pickingPcap,
+                allowedContentTypes: PcapView.captureFileTypes,
+                allowsMultipleSelection: false
+            ) { result in
+                if case .success(let urls) = result, let url = urls.first { pcapURL = url }
             }
             .confirmationDialog("Clear history?", isPresented: $confirmClear, titleVisibility: .visible) {
                 Button("Clear history", role: .destructive) {
@@ -162,7 +170,7 @@ struct HistoryView: View {
         //     Button("Live map", systemImage: "location.circle") { showLive = true }
         // }
         ToolbarItem(placement: .topBarLeading) {
-            Button("Decode pcap", systemImage: "doc.text.magnifyingglass") { showPcap = true }
+            Button("Decode pcap", systemImage: "doc.text.magnifyingglass") { pickingPcap = true }
         }
         ToolbarItem(placement: .topBarLeading) {
             Button("Import", systemImage: "square.and.arrow.down") { importing = true }

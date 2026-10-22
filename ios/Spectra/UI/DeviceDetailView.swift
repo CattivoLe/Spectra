@@ -192,7 +192,7 @@ struct DeviceDetailView: View {
 
             // Timestamps
             Section("Observed") {
-                InfoRow("First seen") { Text(device.firstSeen, style: .time) }
+                InfoRow("First seen") { Text(device.firstSeen.formatted(date: .abbreviated, time: .shortened)) }
                 InfoRow("Last seen") { Text(device.lastSeen, style: .relative) }
             }
         }

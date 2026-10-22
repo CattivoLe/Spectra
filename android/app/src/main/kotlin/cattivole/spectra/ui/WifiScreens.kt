@@ -34,7 +34,6 @@ import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.GppMaybe
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
-import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.SearchOff
@@ -48,8 +47,6 @@ import androidx.compose.material.icons.rounded.WifiFind
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
@@ -165,7 +162,6 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
     var openOnly by rememberSaveable { mutableStateOf(false) }
     var knownOnly by rememberSaveable { mutableStateOf(false) }
     var band by rememberSaveable { mutableStateOf<Band?>(null) }
-    var menu by rememberSaveable { mutableStateOf(false) }
     var expandedThreats by remember { mutableStateOf(emptySet<String>()) }
     val knownSsids = model.link.knownSsids()
     val all = store.networks().values
@@ -183,17 +179,9 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
     SpectraScreen(
         title = "Wi‑Fi",
         actions = {
-            Box {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(
-                        text = { Text(tr("Clear list")) },
-                        leadingIcon = { Icon(Icons.Rounded.DeleteSweep, null) },
-                        onClick = {
-                            store.clear()
-                            menu = false
-                        },
-                    )
+            if (all.isNotEmpty()) {
+                IconButton(onClick = { store.clear() }) {
+                    Icon(Icons.Rounded.DeleteSweep, contentDescription = tr("Clear list"))
                 }
             }
         },

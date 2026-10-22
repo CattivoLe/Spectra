@@ -13,7 +13,7 @@ import Observation
 @MainActor @Observable
 final class TrafficSniffer {
     static let appGroup = "group.cattivole.Spectra"
-    static let tunnelBundleID = "cattivole.Spectra.Tunnel"
+    static let tunnelBundleID = "cattivole.Spectra.SpectraTunnel"
 
     private(set) var running = false
     private(set) var flows: [TrafficFlow] = []

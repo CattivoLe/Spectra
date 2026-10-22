@@ -61,6 +61,10 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
     var report: LinkReport? = null
         private set
 
+    /** Country codes whose single-country re-ping is in flight, for the UI spinner. */
+    var recheckingRegions: Set<String> = emptySet()
+        private set
+
     /** When on, checks follow the system route, VPN included. Off pins them to Wi-Fi or Ethernet. */
     var viaVpn: Boolean
         get() = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(VIA_VPN, false)
@@ -74,6 +78,7 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
     private val listeners = mutableListOf<() -> Unit>()
     private var job: Job? = null
     private var token = 0
+    private val recheckJobs = mutableMapOf<String, Job>()
 
     fun observe(listener: () -> Unit): () -> Unit {
         listeners.add(listener)
@@ -83,6 +88,7 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
     fun check() {
         val mine = ++token
         job?.cancel()
+        cancelRechecks()
         report = LinkReport()
         running = true
         phase = "Reading the network"
@@ -105,9 +111,37 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
     fun stop() {
         token++
         job?.cancel()
+        cancelRechecks()
         running = false
         phase = ""
         publish()
+    }
+
+    /** Re-probe one country row in place, for when the user taps it. */
+    fun recheckRegion(code: String) {
+        if (code in recheckingRegions) return
+        val host = REGION_HOSTS.firstOrNull { it.first == code }?.second ?: return
+        recheckJobs[code]?.cancel()
+        recheckingRegions = recheckingRegions + code
+        publish()
+        recheckJobs[code] = scope.launch {
+            val reach = withContext(Dispatchers.IO) {
+                val route = probeNetwork(viaVpn)
+                if (route == null) RegionReach(code, host, false, null) else probeRegion(route.network, code, host)
+            }
+            report?.let { current ->
+                current.regions = current.regions.map { if (it.code == code) reach else it }
+            }
+            recheckingRegions = recheckingRegions - code
+            recheckJobs.remove(code)
+            publish()
+        }
+    }
+
+    private fun cancelRechecks() {
+        recheckJobs.values.forEach { it.cancel() }
+        recheckJobs.clear()
+        recheckingRegions = emptySet()
     }
 
     private suspend fun runCheck(mine: Int) {
@@ -278,29 +312,30 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
         val gate = Semaphore(6)
         coroutineScope {
             REGION_HOSTS.map { (code, host) ->
-                async {
-                    gate.withPermit {
-                        val start = System.nanoTime()
-                        val ok = try {
-                            val address = network.getAllByName(host).firstOrNull { it is Inet4Address }
-                                ?: network.getAllByName(host).firstOrNull()
-                            if (address == null) {
-                                false
-                            } else {
-                                Socket().use { socket ->
-                                    network.bindSocket(socket)
-                                    socket.connect(InetSocketAddress(address, 443), 2200)
-                                }
-                                true
-                            }
-                        } catch (_: Exception) {
-                            false
-                        }
-                        RegionReach(code, host, ok, if (ok) elapsed(start) else null)
-                    }
-                }
+                async { gate.withPermit { probeRegion(network, code, host) } }
             }.awaitAll()
         }
+    }
+
+    /** A single country: resolve the host and open a TCP connection to port 443. Blocking; call on IO. */
+    private fun probeRegion(network: Network, code: String, host: String): RegionReach {
+        val start = System.nanoTime()
+        val ok = try {
+            val address = network.getAllByName(host).firstOrNull { it is Inet4Address }
+                ?: network.getAllByName(host).firstOrNull()
+            if (address == null) {
+                false
+            } else {
+                Socket().use { socket ->
+                    network.bindSocket(socket)
+                    socket.connect(InetSocketAddress(address, 443), 2200)
+                }
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+        return RegionReach(code, host, ok, if (ok) elapsed(start) else null)
     }
 
     private suspend fun measureSpeed(network: Network): SpeedSample = withContext(Dispatchers.IO) {

@@ -13,6 +13,8 @@ struct PcapView: View {
     }
 
     var capture: Capture?
+    /// A file picked before this view appeared (e.g. straight from History), decoded on appear.
+    var fileURL: URL?
 
     @State private var picking = false
     @State private var phase: Phase = .idle
@@ -46,14 +48,13 @@ struct PcapView: View {
         List {
             switch phase {
             case .idle:
-                idle
-            case .loading(let name):
-                Section {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("Decoding \(name)…").foregroundStyle(.secondary)
-                    }
+                if let fileURL, capture == nil {
+                    decodingRow(name: fileURL.lastPathComponent)
+                } else {
+                    idle
                 }
+            case .loading(let name):
+                decodingRow(name: name)
             case .loaded(let name, let analysis):
                 results(name: name, analysis: analysis)
             case .failed(let message):
@@ -81,7 +82,7 @@ struct PcapView: View {
         .shareSheet(item: $shareItem)
         .fileImporter(
             isPresented: $picking,
-            allowedContentTypes: captureFileTypes,
+            allowedContentTypes: Self.captureFileTypes,
             allowsMultipleSelection: false
         ) { load($0) }
         .task(id: capture?.id) {
@@ -91,6 +92,19 @@ struct PcapView: View {
             switch await Task.detached(priority: .userInitiated) { Self.analyze(data) }.value {
             case .ok(let analysis): phase = .loaded(name: capture.name, analysis: analysis)
             case .error(let message): phase = .failed(message: message)
+            }
+        }
+        .task(id: fileURL) {
+            guard capture == nil, let fileURL, case .idle = phase else { return }
+            beginLoading(fileURL)
+        }
+    }
+
+    private func decodingRow(name: String) -> some View {
+        Section {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("Decoding \(name)…").foregroundStyle(.secondary)
             }
         }
     }
@@ -205,7 +219,7 @@ struct PcapView: View {
 
     // MARK: Loading
 
-    private var captureFileTypes: [UTType] {
+    static var captureFileTypes: [UTType] {
         var types: [UTType] = [.data]
         for ext in ["pcap", "pcapng", "cap"] {
             if let type = UTType(filenameExtension: ext) { types.append(type) }
@@ -219,14 +233,18 @@ struct PcapView: View {
             phase = .failed(message: String(localized: "Could not open the file."))
         case .success(let urls):
             guard let url = urls.first else { return }
-            let name = url.lastPathComponent
-            phase = .loading(name: name)
-            Task {
-                let outcome = await Self.readAndAnalyze(url)
-                switch outcome {
-                case .ok(let analysis): phase = .loaded(name: name, analysis: analysis)
-                case .error(let message): phase = .failed(message: message)
-                }
+            beginLoading(url)
+        }
+    }
+
+    private func beginLoading(_ url: URL) {
+        let name = url.lastPathComponent
+        phase = .loading(name: name)
+        Task {
+            let outcome = await Self.readAndAnalyze(url)
+            switch outcome {
+            case .ok(let analysis): phase = .loaded(name: name, analysis: analysis)
+            case .error(let message): phase = .failed(message: message)
             }
         }
     }

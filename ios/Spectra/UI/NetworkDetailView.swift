@@ -190,7 +190,7 @@ struct NetworkDetailView: View {
             }
 
             Section("Observed") {
-                InfoRow("First seen") { Text(network.firstSeen, style: .time) }
+                InfoRow("First seen") { Text(network.firstSeen.formatted(date: .abbreviated, time: .shortened)) }
                 InfoRow("Last seen") { Text(network.lastSeen, style: .relative) }
                 InfoRow("Readings", value: "\(network.samples.count)")
                 if network.missedScans > 0 {

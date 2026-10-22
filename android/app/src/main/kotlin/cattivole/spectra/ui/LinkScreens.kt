@@ -5,12 +5,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -101,7 +103,9 @@ fun LinkScreen(model: SpectraModel, nav: Navigator) {
         if (link.running) {
             card(key = "progress", rows = listOf { ProgressRow(tr(link.phase.ifEmpty { "Checking…" }), link.fraction) })
         }
-        if (report != null && report.status != null) connectionCards(report)
+        if (report != null && report.status != null) {
+            connectionCards(report, link.recheckingRegions, link::recheckRegion)
+        }
     }
 }
 
@@ -128,7 +132,11 @@ fun SavedLinkScreen(model: SpectraModel, nav: Navigator, entryId: String, checke
     }
 }
 
-private fun LazyListScope.connectionCards(report: LinkReport) {
+private fun LazyListScope.connectionCards(
+    report: LinkReport,
+    rechecking: Set<String> = emptySet(),
+    onRecheck: ((String) -> Unit)? = null,
+) {
     internetCard(report)
     report.external?.let { externalCard(it) }
     if (report.speed != null || report.speedFailed) speedCard(report)
@@ -136,10 +144,20 @@ private fun LazyListScope.connectionCards(report: LinkReport) {
         cardSection(
             report.regions,
             header = tr("Countries"),
-            footer = tr("A connection to port 443. A miss can be this network filtering the site, or the site being down."),
+            footer = if (onRecheck != null) {
+                tr("A connection to port 443. Tap a country to ping it again. A miss can be this network filtering the site, or the site being down.")
+            } else {
+                tr("A connection to port 443. A miss can be this network filtering the site, or the site being down.")
+            },
             key = { it.code },
             sectionKey = "regions",
-        ) { region -> RegionRow(region) }
+        ) { region ->
+            RegionRow(
+                region,
+                pinging = region.code in rechecking,
+                onClick = onRecheck?.let { recheck -> { recheck(region.code) } },
+            )
+        }
     }
     if (report.abroad.isNotEmpty() || report.abroadNote != RemoteNote.NONE) abroadCard(report)
     report.localTrace?.let { localCard(it) }
@@ -278,16 +296,21 @@ private fun ProbeInfo(label: String, result: ProbeResult, down: String) {
 }
 
 @Composable
-private fun RegionRow(region: RegionReach) {
+private fun RegionRow(region: RegionReach, pinging: Boolean = false, onClick: (() -> Unit)? = null) {
     ListRow(
         title = countryName(region.code),
         subtitle = region.host,
+        onClick = onClick,
         trailing = {
-            Text(
-                if (region.ok && region.millis != null) tr("%d ms", region.millis) else tr("No route"),
-                style = MaterialTheme.typography.bodyMedium.merge(Tabular),
-                color = if (region.ok) Spectra.colors.success else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (pinging) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else {
+                Text(
+                    if (region.ok && region.millis != null) tr("%d ms", region.millis) else tr("No route"),
+                    style = MaterialTheme.typography.bodyMedium.merge(Tabular),
+                    color = if (region.ok) Spectra.colors.success else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         },
     )
 }

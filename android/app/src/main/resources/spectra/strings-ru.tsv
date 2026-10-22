@@ -525,6 +525,7 @@ A few seconds of traffic to Cloudflare. It is a snapshot, not a full test.	Не�
 Could not measure the speed.	Не удалось измерить скорость.
 Countries	Страны
 A connection to port 443. A miss can be this network filtering the site, or the site being down.	Соединение с портом 443. Промах может быть фильтром сети или недоступностью самого сайта.
+A connection to port 443. Tap a country to ping it again. A miss can be this network filtering the site, or the site being down.	Соединение с портом 443. Нажмите на страну, чтобы пропинговать её снова. Промах может быть фильтром сети или недоступностью самого сайта.
 No route	Нет маршрута
 From abroad	Из других стран
 A phone behind a router usually does not answer pings from the internet. A reply means the public address answered.	Телефон за роутером обычно не отвечает на пинги из интернета. Ответ значит, что публичный адрес ответил.
