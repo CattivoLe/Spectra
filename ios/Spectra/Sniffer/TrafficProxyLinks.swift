@@ -1,0 +1,413 @@
+import Foundation
+import Network
+
+/// One TCP connection: speaks the phone's side of TCP in user space (SYN/ACK,
+/// sequence/acknowledgement, windows) while replaying the payload over an
+/// `NWConnection` to the real destination. Optionally MITMs TLS. Ported from the
+/// Android `TrafficProxy.TcpLink`; all work runs on the proxy's serial queue, so
+/// no locking is needed (the `NWConnection` is started on that same queue).
+final class TCPLink {
+    private unowned let proxy: TrafficProxy
+    private let key: String
+    private let flow: TrafficProxy.LiveFlow
+    private let src: [UInt8], dst: [UInt8]
+    private let srcPort: Int, dstPort: Int
+    private let v6: Bool
+    private var connection: NWConnection?
+    private var connected = false
+
+    private let isn: UInt32 = UInt32.random(in: 0..<UInt32.max)
+    private lazy var ourSeq: UInt32 = isn
+    private var theirNext: UInt32 = 0
+    private var theirAcked: UInt32 = 0
+    private var clientWindow = 65535
+    private var synSent = false, synAcked = false
+    private var clientFin = false, finSent = false, remoteEof = false
+
+    private var outbound: [[UInt8]] = []   // pending bytes for the upstream (pre-connect)
+    private var inbound: [[UInt8]] = []     // bytes waiting to be sent to the phone
+    private var unackedBytes = 0
+    private var prelude: [UInt8] = []
+    private let http = HttpAssembler()
+    private var held: [UInt8]?
+    private var mitm: TLSBridge?
+    private enum Inspect { case unknown, tls, http, other }
+    private var inspect: Inspect = .unknown
+
+    init(proxy: TrafficProxy, key: String, flow: TrafficProxy.LiveFlow, src: [UInt8], dst: [UInt8],
+         srcPort: Int, dstPort: Int, v6: Bool) {
+        self.proxy = proxy; self.key = key; self.flow = flow; self.src = src; self.dst = dst
+        self.srcPort = srcPort; self.dstPort = dstPort; self.v6 = v6
+        theirAcked = isn
+    }
+
+    func start() {
+        let host = NWEndpoint.Host(IPCodec.text(dst))
+        guard let port = NWEndpoint.Port(rawValue: UInt16(dstPort)) else { return }
+        let conn = NWConnection(host: host, port: port, using: .tcp)
+        connection = conn
+        conn.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                self.connected = true
+                self.flushRemote()
+                self.receiveLoop()
+            case .failed, .cancelled:
+                self.fail()
+            default:
+                break
+            }
+        }
+        conn.start(queue: proxy.sharedQueue)
+    }
+
+    func onPacket(_ tcp: IPCodec.TCP) {
+        flow.lastAt = TrafficProxyNow()
+        proxy.markDirty()
+        if tcp.flags & IPCodec.RST != 0 { close(); return }
+        if tcp.flags & IPCodec.SYN != 0 && !synAcked { handshake(tcp); return }
+        if tcp.flags & IPCodec.ACK != 0 { acceptAck(tcp.ack) }
+        clientWindow = tcp.window
+        acceptData(tcp)
+        pumpToClient()
+        maybeFinish()
+    }
+
+    // MARK: Upstream (NWConnection)
+
+    private func flushRemote() {
+        guard connected, let conn = connection else { return }
+        let pending = outbound
+        outbound.removeAll(keepingCapacity: true)
+        for chunk in pending {
+            conn.send(content: Data(chunk), completion: .contentProcessed { [weak self] error in
+                if error != nil { self?.fail() }
+            })
+        }
+        if clientFin { conn.send(content: nil, isComplete: true, completion: .contentProcessed { _ in }) }
+    }
+
+    private func receiveLoop() {
+        connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, isComplete, error in
+            guard let self else { return }
+            if let content, !content.isEmpty {
+                let bytes = [UInt8](content)
+                if let bridge = self.mitm {
+                    self.flow.received += Int64(bytes.count); self.flow.lastAt = TrafficProxyNow(); self.proxy.markDirty()
+                    bridge.fromServer(bytes)
+                } else {
+                    self.noteServer(bytes)
+                    self.inbound.append(bytes)
+                    self.flow.received += Int64(bytes.count); self.flow.lastAt = TrafficProxyNow(); self.proxy.markDirty()
+                    self.pumpToClient()
+                }
+            }
+            if isComplete || error != nil {
+                self.remoteEof = true
+                if let bridge = self.mitm { bridge.serverClosed() } else { self.noteServerClosed() }
+                self.pumpToClient()
+                return
+            }
+            self.receiveLoop()
+        }
+    }
+
+    private func sendUpstream(_ bytes: [UInt8]) {
+        if connected, let conn = connection {
+            conn.send(content: Data(bytes), completion: .contentProcessed { [weak self] error in
+                if error != nil { self?.fail() }
+            })
+        } else {
+            outbound.append(bytes)
+        }
+    }
+
+    // MARK: TCP state machine (ported)
+
+    private func handshake(_ tcp: IPCodec.TCP) {
+        if !synSent {
+            theirNext = tcp.seq &+ 1
+            clientWindow = tcp.window
+            sendSynAck()
+        } else {
+            sendSynAck()
+        }
+    }
+
+    private func sendSynAck() {
+        emit(seq: isn, flags: IPCodec.SYN | IPCodec.ACK, payload: [], advance: !synSent, mss: mss())
+        synSent = true
+    }
+
+    private func acceptAck(_ ack: UInt32) {
+        if !seqBefore(theirAcked, ack) || seqBefore(ourSeq, ack) { return }
+        theirAcked = ack
+        if !seqBefore(ack, isn &+ 1) { synAcked = true }
+    }
+
+    private func acceptData(_ tcp: IPCodec.TCP) {
+        if flow.closed { return }
+        let payload = tcp.payload
+        if !payload.isEmpty {
+            let diff = Int(Int32(bitPattern: tcp.seq &- theirNext))
+            let slice: [UInt8]
+            if diff == 0 { slice = payload }
+            else if diff < 0 && -diff < payload.count { slice = Array(payload[(-diff)...]) }
+            else { slice = [] }
+            if !slice.isEmpty { take(slice) }
+        }
+        if tcp.flags & IPCodec.FIN != 0 && !clientFin {
+            let finAt = tcp.seq &+ UInt32(payload.count)
+            if Int(Int32(bitPattern: finAt &- theirNext)) == 0 {
+                clientFin = true
+                theirNext = theirNext &+ 1
+                if let bridge = mitm { bridge.clientClosed() }
+                else if connected { connection?.send(content: nil, isComplete: true, completion: .contentProcessed { _ in }) }
+            }
+        }
+        if !payload.isEmpty || tcp.flags & IPCodec.FIN != 0 { sendAck() }
+    }
+
+    private func take(_ data: [UInt8]) {
+        theirNext = theirNext &+ UInt32(data.count)
+        flow.sent += Int64(data.count)
+        if route(data) { return }
+        note(data)
+        sendUpstream(data)
+    }
+
+    /// True when `data` is kept off the raw socket (handled by the MITM path).
+    private func route(_ data: [UInt8]) -> Bool {
+        if let bridge = mitm { bridge.fromClient(data); return true }
+        let buffering = held != nil
+        let tls = !data.isEmpty && (Int(data[0]) & 0xFF) == 22
+        if !buffering && !(proxy.shouldDecrypt() && inspect == .unknown && tls) { return false }
+        var buf = held ?? []
+        buf += data
+        held = buf
+        if !TrafficHints.tlsRecordComplete(buf) {
+            if buf.count > 18_000 { passthroughHeld() }
+            return true
+        }
+        if !startMITM(buf) { passthroughHeld() }
+        return true
+    }
+
+    private func startMITM(_ hello: [UInt8]) -> Bool {
+        let sni = TrafficHints.tlsServerName(hello)
+        if let sni, !sni.isEmpty { flow.host = sni }
+        flow.tls = true
+        inspect = .tls
+        guard let ca = proxy.authority() else { return false }
+        let host = (sni?.isEmpty == false ? sni : nil) ?? IPCodec.text(dst)
+        do {
+            let bridge = try TLSBridge(
+                host: host,
+                serverContext: try ca.makeServerContext(for: host),
+                clientContext: try LocalCertificateAuthority.makeSystemClientContext(),
+                onClientPlain: { [weak self] in self?.http.client($0); self?.applyHTTP() },
+                onServerPlain: { [weak self] in self?.http.server($0); self?.applyHTTP() },
+                onServerClosed: { [weak self] in self?.http.serverClosed(); self?.applyHTTP() },
+                toClient: { [weak self] in self?.inbound.append($0); self?.pumpToClient() },
+                toServer: { [weak self] in self?.sendUpstream($0) }
+            )
+            mitm = bridge
+            held = nil
+            bridge.fromClient(hello)
+            return true
+        } catch {
+            mitm = nil
+            flow.refused = true
+            return false
+        }
+    }
+
+    private func passthroughHeld() {
+        guard let buf = held else { return }
+        held = nil
+        note(buf)
+        sendUpstream(buf)
+    }
+
+    private func pumpToClient() {
+        if flow.closed { return }
+        var room = clientWindow - unackedBytes
+        while room > 0 && !inbound.isEmpty {
+            var chunk = inbound.removeFirst()
+            let size = min(chunk.count, min(room, mss()))
+            let piece = Array(chunk[0..<size])
+            if size != chunk.count { inbound.insert(Array(chunk[size...]), at: 0) }
+            emit(seq: ourSeq, flags: IPCodec.ACK | IPCodec.PSH, payload: piece, advance: true)
+            unackedBytes += size
+            room -= size
+            _ = chunk
+        }
+        if inbound.isEmpty && remoteEof && !finSent {
+            emit(seq: ourSeq, flags: IPCodec.FIN | IPCodec.ACK, payload: [], advance: true)
+            finSent = true
+        }
+        maybeFinish()
+    }
+
+    private func maybeFinish() {
+        if finSent && clientFin && Int(Int32(bitPattern: theirAcked &- ourSeq)) == 0 { close() }
+    }
+
+    private func sendAck() { emit(seq: ourSeq, flags: IPCodec.ACK, payload: [], advance: false) }
+
+    // MARK: Inspection (names without MITM)
+
+    private func note(_ data: [UInt8]) {
+        switch inspect {
+        case .other: return
+        case .tls: captureSni(data)
+        case .http: http.client(data); applyHTTP()
+        case .unknown:
+            if prelude.count >= 32_768 { inspect = .other; return }
+            prelude += data
+            if !prelude.isEmpty && (Int(prelude[0]) & 0xFF) == 22 { inspect = .tls; captureSni(prelude); return }
+            let httpReady = TrafficHints.httpRequest(prelude) != nil
+            if TrafficHints.awaitsHttp(prelude) || httpReady {
+                if !httpReady { return }
+                inspect = .http; http.client(prelude); applyHTTP(); return
+            }
+            if prelude.count >= 8 { inspect = .other }
+        }
+    }
+
+    private func noteServer(_ data: [UInt8]) {
+        if inspect != .http { return }
+        http.server(data); applyHTTP()
+    }
+
+    private func noteServerClosed() {
+        if inspect != .http { return }
+        http.serverClosed(); applyHTTP()
+    }
+
+    private func applyHTTP() {
+        let list = http.exchanges()
+        if list.isEmpty { return }
+        flow.exchanges = list
+        flow.request = list[0].summary
+        if flow.host?.isEmpty != false {
+            if let host = list[0].requestHeaders.first(where: { $0.name.lowercased() == "host" })?
+                .value.split(separator: ":").first.map(String.init), !host.isEmpty {
+                flow.host = host
+            }
+        }
+        proxy.markDirty()
+    }
+
+    private func captureSni(_ data: [UInt8]) {
+        if flow.tls && flow.host != nil { return }
+        if prelude.count < 4096 && prelude != data {
+            let room = 4096 - prelude.count
+            if room > 0 { prelude += data.prefix(room) }
+        }
+        if let name = TrafficHints.tlsServerName(prelude) { flow.host = name; flow.tls = true }
+        else if TrafficHints.tlsRecordComplete(prelude) { flow.tls = true }
+    }
+
+    // MARK: Packet emit
+
+    private func emit(seq: UInt32, flags: Int, payload: [UInt8], advance: Bool, mss: Int? = nil) {
+        let packet = IPCodec.tcpPacket(src: dst, dst: src, srcPort: dstPort, dstPort: srcPort,
+                                       seq: seq, ack: theirNext, flags: flags,
+                                       window: windowField(), payload: payload, id: Int(proxy.nextIPID()), mss: mss)
+        proxy.write(packet, family: v6 ? AF_INET6 : AF_INET)
+        if advance {
+            ourSeq = ourSeq &+ UInt32(payload.count)
+            if flags & IPCodec.SYN != 0 { ourSeq = ourSeq &+ 1 }
+            if flags & IPCodec.FIN != 0 { ourSeq = ourSeq &+ 1 }
+        }
+    }
+
+    private func windowField() -> Int { 65535 }
+    private func mss() -> Int { v6 ? 1200 : 1360 }
+
+    func fail() {
+        if !flow.closed { emit(seq: ourSeq, flags: IPCodec.RST | IPCodec.ACK, payload: [], advance: false) }
+        close()
+    }
+
+    func close() {
+        if flow.closed { return }
+        flow.closed = true
+        flow.lastAt = TrafficProxyNow()
+        proxy.markDirty()
+        proxy.removeTCP(key)
+        connection?.cancel()
+        connection = nil
+        mitm = nil
+    }
+}
+
+/// One UDP association: forwards datagrams both ways; learns DNS names.
+final class UDPLink {
+    private unowned let proxy: TrafficProxy
+    private let key: String
+    private let flow: TrafficProxy.LiveFlow
+    private let src: [UInt8], dst: [UInt8]
+    private let srcPort: Int, dstPort: Int
+    private var connection: NWConnection?
+
+    init(proxy: TrafficProxy, key: String, flow: TrafficProxy.LiveFlow, src: [UInt8], dst: [UInt8],
+         srcPort: Int, dstPort: Int) {
+        self.proxy = proxy; self.key = key; self.flow = flow; self.src = src; self.dst = dst
+        self.srcPort = srcPort; self.dstPort = dstPort
+    }
+
+    func start() {
+        let host = NWEndpoint.Host(IPCodec.text(dst))
+        guard let port = NWEndpoint.Port(rawValue: UInt16(dstPort)) else { return }
+        let conn = NWConnection(host: host, port: port, using: .udp)
+        connection = conn
+        conn.stateUpdateHandler = { [weak self] state in
+            if case .ready = state { self?.receiveLoop() }
+            if case .failed = state { self?.close() }
+        }
+        conn.start(queue: proxy.sharedQueue)
+    }
+
+    func onPacket(_ payload: [UInt8]) {
+        flow.sent += Int64(payload.count)
+        flow.lastAt = TrafficProxyNow()
+        proxy.markDirty()
+        if dstPort == 53, let q = TrafficHints.dnsQuestion(payload), flow.host == nil { flow.host = q }
+        connection?.send(content: Data(payload), completion: .contentProcessed { [weak self] error in
+            if error != nil { self?.close() }
+        })
+    }
+
+    private func receiveLoop() {
+        connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, _, error in
+            guard let self else { return }
+            if let content, !content.isEmpty {
+                let payload = [UInt8](content)
+                self.flow.received += Int64(payload.count); self.flow.lastAt = TrafficProxyNow(); self.proxy.markDirty()
+                if self.dstPort == 53 {
+                    for (host, ip) in TrafficHints.dnsAnswers(payload) { self.proxy.remember(ip, host) }
+                }
+                let packet = IPCodec.udpPacket(src: self.dst, dst: self.src, srcPort: self.dstPort,
+                                               dstPort: self.srcPort, payload: payload, id: Int(self.proxy.nextIPID()))
+                self.proxy.write(packet, family: self.src.count == 16 ? AF_INET6 : AF_INET)
+            }
+            if error != nil { self.close(); return }
+            self.receiveLoop()
+        }
+    }
+
+    func close() {
+        if flow.closed { return }
+        flow.closed = true
+        flow.lastAt = TrafficProxyNow()
+        proxy.markDirty()
+        proxy.removeUDP(key)
+        connection?.cancel()
+        connection = nil
+    }
+}
+
+func TrafficProxyNow() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }

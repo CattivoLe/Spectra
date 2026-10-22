@@ -12,5 +12,16 @@
 	     Free capability: "Access Wi-Fi Information". -->
 	<key>com.apple.developer.networking.wifi-info</key>
 	<true/>
+	<!-- Packet-tunnel sniffer: lets the app host the SpectraTunnel extension.
+	     PAID capability — enable "Network Extensions" on the App ID. -->
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>packet-tunnel-provider</string>
+	</array>
+	<!-- Shares captured flows / the local CA between app and extension. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.cattivole.Spectra</string>
+	</array>
 </dict>
 </plist>

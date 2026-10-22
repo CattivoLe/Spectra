@@ -11,6 +11,7 @@ struct SpectraApp: App {
     @State private var location = LocationService()
     @State private var watchList = WatchList()
     @State private var joiner = WiFiJoiner()
+    @State private var sniffer = TrafficSniffer()
 
     init() {
         let store = NetworkStore()
@@ -32,6 +33,7 @@ struct SpectraApp: App {
                 .environment(location)
                 .environment(watchList)
                 .environment(joiner)
+                .environment(sniffer)
                 .onChange(of: watchList.ids, initial: true) { _, ids in
                     link.setWatched(ids)
                 }

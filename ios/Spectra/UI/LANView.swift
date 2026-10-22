@@ -24,6 +24,12 @@ struct LANView: View {
             List {
                 connectionSection
 
+                Section {
+                    NavigationLink { SnifferView() } label: {
+                        Label("Traffic", systemImage: "waveform.path.ecg")
+                    }
+                }
+
                 if case .scanning(let progress, let phase) = scanner.state {
                     Section {
                         VStack(alignment: .leading, spacing: 4) {

@@ -21,6 +21,14 @@ extension LocalCertificateAuthority {
         return try NIOSSLContext(configuration: config)
     }
 
+    /// A TLS **client** context using the system trust store — for the real
+    /// origin leg of a MITM.
+    static func makeSystemClientContext() throws -> NIOSSLContext {
+        var config = TLSConfiguration.makeClientConfiguration()
+        config.applicationProtocols = ["http/1.1"]
+        return try NIOSSLContext(configuration: config)
+    }
+
     /// A TLS **client** context that trusts exactly `caDER`. Production uses the
     /// system trust store (`.default`) toward the real origin; tests pin the
     /// origin's own CA here.

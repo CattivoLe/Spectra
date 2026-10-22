@@ -62,8 +62,8 @@ nonisolated final class TLSBridge {
         // Both channels must be active for the handshakes to run; the client side
         // starts its ClientHello toward the origin as soon as it is active.
         let fake = try SocketAddress(ipAddress: "10.111.222.2", port: 443)
-        _ = try phoneSide.connect(to: fake).wait()
-        _ = try originSide.connect(to: fake).wait()
+        phoneSide.connect(to: fake, promise: nil)
+        originSide.connect(to: fake, promise: nil)
         drain()
     }
 
@@ -82,14 +82,14 @@ nonisolated final class TLSBridge {
     /// The phone closed; tell the origin.
     func clientClosed() {
         guard !dead else { return }
-        _ = try? originSide.close(mode: .output).wait()
+        originSide.close(mode: .output, promise: nil)
         drain()
     }
 
     /// The origin closed; tell the phone.
     func serverClosed() {
         guard !dead else { return }
-        _ = try? phoneSide.close(mode: .output).wait()
+        phoneSide.close(mode: .output, promise: nil)
         drain()
     }
 
@@ -136,7 +136,6 @@ nonisolated final class TLSBridge {
     /// nothing more is produced. Mirrors the Android bridge's `spin()`.
     private func drain() {
         guard !dead else { return }
-        loop.run()
         var moved = true
         var guardCount = 0
         while moved && !dead && guardCount < 1024 {
@@ -148,7 +147,6 @@ nonisolated final class TLSBridge {
             while let out = try? originSide.readOutbound(as: ByteBuffer.self) {
                 toServer(Array(buffer: out)); moved = true
             }
-            loop.run()
         }
     }
 
