@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import NIOCore
 import os
 
 /// One TCP connection: speaks the phone's side of TCP in user space (SYN/ACK,
@@ -49,18 +50,20 @@ final class TCPLink {
         connection = conn
         conn.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
-            switch state {
-            case .ready:
-                self.connected = true
-                self.flushRemote()
-                self.receiveLoop()
-            case .failed, .cancelled:
-                self.fail()
-            default:
-                break
+            self.proxy.loop.execute {
+                switch state {
+                case .ready:
+                    self.connected = true
+                    self.flushRemote()
+                    self.receiveLoop()
+                case .failed, .cancelled:
+                    self.fail()
+                default:
+                    break
+                }
             }
         }
-        conn.start(queue: proxy.sharedQueue)
+        conn.start(queue: proxy.ioQueue)
     }
 
     func onPacket(_ tcp: IPCodec.TCP) {
@@ -92,25 +95,27 @@ final class TCPLink {
     private func receiveLoop() {
         connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, isComplete, error in
             guard let self else { return }
-            if let content, !content.isEmpty {
-                let bytes = [UInt8](content)
-                if let bridge = self.mitm {
-                    self.flow.received += Int64(bytes.count); self.flow.lastAt = TrafficProxyNow(); self.proxy.markDirty()
-                    bridge.fromServer(bytes)
-                } else {
-                    self.noteServer(bytes)
-                    self.inbound.append(bytes)
-                    self.flow.received += Int64(bytes.count); self.flow.lastAt = TrafficProxyNow(); self.proxy.markDirty()
-                    self.pumpToClient()
+            self.proxy.loop.execute {
+                if let content, !content.isEmpty {
+                    let bytes = [UInt8](content)
+                    if let bridge = self.mitm {
+                        self.flow.received += Int64(bytes.count); self.flow.lastAt = TrafficProxyNow(); self.proxy.markDirty()
+                        bridge.fromServer(bytes)
+                    } else {
+                        self.noteServer(bytes)
+                        self.inbound.append(bytes)
+                        self.flow.received += Int64(bytes.count); self.flow.lastAt = TrafficProxyNow(); self.proxy.markDirty()
+                        self.pumpToClient()
+                    }
                 }
+                if isComplete || error != nil {
+                    self.remoteEof = true
+                    if let bridge = self.mitm { bridge.serverClosed() } else { self.noteServerClosed() }
+                    self.pumpToClient()
+                    return
+                }
+                self.receiveLoop()
             }
-            if isComplete || error != nil {
-                self.remoteEof = true
-                if let bridge = self.mitm { bridge.serverClosed() } else { self.noteServerClosed() }
-                self.pumpToClient()
-                return
-            }
-            self.receiveLoop()
         }
     }
 
@@ -368,10 +373,13 @@ final class UDPLink {
         let conn = NWConnection(host: host, port: port, using: .udp)
         connection = conn
         conn.stateUpdateHandler = { [weak self] state in
-            if case .ready = state { self?.receiveLoop() }
-            if case .failed = state { self?.close() }
+            guard let self else { return }
+            self.proxy.loop.execute {
+                if case .ready = state { self.receiveLoop() }
+                if case .failed = state { self.close() }
+            }
         }
-        conn.start(queue: proxy.sharedQueue)
+        conn.start(queue: proxy.ioQueue)
     }
 
     func onPacket(_ payload: [UInt8]) {
@@ -387,18 +395,20 @@ final class UDPLink {
     private func receiveLoop() {
         connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, _, error in
             guard let self else { return }
-            if let content, !content.isEmpty {
-                let payload = [UInt8](content)
-                self.flow.received += Int64(payload.count); self.flow.lastAt = TrafficProxyNow(); self.proxy.markDirty()
-                if self.dstPort == 53 {
-                    for (host, ip) in TrafficHints.dnsAnswers(payload) { self.proxy.remember(ip, host) }
+            self.proxy.loop.execute {
+                if let content, !content.isEmpty {
+                    let payload = [UInt8](content)
+                    self.flow.received += Int64(payload.count); self.flow.lastAt = TrafficProxyNow(); self.proxy.markDirty()
+                    if self.dstPort == 53 {
+                        for (host, ip) in TrafficHints.dnsAnswers(payload) { self.proxy.remember(ip, host) }
+                    }
+                    let packet = IPCodec.udpPacket(src: self.dst, dst: self.src, srcPort: self.dstPort,
+                                                   dstPort: self.srcPort, payload: payload, id: Int(self.proxy.nextIPID()))
+                    self.proxy.write(packet, family: self.src.count == 16 ? AF_INET6 : AF_INET)
                 }
-                let packet = IPCodec.udpPacket(src: self.dst, dst: self.src, srcPort: self.dstPort,
-                                               dstPort: self.srcPort, payload: payload, id: Int(self.proxy.nextIPID()))
-                self.proxy.write(packet, family: self.src.count == 16 ? AF_INET6 : AF_INET)
+                if error != nil { self.close(); return }
+                self.receiveLoop()
             }
-            if error != nil { self.close(); return }
-            self.receiveLoop()
         }
     }
 

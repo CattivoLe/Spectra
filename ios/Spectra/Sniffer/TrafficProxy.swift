@@ -1,5 +1,7 @@
 import Foundation
 import Network
+import NIOCore
+import NIOPosix
 
 /// User-space TCP/UDP NAT for the packet tunnel. IP packets captured from the
 /// phone are parsed, each connection is replayed over an `NWConnection` kept off
@@ -7,11 +9,18 @@ import Network
 /// the TLS SNI, or cleartext HTTP; when `decryptTLS` is on, TLS to a named host
 /// is opened with the local CA and read as HTTP. Adapts the Android
 /// `platform/TrafficProxy.kt` (Java NIO selector) to Network.framework.
+///
+/// Everything runs on a single-thread `EventLoop` (`loop`), not a GCD queue:
+/// the TLS bridge uses `EmbeddedEventLoop`, which pins to one thread, and a GCD
+/// serial queue hops threads. `NWConnection` callbacks arrive on `ioQueue` and
+/// hop onto `loop` before touching any state.
 nonisolated final class TrafficProxy {
     /// Writes a reply IP packet back into the tunnel. `family` is AF_INET / AF_INET6.
     typealias TunnelWriter = (_ packet: Data, _ family: Int32) -> Void
 
-    private let queue = DispatchQueue(label: "cattivole.spectra.proxy")
+    private let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+    let loop: EventLoop
+    let ioQueue = DispatchQueue(label: "cattivole.spectra.proxy.io")
     private let writer: TunnelWriter
     private let onFlows: ([TrafficFlow]) -> Void
     private let decryptTLS: () -> Bool
@@ -32,6 +41,7 @@ nonisolated final class TrafficProxy {
         certificate: @escaping () -> LocalCertificateAuthority?,
         onFlows: @escaping ([TrafficFlow]) -> Void
     ) {
+        self.loop = group.next()
         self.writer = writer
         self.decryptTLS = decryptTLS
         self.certificate = certificate
@@ -40,15 +50,17 @@ nonisolated final class TrafficProxy {
 
     /// Feeds one captured IP packet (called off the tunnel read callback).
     func handle(_ packet: Data) {
-        queue.async { self.process([UInt8](packet)) }
+        loop.execute { self.process([UInt8](packet)) }
     }
 
     func stop() {
-        queue.async {
+        loop.execute {
             self.tcp.values.forEach { $0.close() }
             self.udp.values.forEach { $0.close() }
             self.publish(force: true)
         }
+        let group = self.group
+        DispatchQueue.global().async { try? group.syncShutdownGracefully() }
     }
 
     // MARK: Dispatch
@@ -146,7 +158,6 @@ nonisolated final class TrafficProxy {
     func removeUDP(_ key: String) { udp.removeValue(forKey: key) }
     func shouldDecrypt() -> Bool { decryptTLS() }
     func authority() -> LocalCertificateAuthority? { certificate() }
-    var sharedQueue: DispatchQueue { queue }
 
     private func publish(force: Bool) {
         let now = Date()
