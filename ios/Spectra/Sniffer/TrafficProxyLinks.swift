@@ -92,7 +92,8 @@ final class TCPLink {
         outbound.removeAll(keepingCapacity: true)
         for chunk in pending {
             conn.send(content: Data(chunk), completion: .contentProcessed { [weak self] error in
-                if error != nil { self?.fail() }
+                guard let self, error != nil else { return }
+                self.proxy.loop.execute { self.fail() }
             })
         }
         if clientFin { conn.send(content: nil, isComplete: true, completion: .contentProcessed { _ in }) }
@@ -129,7 +130,8 @@ final class TCPLink {
     private func sendUpstream(_ bytes: [UInt8]) {
         if connected, let conn = connection {
             conn.send(content: Data(bytes), completion: .contentProcessed { [weak self] error in
-                if error != nil { self?.fail() }
+                guard let self, error != nil else { return }
+                self.proxy.loop.execute { self.fail() }
             })
         } else {
             outbound.append(bytes)
@@ -395,7 +397,8 @@ final class UDPLink {
         proxy.markDirty()
         if dstPort == 53, let q = TrafficHints.dnsQuestion(payload), flow.host == nil { flow.host = q }
         connection?.send(content: Data(payload), completion: .contentProcessed { [weak self] error in
-            if error != nil { self?.close() }
+            guard let self, error != nil else { return }
+            self.proxy.loop.execute { self.close() }
         })
     }
 
