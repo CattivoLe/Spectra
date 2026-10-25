@@ -16,9 +16,11 @@ All UUIDs share one base; only the first group differs.
 | Firmware | `53500005-8F2D-4B6A-9C1E-737065637472` | write |
 
 The device advertises the service UUID and a name fixed in that firmware.
-The Cardputer build advertises `M5Cardputer`. Other boards use their own
-fixed name. Older firmware advertised `Spectra-XXXX` from the Bluetooth
-address; centrals still accept that name.
+The Cardputer build advertises `M5Cardputer`. The ESP32-C5 N4 build
+advertises `ESP32-C5` and reports bands `2.4` and `5`. The WROOM-32 build
+advertises `WROOM32` and reports `2.4`. Those two boards have no screen,
+keyboard or battery reading, so `bat` is omitted. Older firmware advertised
+`Spectra-XXXX` from the Bluetooth address; centrals still accept that name.
 
 ## Info (read)
 
@@ -31,7 +33,8 @@ UTF-8 JSON, for example:
 `interval` is the current automatic scan interval in seconds, 0 when off.
 The phone sets it, and the sensor keeps that value across disconnect and
 reboot. While the phone is away, the same interval drives the patrol.
-`name` is the firmware's fixed sensor name, such as `M5Cardputer`.
+`name` is the firmware's fixed sensor name, such as `M5Cardputer`,
+`ESP32-C5` or `WROOM32`.
 `known` is the SSIDs the sensor can rejoin, newest first: the phone's list
 plus any not yet uploaded. Passwords are not included. A long list is cut
 to what fits in this read. Both fields are omitted by firmware that predates

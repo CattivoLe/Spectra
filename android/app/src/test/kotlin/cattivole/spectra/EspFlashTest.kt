@@ -1,5 +1,6 @@
 package cattivole.spectra
 
+import cattivole.spectra.core.EspChip
 import cattivole.spectra.core.EspFlashException
 import cattivole.spectra.core.EspFlashFailure
 import cattivole.spectra.core.EspFlashProgress
@@ -81,9 +82,29 @@ class EspFlashTest {
             "firmware.bin" to app,
         )
         val loaded = FlashBundle.load(zip) as FlashBundle.Load.Ready
+        assertEquals(EspChip.S3, loaded.image.chip)
         assertEquals(2, loaded.image.segments.size)
         assertEquals(0L, loaded.image.segments[0].offset)
         assertEquals(0x10000L, loaded.image.segments[1].offset)
+        val c5 = zipOf(
+            "flash.json" to """{"chip":"esp32c5","flashSize":4194304,"files":[{"offset":8192,"name":"bootloader.bin"},{"offset":65536,"name":"firmware.bin"}]}""".toByteArray(),
+            "bootloader.bin" to boot,
+            "firmware.bin" to app,
+        )
+        val c5Image = (FlashBundle.load(c5) as FlashBundle.Load.Ready).image
+        assertEquals(EspChip.C5, c5Image.chip)
+        assertEquals(0x2000L, c5Image.segments[0].offset)
+        val classic = zipOf(
+            "flash.json" to """{"chip":"esp32","flashSize":4194304,"files":[{"offset":4096,"name":"bootloader.bin"},{"offset":65536,"name":"firmware.bin"}]}""".toByteArray(),
+            "bootloader.bin" to boot,
+            "firmware.bin" to app,
+        )
+        assertEquals(EspChip.ESP32, (FlashBundle.load(classic) as FlashBundle.Load.Ready).image.chip)
+        val classicAtZero = zipOf(
+            "flash.json" to """{"chip":"esp32","files":[{"offset":0,"name":"bootloader.bin"}]}""".toByteArray(),
+            "bootloader.bin" to boot,
+        )
+        assertEquals(EspFlashFailure.NO_BUNDLE_BOOTLOADER, (FlashBundle.load(classicAtZero) as FlashBundle.Load.Rejected).failure)
         assertEquals(EspFlashFailure.APP_IMAGE, (FlashBundle.load(app) as FlashBundle.Load.Rejected).failure)
         val overlap = zipOf(
             "flash.json" to """{"chip":"esp32s3","files":[{"offset":0,"name":"a.bin"},{"offset":4,"name":"b.bin"}]}""".toByteArray(),
@@ -105,6 +126,7 @@ class EspFlashTest {
         val boot = ByteArray(100) { if (it == 0) 0xE9.toByte() else it.toByte() }
         val app = ByteArray(50) { if (it == 0) 0xE9.toByte() else (0x40 + it).toByte() }
         val image = FlashBundle.Image(
+            EspChip.S3,
             FlashBundle.FLASH_8MB,
             listOf(FlashBundle.Segment(0, boot), FlashBundle.Segment(0x10000, app)),
         )
@@ -127,11 +149,41 @@ class EspFlashTest {
         val session = EspFlashSession(rom, sleep = {}, syncAttempts = 1, syncWindowMs = 20)
         val boot = byteArrayOf(0xE9.toByte(), 0, 0, 0)
         val error = runCatching {
-            session.flash(FlashBundle.Image(FlashBundle.FLASH_8MB, listOf(FlashBundle.Segment(0, boot))), EspReset.Kind.USB_JTAG) {}
+            session.flash(FlashBundle.Image(EspChip.S3, FlashBundle.FLASH_8MB, listOf(FlashBundle.Segment(0, boot))), EspReset.Kind.USB_JTAG) {}
         }.exceptionOrNull()
         assertTrue(error is EspFlashException)
         assertEquals(EspFlashFailure.NOT_S3, (error as EspFlashException).failure)
         assertTrue(rom.begins.isEmpty())
+    }
+
+    @Test
+    fun esp32RomOmitsTheEncryptionWordAndIsRecognisedByMagic() {
+        val packet = EspRom.flashBegin(eraseSize = 4, blocks = 1, blockSize = EspRom.BLOCK, offset = 0x1000, extended = false)
+        assertEquals(16, packet[2].toInt() and 0xFF)
+        val rom = FakeRom()
+        rom.securityOk = false
+        rom.magic = EspChip.ESP32_MAGIC
+        val session = EspFlashSession(rom, sleep = {}, syncAttempts = 1, syncWindowMs = 50)
+        val boot = byteArrayOf(0xE9.toByte(), 1, 2, 3)
+        val image = FlashBundle.Image(EspChip.ESP32, 4L * 1024 * 1024, listOf(FlashBundle.Segment(0x1000, boot)))
+        session.flash(image, EspReset.Kind.UART) {}
+        assertEquals(listOf(0L), rom.begins.map { it.encrypted })
+        assertEquals(16, rom.beginSizes.single())
+        assertEquals(boot.toList(), rom.bytes(0x1000, boot.size))
+    }
+
+    @Test
+    fun c5IsAcceptedFromSecurityInfo() {
+        val rom = FakeRom()
+        rom.chipId = EspRom.ESP32_C5
+        val session = EspFlashSession(rom, sleep = {}, syncAttempts = 1, syncWindowMs = 50)
+        val boot = byteArrayOf(0xE9.toByte(), 1, 2, 3)
+        session.flash(
+            FlashBundle.Image(EspChip.C5, 4L * 1024 * 1024, listOf(FlashBundle.Segment(0x2000, boot))),
+            EspReset.Kind.USB_JTAG,
+        ) {}
+        assertEquals(20, rom.beginSizes.single())
+        assertEquals(boot.toList(), rom.bytes(0x2000, boot.size))
     }
 
     @Test
@@ -140,7 +192,7 @@ class EspFlashTest {
         val session = EspFlashSession(rom, sleep = {}, syncAttempts = 1, syncWindowMs = 50)
         val boot = ByteArray(3000) { if (it == 0) 0xE9.toByte() else 0x11 }
         val error = runCatching {
-            session.flash(FlashBundle.Image(FlashBundle.FLASH_8MB, listOf(FlashBundle.Segment(0, boot))), EspReset.Kind.USB_JTAG) {
+            session.flash(FlashBundle.Image(EspChip.S3, FlashBundle.FLASH_8MB, listOf(FlashBundle.Segment(0, boot))), EspReset.Kind.USB_JTAG) {
                 if (it is EspFlashProgress.Stage.Writing) session.cancelled = true
             }
         }.exceptionOrNull()
@@ -164,7 +216,10 @@ class EspFlashTest {
 /** A ROM that answers the commands a real ESP32-S3 answers, and keeps what was written. */
 private class FakeRom : EspPipe {
     var chipId: Int = EspRom.ESP32_S3
+    var securityOk = true
+    var magic = 0L
     val begins = ArrayList<Begin>()
+    val beginSizes = ArrayList<Int>()
     var md5Checks = 0
     var sawSecurity = false
     var sawSpiAttach = false
@@ -195,19 +250,26 @@ private class FakeRom : EspPipe {
             EspRom.SYNC -> repeat(2) { reply(command) }
             EspRom.SECURITY -> {
                 sawSecurity = true
-                val payload = ByteArray(20)
-                payload[12] = chipId.toByte()
-                reply(command, payload = payload)
+                if (!securityOk) {
+                    reply(command, status = 1, error = 0x05)
+                } else {
+                    val payload = ByteArray(20)
+                    payload[12] = chipId.toByte()
+                    reply(command, payload = payload)
+                }
             }
             EspRom.SPI_ATTACH -> {
                 sawSpiAttach = true
                 reply(command)
             }
-            EspRom.SPI_PARAMS, EspRom.READ_REG, EspRom.WRITE_REG -> reply(command)
+            EspRom.READ_REG -> reply(command, value = if (u32(data, 0) == EspChip.ESP32_MAGIC_REG) magic else 0L)
+            EspRom.SPI_PARAMS, EspRom.WRITE_REG -> reply(command)
             EspRom.FLASH_BEGIN -> {
                 sequence = 0
                 cursor = u32(data, 12)
-                begins.add(Begin(u32(data, 0), u32(data, 4).toInt(), u32(data, 8).toInt(), cursor, u32(data, 16)))
+                beginSizes.add(data.size)
+                val encrypted = if (data.size >= 20) u32(data, 16) else 0L
+                begins.add(Begin(u32(data, 0), u32(data, 4).toInt(), u32(data, 8).toInt(), cursor, encrypted))
                 reply(command)
             }
             EspRom.FLASH_DATA -> {

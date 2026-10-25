@@ -12,6 +12,7 @@ import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
 import android.os.Build
+import cattivole.spectra.core.EspChip
 import cattivole.spectra.core.EspFlashException
 import cattivole.spectra.core.EspFlashFailure
 import cattivole.spectra.core.EspFlashProgress
@@ -30,9 +31,10 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 
 /**
- * Finds an ESP32-S3 in ROM download mode on the phone's USB port and writes a
- * flash bundle to it. A blank chip enumerates on its own. One that is already
- * running firmware has to be held in download mode with the G0 button.
+ * Finds an Espressif chip or a CH340 UART in ROM download mode on the phone's
+ * USB port and writes the flash bundle that matches the chip. A blank chip
+ * enumerates on its own. One that is already running firmware has to be held
+ * in download mode with the BOOT button.
  */
 class UsbEspFlasher(context: Context) {
     data class Board(val id: Int, val title: String, val port: String, val kind: EspReset.Kind)
@@ -45,13 +47,13 @@ class UsbEspFlasher(context: Context) {
     private val listeners = mutableListOf<() -> Unit>()
     private var job: Job? = null
     private var session: EspFlashSession? = null
-    private var pending: Pair<Int, FlashBundle.Image>? = null
+    private var pending: Int? = null
 
     var boards: List<Board> = emptyList()
         private set
     var progress: EspFlashProgress? = null
         private set
-    var bundled: FlashBundle.Image? = null
+    var bundles: Map<EspChip, FlashBundle.Image> = emptyMap()
         private set
     var bundledKnown = false
         private set
@@ -60,7 +62,7 @@ class UsbEspFlasher(context: Context) {
     var chosenName: String? = null
         private set
 
-    val image: FlashBundle.Image? get() = chosen ?: bundled
+    val hasImage: Boolean get() = chosen != null || bundles.isNotEmpty()
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -71,8 +73,8 @@ class UsbEspFlasher(context: Context) {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     val waiting = pending
                     pending = null
-                    if (device != null && granted && waiting != null && waiting.first == device.deviceId) {
-                        start(device, waiting.second)
+                    if (device != null && granted && waiting != null && waiting == device.deviceId) {
+                        start(device)
                     } else if (waiting != null) {
                         publish { progress = EspFlashProgress(EspFlashProgress.Stage.Failed(EspFlashFailure.PERMISSION)) }
                     }
@@ -93,11 +95,21 @@ class UsbEspFlasher(context: Context) {
             app.registerReceiver(receiver, filter)
         }
         scope.launch(Dispatchers.IO) {
-            val loaded = runCatching {
-                app.assets.open("spectra-flash.zip").use { FlashBundle.load(it.readBytes()) }
-            }.getOrNull()
+            val found = linkedMapOf<EspChip, FlashBundle.Image>()
+            for (name in BUNDLED) {
+                val loaded = runCatching {
+                    app.assets.open(name).use { FlashBundle.load(it.readBytes()) }
+                }.getOrNull()
+                if (loaded is FlashBundle.Load.Ready) found[loaded.image.chip] = loaded.image
+            }
+            if (EspChip.S3 !in found) {
+                val legacy = runCatching {
+                    app.assets.open("spectra-flash.zip").use { FlashBundle.load(it.readBytes()) }
+                }.getOrNull()
+                if (legacy is FlashBundle.Load.Ready) found.putIfAbsent(legacy.image.chip, legacy.image)
+            }
             publish {
-                bundled = (loaded as? FlashBundle.Load.Ready)?.image
+                bundles = found
                 bundledKnown = true
             }
         }
@@ -141,8 +153,7 @@ class UsbEspFlasher(context: Context) {
 
     fun flash(boardId: Int) {
         if (progress?.isRunning == true) return
-        val image = image
-        if (image == null) {
+        if (!hasImage) {
             publish { progress = EspFlashProgress(EspFlashProgress.Stage.Failed(EspFlashFailure.NO_IMAGE)) }
             return
         }
@@ -152,7 +163,7 @@ class UsbEspFlasher(context: Context) {
         }
         val manager = usb ?: return
         if (!manager.hasPermission(device)) {
-            pending = boardId to image
+            pending = boardId
             val flags = if (Build.VERSION.SDK_INT >= 31) {
                 PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             } else {
@@ -167,7 +178,7 @@ class UsbEspFlasher(context: Context) {
             manager.requestPermission(device, intent)
             return
         }
-        start(device, image)
+        start(device)
     }
 
     fun cancel() {
@@ -185,9 +196,11 @@ class UsbEspFlasher(context: Context) {
         runCatching { app.unregisterReceiver(receiver) }
     }
 
-    private fun start(device: UsbDevice, image: FlashBundle.Image) {
+    private fun start(device: UsbDevice) {
         job?.cancel()
         val kind = if (device.vendorId == ESPRESSIF) EspReset.Kind.USB_JTAG else EspReset.Kind.UART
+        val picked = chosen
+        val included = bundles
         publish { progress = EspFlashProgress(EspFlashProgress.Stage.Preparing) }
         job = scope.launch {
             val pipe = withContext(Dispatchers.IO) { open(device) }
@@ -199,7 +212,14 @@ class UsbEspFlasher(context: Context) {
             session = flashing
             try {
                 withContext(Dispatchers.IO) {
-                    flashing.flash(image, kind) { stage ->
+                    flashing.flash(kind, { chip ->
+                        if (picked != null) {
+                            if (picked.chip != chip) throw EspFlashException(EspFlashFailure.WRONG_BUNDLE)
+                            picked
+                        } else {
+                            included[chip] ?: throw EspFlashException(EspFlashFailure.NO_CHIP_IMAGE)
+                        }
+                    }) { stage ->
                         publish { progress = EspFlashProgress(stage) }
                     }
                 }
@@ -245,16 +265,28 @@ class UsbEspFlasher(context: Context) {
             return null
         }
         val control = comm ?: data
-        val coding = byteArrayOf(0x00, 0xC2.toByte(), 0x01, 0x00, 0, 0, 8)
-        connection.controlTransfer(0x21, 0x20, 0, control.id, coding, coding.size, 300)
-        return CdcPipe(connection, data, comm, input, output, control)
+        val ch340 = device.vendorId == CH340
+        if (ch340) {
+            if (!initCh340(connection)) {
+                connection.close()
+                return null
+            }
+        } else {
+            val coding = byteArrayOf(0x00, 0xC2.toByte(), 0x01, 0x00, 0, 0, 8)
+            connection.controlTransfer(0x21, 0x20, 0, control.id, coding, coding.size, 300)
+        }
+        return CdcPipe(connection, data, comm, input, output, control, ch340)
     }
 
     private fun board(device: UsbDevice): Board? {
         if (device.vendorId !in VENDORS) return null
         if (interfaces(device).none { bulkIn(it) != null && bulkOut(it) != null }) return null
         val title = runCatching { device.productName }.getOrNull()?.takeIf { it.isNotBlank() }
-            ?: if (device.vendorId == ESPRESSIF) "ESP32-S3" else "USB serial"
+            ?: when (device.vendorId) {
+                ESPRESSIF -> "Espressif USB"
+                CH340 -> "CH340 serial"
+                else -> "USB serial"
+            }
         val port = "%04X:%04X".format(device.vendorId, device.productId)
         val kind = if (device.vendorId == ESPRESSIF) EspReset.Kind.USB_JTAG else EspReset.Kind.UART
         return Board(device.deviceId, title, port, kind)
@@ -274,6 +306,7 @@ class UsbEspFlasher(context: Context) {
         private val input: UsbEndpoint,
         private val output: UsbEndpoint,
         private val control: UsbInterface,
+        private val ch340: Boolean,
     ) : EspPipe {
         private val buffer = ByteArray(16 * 1024)
 
@@ -293,6 +326,12 @@ class UsbEspFlasher(context: Context) {
         }
 
         override fun setLines(dtr: Boolean, rts: Boolean) {
+            if (ch340) {
+                // CH340 modem bits are active-low in the vendor request.
+                val lines = (if (dtr) 0x20 else 0) or (if (rts) 0x40 else 0)
+                connection.controlTransfer(0x40, 0xA4, lines.inv() and 0xFFFF, 0, null, 0, 200)
+                return
+            }
             val value = (if (dtr) 1 else 0) or (if (rts) 2 else 0)
             connection.controlTransfer(0x21, 0x22, value, control.id, null, 0, 200)
         }
@@ -307,7 +346,42 @@ class UsbEspFlasher(context: Context) {
     private companion object {
         const val ACTION_USB_PERMISSION = "cattivole.spectra.USB_PERMISSION"
         const val ESPRESSIF = 0x303A
-        val VENDORS = setOf(ESPRESSIF, 0x1A86, 0x10C4, 0x0403)
+        const val CH340 = 0x1A86
+        val VENDORS = setOf(ESPRESSIF, CH340, 0x10C4, 0x0403)
+        val BUNDLED = listOf(
+            "spectra-flash-esp32s3.zip",
+            "spectra-flash-esp32c5.zip",
+            "spectra-flash-esp32.zip",
+        )
+
+        /** CH340 ignores CDC line coding and comes up at 9600. The ROM listens at 115200. */
+        fun initCh340(connection: UsbDeviceConnection): Boolean {
+            fun out(request: Int, value: Int, index: Int) =
+                connection.controlTransfer(0x40, request, value, index, null, 0, 1_000) >= 0
+            if (!out(0xA1, 0, 0)) return false
+            if (!setCh340Baud(connection, 115200)) return false
+            if (!out(0x9A, 0x2518, 0xC3)) return false
+            if (!out(0xA1, 0x501F, 0xD90A)) return false
+            if (!setCh340Baud(connection, 115200)) return false
+            return connection.controlTransfer(0x40, 0xA4, 0xFFFF, 0, null, 0, 1_000) >= 0
+        }
+
+        fun setCh340Baud(connection: UsbDeviceConnection, baud: Int): Boolean {
+            var factor = 1_532_620_800L / baud
+            var divisor = 3
+            while (factor > 0xfff0 && divisor > 0) {
+                factor = factor shr 3
+                divisor -= 1
+            }
+            if (factor > 0xfff0) return false
+            factor = 0x10000 - factor
+            divisor = divisor or 0x0080
+            val val1 = ((factor and 0xff00) or divisor.toLong()).toInt()
+            val val2 = (factor and 0xff).toInt()
+            fun out(value: Int, index: Int) =
+                connection.controlTransfer(0x40, 0x9A, value, index, null, 0, 1_000) >= 0
+            return out(0x1312, val1) && out(0x0F2C, val2)
+        }
 
         fun interfaces(device: UsbDevice) = (0 until device.interfaceCount).map { device.getInterface(it) }
 

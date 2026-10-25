@@ -1,18 +1,23 @@
-// Spectra sensor firmware for the M5Stack Cardputer.
+// Spectra sensor firmware.
 //
+// The Cardputer build draws on its screen and reads its keyboard. The
+// ESP32-C5 and WROOM-32 builds have neither: the phone is the only control.
 // Scans for Wi-Fi access points and nearby stations (clients), then sends the
-// results to the Spectra iOS app over BLE. The wire format is described in
+// results to the Spectra app over BLE. The wire format is described in
 // docs/protocol.md.
 
+#include "Board.h"
 #include "Bytes.h"
 #include "Crc32.h"
 #include "LoraCap.h"
 #include "Protocol.h"
 
+#if SPECTRA_HAS_UI
 #include <M5Cardputer.h>
+#include <HWCDC.h>
+#endif
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
-#include <HWCDC.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
 #include <Update.h>
@@ -41,14 +46,20 @@ static constexpr const char* kFirmwareVersion = kFirmwareTag + 11;
 static constexpr uint32_t kMsPerChannel = 120;
 
 // Fixed identity for this firmware. Other boards ship with their own name.
-static constexpr char kSensorName[] = "M5Cardputer";
+static constexpr char kSensorName[] = SPECTRA_SENSOR_NAME;
 
 // Same bar the phone uses: bytes on one AP during the sniff window.
 static constexpr uint32_t kStreamingBytes = 120000;
 
 // How long promiscuous mode listens on each channel for clients.
 static constexpr uint32_t kSniffMsPerChannel = 250;
-static constexpr uint8_t kSniffChannels[] = {1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
+static constexpr uint8_t kSniffChannels[] = {
+    1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13,
+#if SPECTRA_WIFI_5G
+    // Non-DFS 5 GHz channels. A channel the country rejects is skipped.
+    36, 40, 44, 48, 149, 153, 157, 161,
+#endif
+};
 
 // Task watchdog. loop() and the long scans it runs are fed below. The timeout
 // sits well above the longest legitimate blocking stretch — a full LoRa sweep
@@ -715,21 +726,30 @@ static void IRAM_ATTR promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t
 // ---------------------------------------------------------------------------
 
 static int readBatteryPercent() {
+#if SPECTRA_HAS_BATTERY
   const int level = M5Cardputer.Power.getBatteryLevel();
   if (level < 0) {
     return -1;
   }
   return std::min(level, 100);
+#else
+  return -1;
+#endif
 }
 
 // The Cardputer charger status pins are not wired to the ESP32, so
 // isCharging() stays "unknown" and must not be used as a boolean. A USB host
 // still announces itself with SOF packets; a bare power bank does not.
+// Boards with no battery omit bat and chg from the info JSON.
 static bool readBatteryCharging() {
+#if SPECTRA_HAS_BATTERY
   if (M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging) {
     return true;
   }
   return HWCDC::isPlugged();
+#else
+  return false;
+#endif
 }
 
 static void appendRaw(char *out, size_t cap, const char *text) {
@@ -817,7 +837,8 @@ static void updateInfo() {
     appendRaw(knownJson, sizeof(knownJson), "]");
   }
   snprintf(json, sizeof(json),
-           "{\"proto\":%u,\"fw\":\"%s\",\"name\":\"%s\",\"chip\":\"ESP32-S3\",\"bands\":[\"2.4\"],\"interval\":%u,"
+           "{\"proto\":%u,\"fw\":\"%s\",\"name\":\"%s\",\"chip\":\"" SPECTRA_CHIP_NAME
+           "\",\"bands\":[" SPECTRA_BANDS_JSON "],\"interval\":%u,"
            "\"alerts\":%u,\"watch\":%u%s%s%s%s}",
            kProtocolVersion, kFirmwareVersion, kSensorName, scanIntervalSec, alertFlags, watchCount,
            otaUpdatable ? ",\"ota\":true" : "", batJson, capJson, knownJson);
@@ -1495,12 +1516,16 @@ class FirmwareCallbacks : public NimBLECharacteristicCallbacks {
 static void drawStatus(const char *line);
 
 static uint32_t unixNow() {
+#if SPECTRA_HAS_UI
   const auto dt = M5.Rtc.getDateTime();
   if (dt.date.year < 2024) {
     return 0;
   }
   tm clock = dt.get_tm();
   const time_t seconds = mktime(&clock);
+#else
+  const time_t seconds = time(nullptr);
+#endif
   if (seconds < 1700000000) {
     return 0;
   }
@@ -1540,11 +1565,18 @@ static uint32_t blinkNextAt = 0;
 static bool ledLit = false;
 
 static void ledSet(uint8_t r, uint8_t g, uint8_t b) {
+#if SPECTRA_HAS_UI
   if (!M5.Led.isEnabled()) {
     return;
   }
   M5.Led.setAllColor(r, g, b);
   ledLit = (r | g | b) != 0;
+#else
+  (void)r;
+  (void)g;
+  (void)b;
+  ledLit = false;
+#endif
 }
 
 static void ledOff() {
@@ -1593,6 +1625,7 @@ static void serviceLed() {
 }
 
 static bool playTone(float hz, uint32_t ms) {
+#if SPECTRA_HAS_UI
   M5Cardputer.Speaker.setVolume(200);
   if (!M5Cardputer.Speaker.tone(hz, ms)) {
     return false;
@@ -1600,6 +1633,11 @@ static bool playTone(float hz, uint32_t ms) {
   delay(ms + 50);
   esp_task_wdt_reset();
   return true;
+#else
+  (void)hz;
+  (void)ms;
+  return false;
+#endif
 }
 
 static void announce(const Findings &f) {
@@ -2427,8 +2465,10 @@ static void drainAcks() {
 }
 
 // ---------------------------------------------------------------------------
-// Display
+// Display. Headless boards keep the three calls the scanner makes.
 // ---------------------------------------------------------------------------
+
+#if SPECTRA_HAS_UI
 
 static int capIconWidth() {
   int width = 0;
@@ -2725,6 +2765,14 @@ static void drawUi() {
   }
 }
 
+#else
+
+static void drawStatus(const char *) {}
+static void drawLoraList() {}
+static void drawUi() {}
+
+#endif
+
 // ---------------------------------------------------------------------------
 // Scan
 // ---------------------------------------------------------------------------
@@ -2835,7 +2883,9 @@ static void sniffStations() {
   esp_wifi_set_promiscuous(true);
 
   for (uint8_t ch : kSniffChannels) {
-    esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+    if (esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE) != ESP_OK) {
+      continue;
+    }
     delay(kSniffMsPerChannel);
     esp_task_wdt_reset();
   }
@@ -3190,6 +3240,19 @@ static void setupBle() {
   updateInfo();
 }
 
+// The ESP32-C5 has one core, so a pin to core 1 would fail to start the task.
+static BaseType_t startTask(TaskFunction_t fn, const char *name, uint32_t stack, UBaseType_t priority,
+                            TaskHandle_t *handle, BaseType_t core) {
+#if defined(CONFIG_FREERTOS_NUMBER_OF_CORES) && CONFIG_FREERTOS_NUMBER_OF_CORES > 1
+  return xTaskCreatePinnedToCore(fn, name, stack, nullptr, priority, handle, core);
+#else
+  (void)core;
+  return xTaskCreate(fn, name, stack, nullptr, priority, handle);
+#endif
+}
+
+#if SPECTRA_HAS_UI
+
 static void moveMode(int direction) {
   menuIndex = (menuIndex + (direction < 0 ? kTabCount - 1 : 1)) % kTabCount;
   listOffset = 0;
@@ -3521,7 +3584,7 @@ static void startNetJob(uint8_t job) {
     return;
   }
   if (netTask == nullptr) {
-    xTaskCreatePinnedToCore(netTaskMain, "net", 16384, nullptr, 1, &netTask, 0);
+    startTask(netTaskMain, "net", 16384, 1, &netTask, 0);
   }
   volatile NetState &state = job == kNetJobInternet ? inetState : ipState;
   if (netTask == nullptr) {
@@ -3913,6 +3976,8 @@ static void handleSideButton() {
   }
 }
 
+#endif
+
 // Subscribes the loop task to the task watchdog. The Arduino core may already
 // have started the watchdog for the idle tasks, so reconfigure if so.
 static void setupWatchdog() {
@@ -3928,6 +3993,7 @@ static void setupWatchdog() {
 }
 
 void setup() {
+#if SPECTRA_HAS_UI
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);
   M5Cardputer.Display.setRotation(1);
@@ -3935,14 +4001,23 @@ void setup() {
   M5Cardputer.Display.fillScreen(TFT_BLACK);
   // M5Unified starts the RGB LED at 63 of 255; alerts should be seen across a room.
   M5.Led.setBrightness(255);
+#else
+  Serial.begin(115200);
+  Serial.printf("Spectra %s on %s\n", kFirmwareVersion, kSensorName);
+#endif
 
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
+#if SPECTRA_WIFI_5G
+  // The Arduino core also selects this when the radio starts. Saying it here
+  // keeps a 5 GHz scan from being left on 2.4 GHz after a mode change.
+  WiFi.setBandMode(WIFI_BAND_MODE_AUTO);
+#endif
   loraCapBegin();
 
   otaCrcOk = otaCrcSelfCheck();
   otaUpdatable = otaCrcOk && otaAvailable();
-  xTaskCreatePinnedToCore(otaTaskMain, "ota", 16384, nullptr, 1, &otaTask, 1);
+  startTask(otaTaskMain, "ota", 16384, 1, &otaTask, 1);
   setupBle();
   loadStored();
   loadWifiCreds();
@@ -3955,15 +4030,19 @@ void setup() {
 
 void loop() {
   esp_task_wdt_reset();
+#if SPECTRA_HAS_UI
   M5Cardputer.update();
+#endif
   if (otaRebootPending && static_cast<int32_t>(millis() - otaRebootAt) >= 0) {
     ESP.restart();
   }
+#if SPECTRA_HAS_UI
   if (!otaActive) {
     handleKeyboard();
     handleSideButton();
     serviceWifiUi();
   }
+#endif
 
   // The batch lives in BSS. Eighty credential rows do not fit on the loop stack.
   static WifiOp batch[kWifiOpMax];

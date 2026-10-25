@@ -17,6 +17,22 @@ cd firmware
 pio run -t upload
 ```
 
+Headless boards have no screen and no keyboard. The phone starts scans over
+Bluetooth. Flash them with their own environment (4 MB flash, two app slots):
+
+```sh
+pio run -e esp32-c5-n4 -t upload          # ESP32-C5 N4, 2.4 and 5 GHz
+pio run -e esp32-wroom32-ch340 -t upload  # ESP32-WROOM-32, CH340 USB serial
+```
+
+The C5 dev board uses its USB-Serial/JTAG port. The WROOM-32 board uses the
+CH340 UART; if the upload never starts, set `upload_speed = 115200` for that
+environment. These builds report no battery and no LoRa cap. Rebuild the
+Android app after `pio run` and **Flash over USB** on the Sensor tab writes
+the image that matches the chip: Cardputer, ESP32-C5 or WROOM-32. A blank
+chip is already in the ROM bootloader. Later images can also arrive over
+Bluetooth.
+
 Or install through Launcher: copy `firmware/.pio/build/m5stack-cardputer-adv/firmware.bin`
 (after `pio run`, also saved as `firmware/Spectra.bin`) to the SD card and
 choose **SD** → file → **Install**. Use the app image, not a merged one with
@@ -43,7 +59,8 @@ is running something else needs G0 held while reset is tapped. A computer
 table (`default_8MB.csv`) has two app slots, which is what makes the later
 Bluetooth swap possible.
 
-The ESP32-S3 hears 2.4 GHz only.
+The ESP32-S3 hears 2.4 GHz only. An ESP32-C5 also hears 5 GHz. A WROOM-32
+hears 2.4 GHz only.
 
 A Cap LoRa-1262 on the Cardputer-Adv EXT header adds two more radios. Its
 GNSS fix is kept with any scan the side button stores, so a walk without
@@ -80,11 +97,13 @@ cd android
 Open `android/` in Android Studio. Requires Android 8 or newer. The package
 id is `cattivole.spectra`.
 
-If `firmware/.pio/build/m5stack-cardputer-adv/` is present, the Android build
+If the matching `firmware/.pio/build/` directory is present, the Android build
 packs `bootloader.bin`, `partitions.bin`, `boot_app0.bin` and `firmware.bin`
-into `spectra-flash.zip` and ships it in the app. **Flash over USB** uses that
-bundle. The same zip can be picked by hand: `flash.json` lists each file and
-its offset (`0`, `32768`, the otadata offset, the app offset).
+for the Cardputer, the ESP32-C5 and the WROOM-32. **Flash over USB** on the
+Sensor tab asks the chip which it is and writes that image. The bootloader
+sits at `0` on the S3, `0x2000` on the C5 and `0x1000` on the WROOM-32. The
+same zip can be picked by hand: `flash.json` names the chip and lists each
+file with its offset.
 
 The phone radio is a second source of networks, which iOS does not allow.
 It hears 5 GHz and 6 GHz (the Cardputer is 2.4 GHz only) and it is throttled

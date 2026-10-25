@@ -638,6 +638,8 @@ class SensorLink(
         val services = record?.serviceUuids?.map { it.uuid } ?: emptyList()
         val spectra = services.any { it == SensorProtocol.SERVICE } ||
             name == "M5Cardputer" ||
+            name == "ESP32-C5" ||
+            name == "WROOM32" ||
             (name?.startsWith("Spectra-") == true)
         if (!spectra || state !is State.Searching) return
         val address = result.device.address ?: return

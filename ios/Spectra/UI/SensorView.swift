@@ -195,7 +195,7 @@ struct SensorView: View {
 //                }
 
                 Section("About the sensor") {
-                    Text("iPhone apps cannot list nearby Wi-Fi networks, so Spectra uses a Cardputer as its radio. Its ESP32-S3 hears the 2.4 GHz band only; 5 GHz networks do not appear.")
+                    Text("iPhone apps cannot list nearby Wi-Fi networks, so Spectra uses a sensor board as its radio. A Cardputer and a WROOM-32 hear 2.4 GHz. An ESP32-C5 also hears 5 GHz. A board with no screen is controlled from the phone.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }

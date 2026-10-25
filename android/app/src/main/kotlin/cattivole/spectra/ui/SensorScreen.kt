@@ -145,16 +145,17 @@ fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}) {
     }
     SpectraScreen(tr("Sensor")) {
         freeCard("status") { SensorStatus(model) }
-        if (model.usb.boards.isNotEmpty()) {
-            card(
-                header = tr("New Cardputer"),
-                key = "usb-flash",
-                footer = tr("A blank ESP32-S3 does not speak Bluetooth yet. Connect it with a data cable and flash it from here. If a program is already running, hold G0, tap reset, and let go."),
-                rows = listOf {
-                    ActionRow(tr("Flash over USB"), Icons.Rounded.Usb, onClick = onFlash)
-                },
-            )
-        }
+        card(
+            header = tr("Flash from the phone"),
+            key = "usb-flash",
+            footer = tr("The app carries a firmware image for each board that was built in: the bootloader, the partition table and the application. A blank chip is already in the ROM bootloader, so plug it in with a data cable and flash it here. It then shows up over Bluetooth, and later updates are sent from this screen without the cable. If a program is already running, hold BOOT — G0 on the Cardputer — tap reset, and let go. A WROOM-32 uses its CH340 USB port the same way."),
+            rows = buildList {
+                if (model.usb.boards.isNotEmpty()) {
+                    add { NoteRow(tr("A board is connected over USB."), warning = false) }
+                }
+                add { ActionRow(tr("Flash over USB"), Icons.Rounded.Usb, onClick = onFlash) }
+            },
+        )
         link.firmwareUpdate?.let { update -> firmwareCard(update, link) }
         if (link.state is SensorLink.State.Searching) {
             if (link.discovered.isEmpty()) {
@@ -208,7 +209,7 @@ fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}) {
                     header = tr("Device"),
                     key = "device",
                     footer = when {
-                        connected && !info.ota -> tr("This firmware cannot take updates from the app. Connect the Cardputer with a USB cable and use Flash over USB, or use the launcher, to install 0.6.0 or newer once. After that, updates install from here.")
+                        connected && !info.ota -> tr("This firmware cannot take updates from the app. Connect the board with a USB cable and use Flash over USB once. After that, updates install from here.")
                         connected && info.ota -> tr("Choose firmware.bin from pio run, the same app image Launcher installs. A merged image with a bootloader is rejected.")
                         else -> null
                     },
@@ -334,7 +335,7 @@ fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}) {
 //        )
         freeCard("about", header = tr("About the sensor")) {
             Text(
-                tr("Android lists nearby networks by itself, including 5 and 6 GHz. A Cardputer adds what a phone cannot hear: clients, probe requests, deauth frames, hidden names and traffic. Its ESP32-S3 hears the 2.4 GHz band only."),
+                tr("Android lists nearby networks by itself, including 5 and 6 GHz. A sensor adds what a phone cannot hear: clients, probe requests, deauth frames, hidden names and traffic. A Cardputer and a WROOM-32 hear 2.4 GHz only. An ESP32-C5 also hears 5 GHz. A blank board is flashed from this screen over USB."),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -346,14 +347,28 @@ fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}) {
                 {
                     ListRow(
                         title = "M5Stack Cardputer",
-                        subtitle = tr("ESP32-S3, 2.4 GHz"),
+                        subtitle = tr("ESP32-S3 with a screen and keyboard. 2.4 GHz, plus clients, probes and deauth frames a phone scan never includes."),
                         leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
                     )
                 },
                 {
                     ListRow(
                         title = "M5Stack Cardputer-Adv",
-                        subtitle = tr("ESP32-S3, 2.4 GHz, LoRa cap fits this board"),
+                        subtitle = tr("The same ESP32-S3. The LoRa cap with GPS fits this board."),
+                        leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
+                    )
+                },
+                {
+                    ListRow(
+                        title = "ESP32-C5 N4",
+                        subtitle = tr("No screen. Hears 2.4 and 5 GHz, so 5 GHz networks and their clients show up. The phone is the display."),
+                        leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
+                    )
+                },
+                {
+                    ListRow(
+                        title = "ESP32-WROOM-32",
+                        subtitle = tr("No screen. 2.4 GHz, with the same client and deauth detail as the Cardputer. The phone flashes it through the CH340 port."),
                         leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
                     )
                 },

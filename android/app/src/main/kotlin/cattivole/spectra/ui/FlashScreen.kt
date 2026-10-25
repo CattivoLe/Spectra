@@ -38,6 +38,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import cattivole.spectra.SpectraModel
+import cattivole.spectra.core.EspChip
 import cattivole.spectra.core.EspFlashFailure
 import cattivole.spectra.core.EspFlashProgress
 import cattivole.spectra.platform.UsbEspFlasher
@@ -71,18 +72,25 @@ fun FlashScreen(model: SpectraModel, onBack: () -> Unit) {
         onDispose { lifecycle.lifecycle.removeObserver(observer) }
     }
     confirm?.let { board ->
-        val image = flasher.image
+        val chosen = flasher.chosen
         AlertDialog(
             onDismissRequest = { confirm = null },
             icon = { Icon(Icons.Rounded.Usb, contentDescription = null) },
             title = { Text(tr("Flash this chip?")) },
             text = {
                 Text(
-                    tr(
-                        "The bootloader and the firmware on %s are replaced (%s). Keep the cable connected until it finishes.",
-                        board.title,
-                        byteSize(image?.segments?.sumOf { it.data.size.toLong() } ?: 0),
-                    ),
+                    if (chosen != null) {
+                        tr(
+                            "The bootloader and the firmware on %s are replaced (%s). Keep the cable connected until it finishes.",
+                            board.title,
+                            "${chosen.chip.title}, ${byteSize(chosen.segments.sumOf { it.data.size.toLong() })}",
+                        )
+                    } else {
+                        tr(
+                            "The included image for the chip that answers replaces the bootloader and the firmware on %s. Keep the cable connected until it finishes.",
+                            board.title,
+                        )
+                    },
                 )
             },
             confirmButton = {
@@ -97,22 +105,33 @@ fun FlashScreen(model: SpectraModel, onBack: () -> Unit) {
     SpectraScreen(
         title = tr("Flash over USB"),
         onBack = onBack,
-        subtitle = tr("Blank ESP32-S3"),
+        subtitle = tr("ESP32-S3, ESP32-C5, WROOM-32"),
     ) {
         flasher.progress?.let { update -> flashProgress(update, flasher) }
-        val image = flasher.image
+        val chosen = flasher.chosen
         card(
             header = tr("Firmware"),
             key = "flash-image",
-            footer = tr("The bundle is the bootloader, the partition table and the application from pio run. firmware.bin on its own cannot start a blank chip."),
+            footer = tr("Each board has its own image: bootloader, partition table and application from pio run. The phone writes the one that matches the chip it finds. firmware.bin on its own cannot start a blank chip."),
             rows = buildList {
-                when {
-                    image != null -> {
-                        add { InfoRow(tr("Image"), flasher.chosenName ?: tr("Included firmware")) }
-                        add { InfoRow(tr("Size"), byteSize(image.segments.sumOf { it.data.size.toLong() })) }
+                if (chosen != null) {
+                    add { InfoRow(tr("Image"), flasher.chosenName ?: chosen.chip.title) }
+                    add { InfoRow(tr("Chip"), chosen.chip.title) }
+                    add { InfoRow(tr("Size"), byteSize(chosen.segments.sumOf { it.data.size.toLong() })) }
+                } else {
+                    for (chip in EspChip.entries) {
+                        val image = flasher.bundles[chip]
+                        add {
+                            InfoRow(
+                                chip.title,
+                                if (image == null) tr("Not in this build") else byteSize(image.segments.sumOf { it.data.size.toLong() }),
+                            )
+                        }
                     }
-                    flasher.bundledKnown -> add {
-                        NoteRow(tr("This build of the app has no firmware inside. Run pio run, rebuild the app, or pick a flash bundle."), warning = true)
+                    if (flasher.bundledKnown && flasher.bundles.isEmpty()) {
+                        add {
+                            NoteRow(tr("This build of the app has no firmware inside. Run pio run, rebuild the app, or pick a flash bundle."), warning = true)
+                        }
                     }
                 }
                 add {
@@ -120,7 +139,7 @@ fun FlashScreen(model: SpectraModel, onBack: () -> Unit) {
                         picker.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
                     })
                 }
-                if (flasher.chosen != null && flasher.bundled != null) {
+                if (chosen != null && flasher.bundles.isNotEmpty()) {
                     add { ActionRow(tr("Use the included firmware"), Icons.Rounded.Memory, onClick = flasher::useBundled) }
                 }
             },
@@ -129,7 +148,7 @@ fun FlashScreen(model: SpectraModel, onBack: () -> Unit) {
             card(
                 header = tr("USB devices"),
                 key = "flash-empty",
-                footer = tr("Plug the Cardputer into this phone with a cable that carries data. A blank chip is already waiting. If a program is running, hold the G0 button, tap reset, and let go."),
+                footer = tr("Plug in a Cardputer, an ESP32-C5 or a WROOM-32 with a cable that carries data. A blank chip is already in the bootloader. If a program is running, hold BOOT (G0 on the Cardputer), tap reset, and let go."),
                 rows = listOf {
                     Text(
                         tr("Nothing is plugged in."),
@@ -142,7 +161,7 @@ fun FlashScreen(model: SpectraModel, onBack: () -> Unit) {
             cardSection(
                 flasher.boards,
                 header = tr("USB devices"),
-                footer = tr("Plug the Cardputer into this phone with a cable that carries data. A blank chip is already waiting. If a program is running, hold the G0 button, tap reset, and let go."),
+                footer = tr("Plug in a Cardputer, an ESP32-C5 or a WROOM-32 with a cable that carries data. A blank chip is already in the bootloader. If a program is running, hold BOOT (G0 on the Cardputer), tap reset, and let go."),
                 key = { it.id },
                 sectionKey = "flash-boards",
                 dividerInset = 70.dp,
@@ -155,7 +174,7 @@ fun FlashScreen(model: SpectraModel, onBack: () -> Unit) {
                     dimmed = flasher.progress?.isRunning == true,
                     onClick = when {
                         flasher.progress?.isRunning == true -> null
-                        flasher.image == null -> ({ flasher.flash(board.id) })
+                        !flasher.hasImage -> ({ flasher.flash(board.id) })
                         else -> ({ confirm = board })
                     },
                 )

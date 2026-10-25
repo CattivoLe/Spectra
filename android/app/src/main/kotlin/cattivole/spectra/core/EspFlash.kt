@@ -9,16 +9,19 @@ import java.util.ArrayDeque
 import java.util.zip.ZipInputStream
 
 /**
- * First-time programming of a blank ESP32-S3 over USB.
+ * First-time programming of a blank ESP32-S3, ESP32-C5 or ESP32 over USB.
  *
  * A chip with no Spectra firmware has no Bluetooth, so the phone speaks the
- * ROM serial protocol (SLIP frames, the same one esptool uses) to the
- * USB-Serial-JTAG bootloader and writes the bootloader, partition table,
- * otadata and application. Later updates still go over Bluetooth.
+ * ROM serial protocol (SLIP frames, the same one esptool uses) and writes the
+ * bootloader, partition table, otadata and application. The S3 and C5 use
+ * USB-Serial/JTAG. A WROOM-32 uses the CH340 UART. Later updates still go
+ * over Bluetooth.
  */
 enum class EspFlashFailure(val message: String) {
-    NO_BOOTLOADER("Could not find the ROM bootloader. Hold the G0 button, tap reset, let go, and try again."),
-    NOT_S3("This chip is not an ESP32-S3."),
+    NO_BOOTLOADER("Could not find the ROM bootloader. Hold BOOT (G0 on a Cardputer), tap reset, let go, and try again."),
+    NOT_S3("This chip is not an ESP32-S3, an ESP32-C5 or an ESP32."),
+    WRONG_BUNDLE("This bundle is for a different chip. Use the included firmware, or pick the bundle built for the board that is plugged in."),
+    NO_CHIP_IMAGE("This build of the app has no firmware for this chip. Run pio run for that board, rebuild the app, or pick its flash bundle."),
     CHIP_REJECTED("The chip rejected the flash command."),
     WRITE_FAILED("The chip rejected part of the image."),
     MISMATCH("The image on the chip does not match. Flash it again."),
@@ -29,7 +32,7 @@ enum class EspFlashFailure(val message: String) {
     TIMED_OUT("The chip stopped answering. Keep the cable connected and try again."),
     APP_IMAGE("This is an application image. A blank chip needs the flash bundle: bootloader, partition table and firmware together."),
     BAD_BUNDLE("This file is not a flash bundle."),
-    NO_BUNDLE_BOOTLOADER("This bundle has no bootloader at the start of flash."),
+    NO_BUNDLE_BOOTLOADER("This bundle has no bootloader at the offset this chip expects."),
     BAD_LAYOUT("The pieces of this bundle overlap or do not fit in the flash."),
     NO_IMAGE("This build of the app has no firmware inside. Run pio run, rebuild the app, or pick a flash bundle."),
     UNREADABLE("Could not read the firmware file."),
@@ -137,9 +140,33 @@ object EspSlip {
     }
 }
 
-/** Command packets for the ESP32-S3 ROM loader. No stub is uploaded. */
+/**
+ * Chips the phone can program. [romId] is the id from GET_SECURITY_INFO.
+ * The original ESP32 does not answer that command; it is recognised by the
+ * magic value at [ESP32_MAGIC_REG]. [classicBegin] is the ROM flash-begin
+ * packet: the ESP32 omits the encryption word that later chips require.
+ * [bootOffset] is where that chip's bootloader image lives.
+ */
+enum class EspChip(val wire: String, val romId: Int?, val bootOffset: Long, val classicBegin: Boolean, val title: String) {
+    S3("esp32s3", 9, 0L, false, "ESP32-S3"),
+    C5("esp32c5", 23, 0x2000L, false, "ESP32-C5"),
+    ESP32("esp32", null, 0x1000L, true, "ESP32"),
+    ;
+
+    companion object {
+        const val ESP32_MAGIC_REG = 0x40001000L
+        const val ESP32_MAGIC = 0x00F01D83L
+
+        fun fromWire(name: String): EspChip? = entries.firstOrNull { it.wire.equals(name, ignoreCase = true) }
+
+        fun fromRom(id: Int): EspChip? = entries.firstOrNull { it.romId == id }
+    }
+}
+
+/** Command packets for the ROM loader. No stub is uploaded. */
 object EspRom {
     const val ESP32_S3 = 9
+    const val ESP32_C5 = 23
     const val BLOCK = 1024
 
     const val FLASH_BEGIN = 0x02
@@ -207,14 +234,17 @@ object EspRom {
         return packet(SPI_PARAMS, data.toByteArray())
     }
 
-    /** Five words: the last one is the encrypted-write flag, which stays off. */
-    fun flashBegin(eraseSize: Long, blocks: Int, blockSize: Int, offset: Long): ByteArray {
+    /**
+     * Later chips take five words; the last one is the encrypted-write flag and
+     * stays off. The original ESP32 ROM rejects that extra word.
+     */
+    fun flashBegin(eraseSize: Long, blocks: Int, blockSize: Int, offset: Long, extended: Boolean = true): ByteArray {
         val data = ByteWriter()
         data.u32(eraseSize)
         data.u32(blocks.toLong())
         data.u32(blockSize.toLong())
         data.u32(offset)
-        data.u32(0)
+        if (extended) data.u32(0)
         return packet(FLASH_BEGIN, data.toByteArray())
     }
 
@@ -312,13 +342,15 @@ object EspReset {
 /**
  * A zip named by `flash.json`:
  * `{"chip":"esp32s3","flashSize":8388608,"files":[{"offset":0,"name":"bootloader.bin"}, ...]}`
- * Offsets are numbers or hex strings (`"0x10000"`).
+ * `chip` is `esp32s3`, `esp32c5` or `esp32`. Offsets are numbers or hex strings
+ * (`"0x10000"`). The bootloader sits at 0 on an S3, at 0x2000 on a C5 and at
+ * 0x1000 on an ESP32.
  */
 object FlashBundle {
     const val FLASH_8MB = 8L * 1024 * 1024
 
     class Segment(val offset: Long, val data: ByteArray)
-    class Image(val flashSize: Long, val segments: List<Segment>)
+    class Image(val chip: EspChip, val flashSize: Long, val segments: List<Segment>)
 
     sealed class Load {
         class Ready(val image: Image) : Load()
@@ -357,8 +389,8 @@ object FlashBundle {
         } catch (_: Exception) {
             return Load.Rejected(EspFlashFailure.BAD_BUNDLE)
         }
-        val chip = json.optString("chip", "esp32s3")
-        if (!chip.equals("esp32s3", ignoreCase = true)) return Load.Rejected(EspFlashFailure.NOT_S3)
+        val chip = EspChip.fromWire(json.optString("chip", "esp32s3"))
+            ?: return Load.Rejected(EspFlashFailure.NOT_S3)
         val flashSize = json.optLong("flashSize", FLASH_8MB)
         if (flashSize !in (1024L * 1024)..(16L * 1024 * 1024)) return Load.Rejected(EspFlashFailure.BAD_LAYOUT)
         val files = json.optJSONArray("files") ?: return Load.Rejected(EspFlashFailure.BAD_BUNDLE)
@@ -371,13 +403,14 @@ object FlashBundle {
             if (data.isEmpty()) return Load.Rejected(EspFlashFailure.BAD_BUNDLE)
             segments.add(Segment(offset, data))
         }
-        return validate(flashSize, segments)
+        return validate(chip, flashSize, segments)
     }
 
-    private fun validate(flashSize: Long, segments: List<Segment>): Load {
+    private fun validate(chip: EspChip, flashSize: Long, segments: List<Segment>): Load {
         if (segments.isEmpty()) return Load.Rejected(EspFlashFailure.BAD_BUNDLE)
         val ordered = segments.sortedBy { it.offset }
-        if (ordered[0].offset != 0L || ordered[0].data[0] != 0xE9.toByte()) {
+        val boot = ordered.firstOrNull { it.offset == chip.bootOffset }
+        if (boot == null || boot.data[0] != 0xE9.toByte()) {
             return Load.Rejected(EspFlashFailure.NO_BUNDLE_BOOTLOADER)
         }
         var end = 0L
@@ -389,7 +422,7 @@ object FlashBundle {
         }
         val app = ordered.firstOrNull { it.offset >= 0x10000 }
         if (app != null && app.data[0] != 0xE9.toByte()) return Load.Rejected(EspFlashFailure.APP_IMAGE)
-        return Load.Ready(Image(flashSize, ordered))
+        return Load.Ready(Image(chip, flashSize, ordered))
     }
 
     private fun jsonLong(value: Any?): Long? = when (value) {
@@ -418,6 +451,17 @@ class EspFlashSession(
     private val pending = ArrayDeque<ByteArray>()
 
     fun flash(image: FlashBundle.Image, kind: EspReset.Kind, onProgress: (EspFlashProgress.Stage) -> Unit) {
+        flash(kind, { detected ->
+            if (detected != image.chip) throw EspFlashException(EspFlashFailure.WRONG_BUNDLE)
+            image
+        }, onProgress)
+    }
+
+    fun flash(
+        kind: EspReset.Kind,
+        select: (EspChip) -> FlashBundle.Image,
+        onProgress: (EspFlashProgress.Stage) -> Unit,
+    ) {
         try {
             onProgress(EspFlashProgress.Stage.Preparing)
             if (!sync()) {
@@ -426,9 +470,10 @@ class EspFlashSession(
                 pending.clear()
                 if (!sync()) throw EspFlashException(EspFlashFailure.NO_BOOTLOADER)
             }
-            val info = exchange(EspRom.securityInfo(), 1_000, EspFlashFailure.NOT_S3)
-            if (EspRom.chipId(info.data) != EspRom.ESP32_S3) throw EspFlashException(EspFlashFailure.NOT_S3)
-            disableWatchdogs()
+            val chip = detectChip()
+            val image = select(chip)
+            if (image.chip != chip) throw EspFlashException(EspFlashFailure.WRONG_BUNDLE)
+            disableWatchdogs(chip)
             exchange(EspRom.spiAttach(), 1_000, EspFlashFailure.CHIP_REJECTED)
             exchange(EspRom.spiParams(image.flashSize), 1_000, EspFlashFailure.CHIP_REJECTED)
 
@@ -441,7 +486,13 @@ class EspFlashSession(
                 val aligned = align4(segment.data)
                 val blocks = (aligned.size + EspRom.BLOCK - 1) / EspRom.BLOCK
                 exchange(
-                    EspRom.flashBegin(aligned.size.toLong(), blocks, EspRom.BLOCK, segment.offset),
+                    EspRom.flashBegin(
+                        aligned.size.toLong(),
+                        blocks,
+                        EspRom.BLOCK,
+                        segment.offset,
+                        extended = !chip.classicBegin,
+                    ),
                     timeoutFor(aligned.size.toLong(), 10_000),
                     EspFlashFailure.CHIP_REJECTED,
                 )
@@ -472,8 +523,10 @@ class EspFlashSession(
                 if (!EspRom.md5Matches(aligned, md5.data)) throw EspFlashException(EspFlashFailure.MISMATCH)
             }
             onProgress(EspFlashProgress.Stage.Restarting)
-            // USB-Serial-JTAG can leave the force-download bit set, and the chip then ignores the new firmware.
-            quietly { exchange(EspRom.writeReg(0x6000812C, 0, 0x1, 0), 1_000, EspFlashFailure.CHIP_REJECTED) }
+            // USB-Serial-JTAG on the S3 can leave the force-download bit set, and the chip then ignores the new firmware.
+            if (chip == EspChip.S3) {
+                quietly { exchange(EspRom.writeReg(0x6000812C, 0, 0x1, 0), 1_000, EspFlashFailure.CHIP_REJECTED) }
+            }
             runCatching { EspReset.play(pipe, EspReset.hardReset(), sleep) }
             onProgress(EspFlashProgress.Stage.Done)
         } catch (e: EspFlashException) {
@@ -483,18 +536,43 @@ class EspFlashSession(
         }
     }
 
-    private fun disableWatchdogs() {
-        // USB-Serial-JTAG does not pet the RTC watchdogs, so a long erase can reset the chip.
-        // A chip that refuses the registers can still be flashed.
-        quietly {
-            exchange(EspRom.writeReg(0x600080B0, 0x50D83AA1, 0xFFFFFFFF, 0), 1_000, EspFlashFailure.CHIP_REJECTED)
-            exchange(EspRom.writeReg(0x60008098, 0, 0xFFFFFFFF, 0), 1_000, EspFlashFailure.CHIP_REJECTED)
-            exchange(EspRom.writeReg(0x600080B0, 0, 0xFFFFFFFF, 0), 1_000, EspFlashFailure.CHIP_REJECTED)
-            val swd = exchange(EspRom.readReg(0x600080B4), 1_000, EspFlashFailure.CHIP_REJECTED).value
-            exchange(EspRom.writeReg(0x600080B8, 0x8F1D312A, 0xFFFFFFFF, 0), 1_000, EspFlashFailure.CHIP_REJECTED)
-            exchange(EspRom.writeReg(0x600080B4, swd or 0x80000000, 0xFFFFFFFF, 0), 1_000, EspFlashFailure.CHIP_REJECTED)
-            exchange(EspRom.writeReg(0x600080B8, 0, 0xFFFFFFFF, 0), 1_000, EspFlashFailure.CHIP_REJECTED)
+    private fun detectChip(): EspChip {
+        val security = try {
+            exchange(EspRom.securityInfo(), 1_000, EspFlashFailure.CHIP_REJECTED)
+        } catch (e: EspFlashException) {
+            if (e.failure != EspFlashFailure.CHIP_REJECTED) throw e
+            null
         }
+        if (security != null) {
+            val id = EspRom.chipId(security.data) ?: throw EspFlashException(EspFlashFailure.NOT_S3)
+            return EspChip.fromRom(id) ?: throw EspFlashException(EspFlashFailure.NOT_S3)
+        }
+        // The original ESP32 ROM has no security-info command. Its magic
+        // register is how esptool tells it apart from everything else.
+        val magic = exchange(EspRom.readReg(EspChip.ESP32_MAGIC_REG), 1_000, EspFlashFailure.NOT_S3).value
+        if (magic == EspChip.ESP32_MAGIC) return EspChip.ESP32
+        throw EspFlashException(EspFlashFailure.NOT_S3)
+    }
+
+    private fun disableWatchdogs(chip: EspChip) {
+        // USB-Serial-JTAG does not pet the RTC watchdogs, so a long erase can reset the chip.
+        // A UART bridge does, and the original ESP32 has different registers. A chip that
+        // refuses the registers can still be flashed.
+        when (chip) {
+            EspChip.ESP32 -> return
+            EspChip.S3 -> quietly { feedWatchdog(0x600080B0, 0x60008098, 0x600080B4, 0x600080B8, 0x8F1D312A, 1L shl 31) }
+            EspChip.C5 -> quietly { feedWatchdog(0x600B1C18, 0x600B1C00, 0x600B1C1C, 0x600B1C20, 0x50D83AA1, 1L shl 18) }
+        }
+    }
+
+    private fun feedWatchdog(protect: Long, config: Long, swdConf: Long, swdProtect: Long, swdKey: Long, autoFeed: Long) {
+        exchange(EspRom.writeReg(protect, 0x50D83AA1, 0xFFFFFFFF, 0), 1_000, EspFlashFailure.CHIP_REJECTED)
+        exchange(EspRom.writeReg(config, 0, 0xFFFFFFFF, 0), 1_000, EspFlashFailure.CHIP_REJECTED)
+        exchange(EspRom.writeReg(protect, 0, 0xFFFFFFFF, 0), 1_000, EspFlashFailure.CHIP_REJECTED)
+        val swd = exchange(EspRom.readReg(swdConf), 1_000, EspFlashFailure.CHIP_REJECTED).value
+        exchange(EspRom.writeReg(swdProtect, swdKey, 0xFFFFFFFF, 0), 1_000, EspFlashFailure.CHIP_REJECTED)
+        exchange(EspRom.writeReg(swdConf, swd or autoFeed, 0xFFFFFFFF, 0), 1_000, EspFlashFailure.CHIP_REJECTED)
+        exchange(EspRom.writeReg(swdProtect, 0, 0xFFFFFFFF, 0), 1_000, EspFlashFailure.CHIP_REJECTED)
     }
 
     private fun quietly(block: () -> Unit) {

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "Board.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -23,6 +25,8 @@ struct LoraDevice {
 
 // Call after M5Cardputer.begin(). Detects the cap, enables its antenna
 // switch, and leaves the radio asleep so it does not drown the GNSS fix.
+// Boards without the cap compile the empty inline versions.
+#if SPECTRA_HAS_LORA
 void loraCapBegin();
 
 bool loraCapAttached();
@@ -37,3 +41,16 @@ void loraCapFormat(char *out, size_t outLen);
 // index is 1-based. heard is called for every packet, including repeats.
 void loraCapScan(void (*progress)(uint32_t freqKhz, uint8_t sf, uint16_t index, uint16_t total),
                  void (*heard)(const LoraDevice &dev));
+#else
+inline void loraCapBegin() {}
+inline bool loraCapAttached() { return false; }
+inline bool loraCapReady() { return false; }
+inline void loraCapPoll() {}
+inline bool loraCapFix(GpsFix &) { return false; }
+inline void loraCapFormat(char *out, size_t outLen) {
+  if (outLen > 0) {
+    out[0] = '\0';
+  }
+}
+inline void loraCapScan(void (*)(uint32_t, uint8_t, uint16_t, uint16_t), void (*)(const LoraDevice &)) {}
+#endif

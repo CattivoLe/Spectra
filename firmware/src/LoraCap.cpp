@@ -1,3 +1,6 @@
+#include "Board.h"
+#if SPECTRA_HAS_LORA
+
 #include "LoraCap.h"
 
 #include <M5Unified.h>
@@ -316,3 +319,5 @@ void loraCapScan(void (*progress)(uint32_t freqKhz, uint8_t sf, uint16_t index, 
   }
   radio->sleep();
 }
+
+#endif

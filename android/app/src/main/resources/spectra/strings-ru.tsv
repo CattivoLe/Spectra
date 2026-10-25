@@ -181,7 +181,7 @@ Last sweep	Последний проход
 %.1f s	%.1f с
 Scans this session	Сканирований за сеанс
 Device	Устройство
-This firmware cannot take updates from the app. Connect the Cardputer with a USB cable and use Flash over USB, or use the launcher, to install 0.6.0 or newer once. After that, updates install from here.	Эта прошивка не принимает обновления из приложения. Подключите Cardputer кабелем USB и выберите «Прошить по USB», или поставьте 0.6.0 или новее через лаунчер — после этого обновления ставятся отсюда.
+This firmware cannot take updates from the app. Connect the board with a USB cable and use Flash over USB once. After that, updates install from here.	Эта прошивка не принимает обновления из приложения. Подключите плату кабелем USB и один раз выберите «Прошить по USB» — после этого обновления ставятся отсюда.
 Choose firmware.bin from pio run, the same app image Launcher installs. A merged image with a bootloader is rejected.	Выберите firmware.bin после pio run — тот же образ приложения, что ставит Launcher. Объединённый образ с загрузчиком не подойдёт.
 Firmware	Прошивка
 Reported interval	Интервал на устройстве
@@ -197,7 +197,7 @@ This firmware speaks protocol %d; the app expects %d. Update the one that is old
 Choose a firmware file…	Выбрать файл прошивки…
 Made-up networks with drifting signal, for trying the app without a Cardputer.	Выдуманные сети с плавающим сигналом — чтобы попробовать приложение без Cardputer.
 About the sensor	О сенсоре
-Android lists nearby networks by itself, including 5 and 6 GHz. A Cardputer adds what a phone cannot hear: clients, probe requests, deauth frames, hidden names and traffic. Its ESP32-S3 hears the 2.4 GHz band only.	Android сам показывает сети поблизости, включая 5 и 6 ГГц. Cardputer добавляет то, чего телефон не слышит: клиентов, probe-запросы, deauth-кадры, скрытые имена и трафик. Его ESP32-S3 слышит только диапазон 2,4 ГГц.
+Android lists nearby networks by itself, including 5 and 6 GHz. A sensor adds what a phone cannot hear: clients, probe requests, deauth frames, hidden names and traffic. A Cardputer and a WROOM-32 hear 2.4 GHz only. An ESP32-C5 also hears 5 GHz. A blank board is flashed from this screen over USB.	Android сам показывает сети поблизости, включая 5 и 6 ГГц. Сенсор добавляет то, чего телефон не слышит: клиентов, probe-запросы, deauth-кадры, скрытые имена и трафик. Cardputer и WROOM-32 слышат только 2,4 ГГц. ESP32-C5 слышит ещё и 5 ГГц. Чистая плата прошивается с этого экрана по USB.
 Connecting to %s	Подключение к %s
 Searching…	Поиск…
 Not connected	Не подключён
@@ -597,8 +597,10 @@ On this phone	На этом телефоне
 Imported	Импортированные
 Nothing imported yet.	Пока ничего не импортировано.
 Nothing saved on this phone.	На этом телефоне ничего не сохранено.
-Could not find the ROM bootloader. Hold the G0 button, tap reset, let go, and try again.	Не удалось найти загрузчик ROM. Зажмите кнопку G0, нажмите сброс, отпустите и попробуйте снова.
-This chip is not an ESP32-S3.	Это не ESP32-S3.
+Could not find the ROM bootloader. Hold BOOT (G0 on a Cardputer), tap reset, let go, and try again.	Не удалось найти загрузчик ROM. Зажмите BOOT (G0 на Cardputer), нажмите сброс, отпустите и попробуйте снова.
+This chip is not an ESP32-S3, an ESP32-C5 or an ESP32.	Это не ESP32-S3, не ESP32-C5 и не ESP32.
+This bundle is for a different chip. Use the included firmware, or pick the bundle built for the board that is plugged in.	Этот пакет для другого чипа. Используйте встроенную прошивку или выберите пакет, собранный для подключённой платы.
+This build of the app has no firmware for this chip. Run pio run for that board, rebuild the app, or pick its flash bundle.	В этой сборке приложения нет прошивки для этого чипа. Запустите pio run для этой платы, пересоберите приложение или выберите её пакет прошивки.
 The chip rejected the flash command.	Чип отклонил команду прошивки.
 The chip rejected part of the image.	Чип отклонил часть образа.
 The image on the chip does not match. Flash it again.	Образ на чипе не совпал. Прошейте ещё раз.
@@ -609,7 +611,7 @@ Allow USB access and try again.	Разрешите доступ к USB и поп
 The chip stopped answering. Keep the cable connected and try again.	Чип перестал отвечать. Не отключайте кабель и попробуйте снова.
 This is an application image. A blank chip needs the flash bundle: bootloader, partition table and firmware together.	Это образ приложения. Чистому чипу нужен пакет прошивки: загрузчик, таблица разделов и сама прошивка.
 This file is not a flash bundle.	Это не пакет прошивки.
-This bundle has no bootloader at the start of flash.	В пакете нет загрузчика в начале флеш-памяти.
+This bundle has no bootloader at the offset this chip expects.	В пакете нет загрузчика по адресу, который ждёт этот чип.
 The pieces of this bundle overlap or do not fit in the flash.	Части пакета пересекаются или не помещаются во флеш-память.
 This build of the app has no firmware inside. Run pio run, rebuild the app, or pick a flash bundle.	В этой сборке приложения нет прошивки. Запустите pio run, пересоберите приложение или выберите пакет прошивки.
 New Cardputer	Новый Cardputer
@@ -619,7 +621,14 @@ Blank ESP32-S3	Чистый ESP32-S3
 Flash this chip?	Прошить этот чип?
 The bootloader and the firmware on %s are replaced (%s). Keep the cable connected until it finishes.	Загрузчик и прошивка на %s будут заменены (%s). Не отключайте кабель, пока процесс не закончится.
 Flash	Прошить
-The bundle is the bootloader, the partition table and the application from pio run. firmware.bin on its own cannot start a blank chip.	Пакет — это загрузчик, таблица разделов и приложение после pio run. Одного firmware.bin мало, чтобы чистый чип запустился.
+Each board has its own image: bootloader, partition table and application from pio run. The phone writes the one that matches the chip it finds. firmware.bin on its own cannot start a blank chip.	У каждой платы свой образ: загрузчик, таблица разделов и приложение после pio run. Телефон записывает тот, который подходит к найденному чипу. Одного firmware.bin мало, чтобы чистый чип запустился.
+Not in this build	Нет в этой сборке
+ESP32-S3, ESP32-C5, WROOM-32	ESP32-S3, ESP32-C5, WROOM-32
+Plug in a Cardputer, an ESP32-C5 or a WROOM-32 with a cable that carries data. A blank chip is already in the bootloader. If a program is running, hold BOOT (G0 on the Cardputer), tap reset, and let go.	Подключите Cardputer, ESP32-C5 или WROOM-32 кабелем, по которому идут данные. Чистый чип уже в загрузчике. Если программа запущена, зажмите BOOT (G0 на Cardputer), нажмите сброс и отпустите.
+The included image for the chip that answers replaces the bootloader and the firmware on %s. Keep the cable connected until it finishes.	Встроенный образ для ответившего чипа заменит загрузчик и прошивку на %s. Не отключайте кабель, пока процесс не закончится.
+Flash from the phone	Прошивка с телефона
+The app carries a firmware image for each board that was built in: the bootloader, the partition table and the application. A blank chip is already in the ROM bootloader, so plug it in with a data cable and flash it here. It then shows up over Bluetooth, and later updates are sent from this screen without the cable. If a program is already running, hold BOOT — G0 on the Cardputer — tap reset, and let go. A WROOM-32 uses its CH340 USB port the same way.	Приложение несёт образ прошивки для каждой платы, которая была собрана: загрузчик, таблицу разделов и приложение. Чистый чип уже в загрузчике ROM — подключите его кабелем с данными и прошейте отсюда. Затем он появится по Bluetooth, а следующие обновления уходят с этого экрана уже без кабеля. Если программа запущена, зажмите BOOT — G0 на Cardputer — нажмите сброс и отпустите. WROOM-32 так же прошивается через свой USB-порт CH340.
+A board is connected over USB.	Плата подключена по USB.
 Included firmware	Встроенная прошивка
 Image	Образ
 Size	Размер
@@ -645,8 +654,10 @@ Most found	Больше всего
 All	Все
 Name, place or address	Имя, место или адрес
 Supported boards	Поддерживаемые платы
-ESP32-S3, 2.4 GHz	ESP32-S3, 2,4 ГГц
-ESP32-S3, 2.4 GHz, LoRa cap fits this board	ESP32-S3, 2,4 ГГц, сюда ставится плата LoRa
+ESP32-S3 with a screen and keyboard. 2.4 GHz, plus clients, probes and deauth frames a phone scan never includes.	ESP32-S3 с экраном и клавиатурой. 2,4 ГГц, а ещё клиенты, probe-запросы и deauth-кадры, которых нет в скане телефона.
+The same ESP32-S3. The LoRa cap with GPS fits this board.	Тот же ESP32-S3. Сюда ставится плата LoRa с GPS.
+No screen. Hears 2.4 and 5 GHz, so 5 GHz networks and their clients show up. The phone is the display.	Без экрана. Слышит 2,4 и 5 ГГц, поэтому видны сети на 5 ГГц и их клиенты. Экраном служит телефон.
+No screen. 2.4 GHz, with the same client and deauth detail as the Cardputer. The phone flashes it through the CH340 port.	Без экрана. 2,4 ГГц и та же картина по клиентам и deauth, что у Cardputer. Телефон прошивает её через порт CH340.
 
 # pcap decoder
 Decode pcap	Разбор pcap

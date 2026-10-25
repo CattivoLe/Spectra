@@ -23,7 +23,7 @@ android {
     // the top-level data/ directory, loaded from the classpath as spectra/*.tsv.
     // App-only strings stay under src/main/resources.
     sourceSets["main"].resources.srcDir("../../data")
-    // spectra-flash.zip, packed from the last pio build when that output exists.
+    // One zip per board, packed from the last pio build when that output exists.
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/flashAssets"))
 
     buildTypes {
@@ -80,50 +80,77 @@ dependencies {
     testImplementation("org.json:json:20240303")
 }
 
-// A blank ESP32-S3 needs the bootloader and partition table, not just firmware.bin.
-// The zip is an asset when the last `pio run` output is on disk; otherwise the
-// app still builds and the flash screen asks for a bundle.
+// A blank chip needs the bootloader and partition table, not just firmware.bin.
+// One zip per board that has a pio build on disk. The S3 zip is also written as
+// spectra-flash.zip so an older asset name still loads. Missing builds are
+// removed so a stale image is not flashed onto the wrong board.
 val flashAssets = layout.buildDirectory.dir("generated/flashAssets")
 
+data class FlashTarget(
+    val env: String,
+    val chip: String,
+    val flashSize: Long,
+    val bootOffset: Long,
+    val asset: String,
+)
+
+val flashTargets = listOf(
+    FlashTarget("m5stack-cardputer-adv", "esp32s3", 8L * 1024 * 1024, 0L, "spectra-flash-esp32s3.zip"),
+    FlashTarget("esp32-c5-n4", "esp32c5", 4L * 1024 * 1024, 0x2000L, "spectra-flash-esp32c5.zip"),
+    FlashTarget("esp32-wroom32-ch340", "esp32", 4L * 1024 * 1024, 0x1000L, "spectra-flash-esp32.zip"),
+)
+
 tasks.register("packFlashBundle") {
-    val built = rootProject.file("../firmware/.pio/build/m5stack-cardputer-adv")
-    inputs.files(
-        built.resolve("bootloader.bin"),
-        built.resolve("partitions.bin"),
-        built.resolve("firmware.bin"),
-    ).optional()
+    flashTargets.forEach { target ->
+        val built = rootProject.file("../firmware/.pio/build/${target.env}")
+        inputs.files(
+            built.resolve("bootloader.bin"),
+            built.resolve("partitions.bin"),
+            built.resolve("firmware.bin"),
+        ).optional()
+    }
     outputs.dir(flashAssets)
     doLast {
         val dir = flashAssets.get().asFile
         dir.mkdirs()
-        val zipFile = dir.resolve("spectra-flash.zip")
-        val bootloader = built.resolve("bootloader.bin")
-        val partitions = built.resolve("partitions.bin")
-        val firmware = built.resolve("firmware.bin")
         val otadata = listOf(
-            built.resolve("boot_app0.bin"),
+            rootProject.file("../firmware/.pio/build/m5stack-cardputer-adv/boot_app0.bin"),
+            rootProject.file("../firmware/.pio/build/esp32-c5-n4/boot_app0.bin"),
+            rootProject.file("../firmware/.pio/build/esp32-wroom32-ch340/boot_app0.bin"),
             file("${System.getProperty("user.home")}/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"),
         ).firstOrNull { it.isFile }
-        if (!bootloader.isFile || !partitions.isFile || !firmware.isFile || otadata == null) {
-            zipFile.delete()
-            return@doLast
-        }
-        val table = partitions.readBytes()
-        val otadataOffset = partitionOffset(table, "otadata") ?: 0xe000L
-        val appOffset = partitionOffset(table, "app0") ?: 0x10000L
-        val manifest = """{"chip":"esp32s3","flashSize":8388608,"files":[{"offset":0,"name":"bootloader.bin"},{"offset":32768,"name":"partitions.bin"},{"offset":$otadataOffset,"name":"boot_app0.bin"},{"offset":$appOffset,"name":"firmware.bin"}]}"""
-        ZipOutputStream(zipFile.outputStream()).use { zip ->
-            fun put(name: String, bytes: ByteArray) {
-                zip.putNextEntry(ZipEntry(name))
-                zip.write(bytes)
-                zip.closeEntry()
+        var cardputer: java.io.File? = null
+        for (target in flashTargets) {
+            val built = rootProject.file("../firmware/.pio/build/${target.env}")
+            val zipFile = dir.resolve(target.asset)
+            val bootloader = built.resolve("bootloader.bin")
+            val partitions = built.resolve("partitions.bin")
+            val firmware = built.resolve("firmware.bin")
+            if (!bootloader.isFile || !partitions.isFile || !firmware.isFile || otadata == null) {
+                zipFile.delete()
+                continue
             }
-            put("flash.json", manifest.toByteArray())
-            put("bootloader.bin", bootloader.readBytes())
-            put("partitions.bin", partitions.readBytes())
-            put("boot_app0.bin", otadata.readBytes())
-            put("firmware.bin", firmware.readBytes())
+            val table = partitions.readBytes()
+            val otadataOffset = partitionOffset(table, "otadata") ?: 0xe000L
+            val appOffset = partitionOffset(table, "app0") ?: 0x10000L
+            val manifest = """{"chip":"${target.chip}","flashSize":${target.flashSize},"files":[{"offset":${target.bootOffset},"name":"bootloader.bin"},{"offset":32768,"name":"partitions.bin"},{"offset":$otadataOffset,"name":"boot_app0.bin"},{"offset":$appOffset,"name":"firmware.bin"}]}"""
+            ZipOutputStream(zipFile.outputStream()).use { zip ->
+                fun put(name: String, bytes: ByteArray) {
+                    zip.putNextEntry(ZipEntry(name))
+                    zip.write(bytes)
+                    zip.closeEntry()
+                }
+                put("flash.json", manifest.toByteArray())
+                put("bootloader.bin", bootloader.readBytes())
+                put("partitions.bin", partitions.readBytes())
+                put("boot_app0.bin", otadata.readBytes())
+                put("firmware.bin", firmware.readBytes())
+            }
+            if (target.chip == "esp32s3") cardputer = zipFile
         }
+        val legacy = dir.resolve("spectra-flash.zip")
+        val source = cardputer
+        if (source != null && source.isFile) source.copyTo(legacy, overwrite = true) else legacy.delete()
     }
 }
 
