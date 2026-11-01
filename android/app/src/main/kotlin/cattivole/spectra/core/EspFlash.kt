@@ -178,6 +178,7 @@ object EspRom {
     const val SPI_ATTACH = 0x0D
     const val FLASH_MD5 = 0x13
     const val SECURITY = 0x14
+    const val INVALID_COMMAND = 0x05
 
     data class Response(val command: Int, val value: Long, val data: ByteArray, val status: Int, val error: Int) {
         val ok: Boolean get() = status == 0
@@ -308,7 +309,10 @@ object EspReset {
 
     data class Step(val dtr: Boolean, val rts: Boolean, val waitMs: Long)
 
-    fun enter(kind: Kind): List<Step> = when (kind) {
+    /** How long IO0 stays low after EN is released. A slow EN capacitor needs the longer one. */
+    val UART_HOLDS = listOf(50L, 550L)
+
+    fun enter(kind: Kind, holdMs: Long = UART_HOLDS.first()): List<Step> = when (kind) {
         Kind.USB_JTAG -> listOf(
             Step(dtr = false, rts = false, waitMs = 100),
             Step(dtr = true, rts = false, waitMs = 100),
@@ -321,7 +325,7 @@ object EspReset {
             Step(dtr = false, rts = false, waitMs = 0),
             Step(dtr = true, rts = true, waitMs = 0),
             Step(dtr = false, rts = true, waitMs = 100),
-            Step(dtr = true, rts = false, waitMs = 50),
+            Step(dtr = true, rts = false, waitMs = holdMs),
             Step(dtr = false, rts = false, waitMs = 50),
         )
     }
@@ -464,12 +468,7 @@ class EspFlashSession(
     ) {
         try {
             onProgress(EspFlashProgress.Stage.Preparing)
-            if (!sync()) {
-                runCatching { EspReset.play(pipe, EspReset.enter(kind), sleep) }
-                decoder.clear()
-                pending.clear()
-                if (!sync()) throw EspFlashException(EspFlashFailure.NO_BOOTLOADER)
-            }
+            if (!sync() && !resetIntoRom(kind)) throw EspFlashException(EspFlashFailure.NO_BOOTLOADER)
             val chip = detectChip()
             val image = select(chip)
             if (image.chip != chip) throw EspFlashException(EspFlashFailure.WRONG_BUNDLE)
@@ -493,7 +492,7 @@ class EspFlashSession(
                         segment.offset,
                         extended = !chip.classicBegin,
                     ),
-                    timeoutFor(aligned.size.toLong(), 10_000),
+                    timeoutFor(aligned.size.toLong(), 30_000),
                     EspFlashFailure.CHIP_REJECTED,
                 )
                 var sequence = 0
@@ -540,7 +539,8 @@ class EspFlashSession(
         val security = try {
             exchange(EspRom.securityInfo(), 1_000, EspFlashFailure.CHIP_REJECTED)
         } catch (e: EspFlashException) {
-            if (e.failure != EspFlashFailure.CHIP_REJECTED) throw e
+            if (e.failure != EspFlashFailure.CHIP_REJECTED && e.failure != EspFlashFailure.TIMED_OUT) throw e
+            drain()
             null
         }
         if (security != null) {
@@ -583,6 +583,18 @@ class EspFlashSession(
         }
     }
 
+    private fun resetIntoRom(kind: EspReset.Kind): Boolean {
+        val holds = if (kind == EspReset.Kind.UART) EspReset.UART_HOLDS + EspReset.UART_HOLDS else listOf(0L)
+        for (hold in holds) {
+            checkCancel()
+            runCatching { EspReset.play(pipe, EspReset.enter(kind, hold), sleep) }
+            decoder.clear()
+            pending.clear()
+            if (sync()) return true
+        }
+        return false
+    }
+
     private fun sync(): Boolean {
         repeat(syncAttempts) {
             checkCancel()
@@ -612,10 +624,26 @@ class EspFlashSession(
             checkCancel()
             val frame = nextFrame(deadline) ?: throw EspFlashException(EspFlashFailure.TIMED_OUT)
             val response = EspRom.parse(frame) ?: continue
-            if (response.command != expect) continue
+            if (response.command != expect) {
+                // The ESP32 ROM answers a command it does not know under another opcode.
+                if (!response.ok && response.error == EspRom.INVALID_COMMAND) throw EspFlashException(failure)
+                continue
+            }
             if (!response.ok) throw EspFlashException(failure)
             return response
         }
+    }
+
+    /** Drops the extra error replies the ESP32 ROM can send after an unknown command. */
+    private fun drain() {
+        decoder.clear()
+        pending.clear()
+        val deadline = System.nanoTime() + 500 * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            checkCancel()
+            if (pipe.read(100).isEmpty()) break
+        }
+        decoder.clear()
     }
 
     private fun nextFrame(deadlineNs: Long): ByteArray? {

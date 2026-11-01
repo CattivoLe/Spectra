@@ -265,18 +265,30 @@ class UsbEspFlasher(context: Context) {
             return null
         }
         val control = comm ?: data
-        val ch340 = device.vendorId == CH340
-        if (ch340) {
-            if (!initCh340(connection)) {
-                connection.close()
-                return null
-            }
-        } else {
-            val coding = byteArrayOf(0x00, 0xC2.toByte(), 0x01, 0x00, 0, 0, 8)
-            connection.controlTransfer(0x21, 0x20, 0, control.id, coding, coding.size, 300)
+        // The CH9102 shares the CH340 vendor id but is a plain CDC-ACM device.
+        val bridge = when {
+            comm != null -> Bridge.CDC
+            device.vendorId == CH340 -> Bridge.CH340
+            device.vendorId == SILABS -> Bridge.CP210X
+            else -> Bridge.CDC
         }
-        return CdcPipe(connection, data, comm, input, output, control, ch340)
+        val ready = when (bridge) {
+            Bridge.CH340 -> initCh340(connection)
+            Bridge.CP210X -> initCp210x(connection, data.id)
+            Bridge.CDC -> {
+                val coding = byteArrayOf(0x00, 0xC2.toByte(), 0x01, 0x00, 0, 0, 8)
+                connection.controlTransfer(0x21, 0x20, 0, control.id, coding, coding.size, 300)
+                true
+            }
+        }
+        if (!ready) {
+            connection.close()
+            return null
+        }
+        return CdcPipe(connection, data, comm, input, output, control, bridge)
     }
+
+    private enum class Bridge { CDC, CH340, CP210X }
 
     private fun board(device: UsbDevice): Board? {
         if (device.vendorId !in VENDORS) return null
@@ -306,7 +318,7 @@ class UsbEspFlasher(context: Context) {
         private val input: UsbEndpoint,
         private val output: UsbEndpoint,
         private val control: UsbInterface,
-        private val ch340: Boolean,
+        private val bridge: Bridge,
     ) : EspPipe {
         private val buffer = ByteArray(16 * 1024)
 
@@ -326,14 +338,22 @@ class UsbEspFlasher(context: Context) {
         }
 
         override fun setLines(dtr: Boolean, rts: Boolean) {
-            if (ch340) {
-                // CH340 modem bits are active-low in the vendor request.
-                val lines = (if (dtr) 0x20 else 0) or (if (rts) 0x40 else 0)
-                connection.controlTransfer(0x40, 0xA4, lines.inv() and 0xFFFF, 0, null, 0, 200)
-                return
+            when (bridge) {
+                Bridge.CH340 -> {
+                    // CH340 modem bits are active-low in the vendor request.
+                    val lines = (if (dtr) 0x20 else 0) or (if (rts) 0x40 else 0)
+                    connection.controlTransfer(0x40, 0xA4, lines.inv() and 0xFFFF, 0, null, 0, 200)
+                }
+                Bridge.CP210X -> {
+                    // SET_MHS: the high byte says which of the low bits to apply.
+                    val lines = 0x0300 or (if (dtr) 1 else 0) or (if (rts) 2 else 0)
+                    connection.controlTransfer(0x41, 0x07, lines, data.id, null, 0, 200)
+                }
+                Bridge.CDC -> {
+                    val value = (if (dtr) 1 else 0) or (if (rts) 2 else 0)
+                    connection.controlTransfer(0x21, 0x22, value, control.id, null, 0, 200)
+                }
             }
-            val value = (if (dtr) 1 else 0) or (if (rts) 2 else 0)
-            connection.controlTransfer(0x21, 0x22, value, control.id, null, 0, 200)
         }
 
         override fun close() {
@@ -347,7 +367,8 @@ class UsbEspFlasher(context: Context) {
         const val ACTION_USB_PERMISSION = "cattivole.spectra.USB_PERMISSION"
         const val ESPRESSIF = 0x303A
         const val CH340 = 0x1A86
-        val VENDORS = setOf(ESPRESSIF, CH340, 0x10C4, 0x0403)
+        const val SILABS = 0x10C4
+        val VENDORS = setOf(ESPRESSIF, CH340, SILABS, 0x0403)
         val BUNDLED = listOf(
             "spectra-flash-esp32s3.zip",
             "spectra-flash-esp32c5.zip",
@@ -364,6 +385,15 @@ class UsbEspFlasher(context: Context) {
             if (!out(0xA1, 0x501F, 0xD90A)) return false
             if (!setCh340Baud(connection, 115200)) return false
             return connection.controlTransfer(0x40, 0xA4, 0xFFFF, 0, null, 0, 1_000) >= 0
+        }
+
+        /** The CP210x UART stays off until IFC_ENABLE, and it ignores CDC line coding. */
+        fun initCp210x(connection: UsbDeviceConnection, iface: Int): Boolean {
+            fun out(request: Int, value: Int, data: ByteArray? = null) =
+                connection.controlTransfer(0x41, request, value, iface, data, data?.size ?: 0, 1_000) >= 0
+            val baud = 115200
+            val rate = byteArrayOf(baud.toByte(), (baud shr 8).toByte(), (baud shr 16).toByte(), (baud shr 24).toByte())
+            return out(0x00, 0x0001) && out(0x03, 0x0800) && out(0x1E, 0, rate)
         }
 
         fun setCh340Baud(connection: UsbDeviceConnection, baud: Int): Boolean {

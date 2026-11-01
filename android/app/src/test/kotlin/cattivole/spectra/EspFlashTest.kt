@@ -73,6 +73,15 @@ class EspFlashTest {
     }
 
     @Test
+    fun uartResetHoldsIo0LowForTheRequestedTime() {
+        val steps = EspReset.enter(EspReset.Kind.UART, 550)
+        val io0Low = steps.single { it.dtr && !it.rts }
+        assertEquals(550L, io0Low.waitMs)
+        assertEquals(false, steps.last().dtr)
+        assertEquals(false, steps.last().rts)
+    }
+
+    @Test
     fun bundleAcceptsZipAndRejectsAnAppImage() {
         val boot = byteArrayOf(0xE9.toByte(), 1, 2, 3, 4, 5, 6, 7)
         val app = byteArrayOf(0xE9.toByte(), 9, 9, 9)
@@ -251,7 +260,8 @@ private class FakeRom : EspPipe {
             EspRom.SECURITY -> {
                 sawSecurity = true
                 if (!securityOk) {
-                    reply(command, status = 1, error = 0x05)
+                    // The original ESP32 ROM rejects it under another opcode, sometimes more than once.
+                    repeat(2) { reply(0x00, status = 1, error = 0x05) }
                 } else {
                     val payload = ByteArray(20)
                     payload[12] = chipId.toByte()
