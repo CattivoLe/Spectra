@@ -36,6 +36,27 @@ struct SubnetInfo {
     /// lease change, unlike `localIP`.
     var networkLabel: String { "\(formatIP(networkValue))/\(cidr)" }
 
+    /// Whether Wi-Fi has a global IPv6 address: joined to a network that
+    /// simply offers no IPv4.
+    static func hasRoutableIPv6(interface: String = "en0") -> Bool {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return false }
+        defer { freeifaddrs(first) }
+        var current: UnsafeMutablePointer<ifaddrs>? = first
+        while let ifa = current {
+            if String(cString: ifa.pointee.ifa_name) == interface,
+               let sa = ifa.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET6) {
+                let bytes = sa.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
+                    withUnsafeBytes(of: $0.pointee.sin6_addr) { Array($0) }
+                }
+                // Link-local fe80::/10 is on every interface; 2000::/3 is global.
+                if bytes[0] & 0xE0 == 0x20 { return true }
+            }
+            current = ifa.pointee.ifa_next
+        }
+        return false
+    }
+
     static func current() -> SubnetInfo? {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
@@ -387,7 +408,11 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
 
     private func note(_ result: NWBrowser.Result, rank: Int, service: String) {
         guard !finished, case .service(let name, _, _, _) = result.endpoint else { return }
-        if let model = bonjourValue(result, key: "model") ?? bonjourValue(result, key: "md") {
+        // AirPlay audio keeps the model in "am"; its "md" lists metadata types ("0,1,2").
+        let modelValue = service.contains("raop")
+            ? bonjourValue(result, key: "am")
+            : bonjourValue(result, key: "model") ?? bonjourValue(result, key: "md")
+        if let model = modelValue {
             modelByEndpoint[result.endpoint] = model
         }
         let model = modelByEndpoint[result.endpoint]
@@ -539,6 +564,9 @@ final class LANScanner {
     enum State: Equatable {
         case idle
         case noNetwork
+        /// Wi-Fi is up but has no IPv4 subnet, as on an IPv6-only network:
+        /// the scan walks IPv4 addresses, so there is nothing to sweep.
+        case ipv6Only
         case scanning(progress: Double, phase: String)
         case done
     }
@@ -548,14 +576,33 @@ final class LANScanner {
     private(set) var subnetInfo: SubnetInfo?
     private(set) var scanCount = 0
     private(set) var lastScanDate: Date?
+    /// What the last finished scan learned about new hosts on this network.
+    private(set) var lastVerdict: KnownHosts.Verdict?
+    /// Hosts every network has shown before, to tell a newcomer apart.
+    let knownHosts: KnownHosts
+    /// The user's names and verdicts for hosts.
+    let labels: DeviceLabels
+    /// The Wi-Fi name, when the user lets the app read it.
+    let wifi: WiFiInfo
+    /// Set while the router is being asked for its port forwardings.
+    private(set) var checkingForwarding = false
 
     private var scanTask: Task<Void, Never>?
     private var portScanTask: Task<Void, Never>?
+    private var forwardingTask: Task<Void, Never>?
 
+    init(knownHosts: KnownHosts = KnownHosts(), labels: DeviceLabels = DeviceLabels(), wifi: WiFiInfo = WiFiInfo()) {
+        self.knownHosts = knownHosts
+        self.labels = labels
+        self.wifi = wifi
+    }
+
+    /// This iPhone, the gateway, then newcomers, then everything else by address.
     var sortedDevices: [LANDevice] {
         devices.values.sorted { a, b in
             if a.isLocalDevice != b.isLocalDevice { return a.isLocalDevice }
             if a.isGateway != b.isGateway { return a.isGateway }
+            if a.isNew != b.isNew { return a.isNew }
             let aIP = parseIP(a.ipAddress) ?? 0
             let bIP = parseIP(b.ipAddress) ?? 0
             return aIP < bIP
@@ -566,6 +613,9 @@ final class LANScanner {
     /// enriches its history session instead of starting a new one. Prefers the
     /// gateway's hardware address; falls back to the subnet.
     var networkKey: String? {
+        if let ssid = wifi.current?.ssid, !ssid.isEmpty {
+            return "lan:ssid:\(ssid)"
+        }
         if let gateway = devices.values.first(where: { $0.isGateway })?.macAddress {
             return "lan:gw:\(gateway.description)"
         }
@@ -574,11 +624,63 @@ final class LANScanner {
     }
 
     /// Human label for the joined network, shown in History's by-place view.
-    var networkLabel: String? { subnetInfo?.networkLabel }
+    var networkLabel: String? { wifi.current?.ssid ?? subnetInfo?.networkLabel }
+
+    var gateway: LANDevice? { devices.values.first { $0.isGateway } }
 
     var isScanning: Bool {
         if case .scanning = state { return true }
         return false
+    }
+
+    /// Hosts marked new since the list was last cleared, strongest claim first.
+    var newDevices: [LANDevice] { sortedDevices.filter(\.isNew) }
+
+    /// Whether this network has a baseline to compare scans against.
+    var hasBaseline: Bool {
+        guard let key = networkKey else { return false }
+        return knownHosts.knows(network: key)
+    }
+
+    /// Drops what is known about the joined network and the New marks with it.
+    func forgetKnownHosts() {
+        guard let key = networkKey else { return }
+        knownHosts.forget(network: key)
+        for device in devices.values { device.isNew = false }
+        lastVerdict = nil
+    }
+
+    /// Asks the router for its UPnP port-forwarding table again, by hand.
+    func checkPortForwarding() {
+        forwardingTask?.cancel()
+        forwardingTask = Task { @MainActor in await refreshPortForwarding() }
+    }
+
+    /// Reads the gateway's forwardings and notes on every host which rules
+    /// point at it. Quiet when there is no gateway or it does not speak UPnP.
+    private func refreshPortForwarding(now: Date = .now) async {
+        guard let router = gateway else { return }
+        checkingForwarding = true
+        defer { checkingForwarding = false }
+        let ip = router.ipAddress
+        let table = await runInBackground { LANProbes.portForwarding(gateway: ip, now: now) }
+        guard !Task.isCancelled, devices[ip] === router else { return }
+        router.profile.portForwarding = table ?? PortForwarding(checkedAt: now, supported: false, externalIP: nil, mappings: [])
+        distributeForwardings()
+    }
+
+    private func distributeForwardings() {
+        let rules = gateway?.profile.portForwarding?.mappings.filter(\.enabled) ?? []
+        for device in devices.values where !device.isGateway {
+            let mine = rules.filter { $0.internalClient == device.ipAddress }
+            if device.profile.inbound != mine { device.profile.inbound = mine }
+        }
+    }
+
+    /// Marks the hosts this network has not shown before and records the rest.
+    private func classifyNewHosts(now: Date) {
+        guard let key = networkKey else { return }
+        lastVerdict = knownHosts.classify(Array(devices.values), network: key, now: now)
     }
 
     // MARK: Actions
@@ -636,6 +738,7 @@ final class LANScanner {
         subnetInfo = nil
         scanCount = 0
         lastScanDate = nil
+        lastVerdict = nil
         state = .idle
     }
 
@@ -643,11 +746,12 @@ final class LANScanner {
 
     func loadDemo() {
         let now = Date.now
+        Task { await wifi.refresh() }
         subnetInfo = SubnetInfo(localIP: "192.168.1.42", netmask: "255.255.255.0", gateway: "192.168.1.1")
         let demoDevices: [(String, [UInt8], String?, Bool, Bool, [DiscoveredPort])] = [
             ("192.168.1.1",   [0x50, 0xC7, 0xBF, 0x12, 0x34, 0x56], "TL-WR841N.local",    true,  false, [.init(number: 80, service: "HTTP"), .init(number: 443, service: "HTTPS")]),
             ("192.168.1.42",  [0xF0, 0x18, 0x98, 0xAA, 0xBB, 0xCC], nil,                   false, true,  []),
-            ("192.168.1.10",  [0x3C, 0x22, 0xFB, 0x11, 0x22, 0x33], "Alexs-MBP.local",     false, false, [.init(number: 22, service: "SSH"), .init(number: 5900, service: "VNC")]),
+            ("192.168.1.10",  [0x3C, 0x22, 0xFB, 0x11, 0x22, 0x33], "MacBook-Pro.local",   false, false, [.init(number: 22, service: "SSH"), .init(number: 5900, service: "VNC")]),
             ("192.168.1.15",  [0x08, 0x08, 0xC2, 0x44, 0x55, 0x66], "Samsung-TV.local",    false, false, [.init(number: 8001, service: "HTTP"), .init(number: 8002, service: "HTTPS")]),
             ("192.168.1.20",  [0x48, 0xD6, 0xD5, 0x77, 0x88, 0x99], "Chromecast.local",    false, false, [.init(number: 8008, service: "HTTP")]),
             ("192.168.1.25",  [0x68, 0x54, 0xFD, 0xDD, 0xEE, 0xFF], "Echo-Dot.local",      false, false, [.init(number: 443, service: "HTTPS"), .init(number: 8443, service: "HTTPS")]),
@@ -659,8 +763,14 @@ final class LANScanner {
             ("192.168.1.60",  [0x44, 0x19, 0xB6, 0x10, 0x20, 0x30], nil,                   false, false, [.init(number: 80, service: "HTTP"), .init(number: 554, service: "RTSP"), .init(number: 8000, service: "HTTP")]),
             ("192.168.1.70",  [0x8C, 0xEC, 0x4B, 0x21, 0x32, 0x43], nil,                   false, false, [.init(number: 445, service: "SMB"), .init(number: 139, service: "NetBIOS")]),
         ]
+        var demo = demoDevices
+        // A rescan brings in one host the first demo did not have, so the
+        // New mark can be seen in the simulator.
+        if !devices.isEmpty {
+            demo.append(("192.168.1.80", [0x02, 0x9A, 0x11, 0xF2, 0x33, 0x44], nil, false, false, [.init(number: 22, service: "SSH"), .init(number: 23, service: "Telnet")]))
+        }
         var result: [String: LANDevice] = [:]
-        for (ip, mac, hostname, gw, local, ports) in demoDevices {
+        for (ip, mac, hostname, gw, local, ports) in demo {
             result[ip] = LANDevice(
                 ipAddress: ip,
                 macAddress: MACAddress(bytes: mac),
@@ -669,6 +779,7 @@ final class LANScanner {
                 portsScanned: !ports.isEmpty,
                 isGateway: gw,
                 isLocalDevice: local,
+                isNew: devices[ip]?.isNew ?? false,
                 firstSeen: now,
                 lastSeen: now
             )
@@ -681,8 +792,19 @@ final class LANScanner {
         result["192.168.1.70"]?.profile = LANProfile(
             windows: WindowsHost(computerName: "OFFICE-PC", domain: "HOME", shares: ["Users", "Public"], guestSession: true)
         )
+        result["192.168.1.1"]?.profile = LANProfile(
+            upnp: UPnPIdentity(friendlyName: "TL-WR841N", manufacturer: "TP-Link", model: "TL-WR841N", deviceType: "InternetGatewayDevice", server: "Linux UPnP/1.0"),
+            portForwarding: PortForwarding(checkedAt: now, supported: true, externalIP: "203.0.113.17", mappings: [
+                PortMapping(externalPort: 8080, internalPort: 80, internalClient: "192.168.1.60", proto: "TCP", description: "Camera", enabled: true, leaseSeconds: 0, remoteHost: nil),
+                PortMapping(externalPort: 3389, internalPort: 3389, internalClient: "192.168.1.70", proto: "TCP", description: "Remote desktop", enabled: true, leaseSeconds: 0, remoteHost: nil),
+                PortMapping(externalPort: 51413, internalPort: 51413, internalClient: "192.168.1.10", proto: "TCP", description: "Transmission", enabled: false, leaseSeconds: 0, remoteHost: nil),
+            ])
+        )
+        for device in result.values { labels.apply(to: device) }
         devices = result
-        scanCount = 1
+        distributeForwardings()
+        classifyNewHosts(now: now)
+        scanCount += 1
         lastScanDate = now
         state = .done
     }
@@ -696,10 +818,11 @@ final class LANScanner {
         #endif
 
         guard let info = SubnetInfo.current() else {
-            state = .noNetwork
+            state = SubnetInfo.hasRoutableIPv6() ? .ipv6Only : .noNetwork
             return
         }
         subnetInfo = info
+        await wifi.refresh()
 
         let hosts = info.allHostIPs
         guard !hosts.isEmpty else {
@@ -798,11 +921,13 @@ final class LANScanner {
                 portsScanned: existing?.portsScanned ?? false,
                 isGateway: ip == info.gateway,
                 isLocalDevice: ip == info.localIP,
+                isNew: existing?.isNew ?? false,
                 profile: existing?.profile ?? LANProfile(),
                 firstSeen: existing?.firstSeen ?? now,
                 lastSeen: now
             )
             device.preservePinnedName(from: existing)
+            labels.apply(to: device)
             newDevices[ip] = device
         }
 
@@ -853,6 +978,14 @@ final class LANScanner {
                 device.services = services
             }
         }
+
+        // Names are in, so a host can be matched by them even without a MAC.
+        for device in newDevices.values { labels.apply(to: device) }
+        classifyNewHosts(now: now)
+
+        state = .scanning(progress: 0.96, phase: String(localized: "Asking the router…"))
+        await refreshPortForwarding(now: now)
+        if Task.isCancelled { return }
 
         scanCount += 1
         lastScanDate = now

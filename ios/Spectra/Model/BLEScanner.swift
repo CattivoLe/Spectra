@@ -4,11 +4,8 @@ import Observation
 
 /// Listens for every Bluetooth LE advertisement the iPhone can hear.
 ///
-/// The sensor link already owns a central, filtered to the Cardputer's
-/// service. This is a second central so that scan and that connection do
-/// not have to share one session. An unfiltered scan only delivers while
-/// the app is in the foreground, so it is suspended as soon as the scene
-/// backgrounds.
+/// An unfiltered scan only delivers while the app is in the foreground, so it
+/// is suspended as soon as the scene backgrounds.
 @Observable
 final class BLEScanner: NSObject {
     enum Availability: Equatable {
@@ -37,6 +34,10 @@ final class BLEScanner: NSObject {
         case connecting
         case discovering
         case connected
+        /// The device dropped the link after giving its services, as many
+        /// headphones and trackers do within a second or two. What was read
+        /// stays on screen.
+        case ended
         case failed(String)
     }
 
@@ -116,8 +117,10 @@ final class BLEScanner: NSObject {
             return
         }
         cancelConnection()
+        // Reconnecting to the same device adds to what was read before
+        // instead of blanking the list, which made the screen jump.
+        if gattDeviceID != id { gattServices = [] }
         gattDeviceID = id
-        gattServices = []
         gattState = .connecting
         peripheral.delegate = self
         central.connect(peripheral, options: nil)
@@ -293,6 +296,11 @@ extension BLEScanner: CBCentralManagerDelegate {
         // A disconnect the user did not ask for is a failure; an intentional one
         // has already reset the state in disconnectGATT.
         if case .idle = gattState {
+            return
+        }
+        if !gattServices.isEmpty {
+            // Keep the device bound so its services stay visible.
+            gattState = .ended
             return
         }
         if let error {

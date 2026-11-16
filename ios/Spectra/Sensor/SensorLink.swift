@@ -445,6 +445,12 @@ final class SensorLink: NSObject {
         }
     }
 
+    /// Names of the networks a password is stored for.
+    var knownSSIDs: Set<String> {
+        _ = knownRevision
+        return Set(knownNetworks.all().filter { !$0.password.isEmpty }.map(\.ssid))
+    }
+
     /// The stored password for this network name, or nil when none was saved.
     func knownPassword(for ssid: String) -> String? {
         _ = knownRevision

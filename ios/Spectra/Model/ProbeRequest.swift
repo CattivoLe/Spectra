@@ -13,7 +13,7 @@ nonisolated struct ProbeRequest: Identifiable, Equatable, Sendable {
     var id: String { "\(mac)-\(ssid ?? "")" }
 
     var manufacturer: String? {
-        mac.isLocallyAdministered ? nil : OUIDatabase.lookup(mac.oui)
+        mac.isLocallyAdministered ? nil : OUIDatabase.lookup(bytes: mac.bytes)
     }
 
     var displayName: String {
@@ -32,7 +32,7 @@ struct ProbingDevice: Identifiable, Equatable, Codable {
     var id: BSSID { mac }
 
     var manufacturer: String? {
-        mac.isLocallyAdministered ? nil : OUIDatabase.lookup(mac.oui)
+        mac.isLocallyAdministered ? nil : OUIDatabase.lookup(bytes: mac.bytes)
     }
 
     var displayName: String {

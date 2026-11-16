@@ -28,6 +28,16 @@ struct SpeedSample: Codable, Equatable, Sendable {
     var latencyMs: Int?
     var downBps: Double?
     var upBps: Double?
+    // From the full speed test; the quick check inside a connection check leaves these nil.
+    var jitterMs: Int?
+    var loadedLatencyMs: Int?
+    var streams: Int?
+    var downSamples: [Double]?
+    var upSamples: [Double]?
+    var server: String?
+
+    /// Whether this came from the full test rather than the quick check.
+    var isFull: Bool { streams != nil }
 }
 
 struct RegionReach: Codable, Equatable, Sendable, Identifiable {
@@ -43,12 +53,16 @@ struct AbroadView: Codable, Equatable, Sendable, Identifiable {
     var city: String
     var ok: Bool
     var millis: Int?
+    /// The check-host node that pinged, to ask it again.
+    var node: String? = nil
     var id: String { code + city }
 }
 
 struct TraceHop: Codable, Equatable, Sendable {
     var address: String?
     var millis: Int?
+    /// Reverse DNS of the address, when it has one.
+    var name: String? = nil
 }
 
 struct LocalTrace: Codable, Equatable, Sendable {
@@ -77,6 +91,75 @@ enum CheckStart: Equatable, Sendable {
     case failed
 }
 
+/// One reference site's certificate as seen from this network.
+struct TLSObservation: Codable, Equatable, Sendable, Identifiable {
+    var host: String
+    var issuer: String?
+    var trusted: Bool
+    /// The issuer is one this site is known to use, or a public authority.
+    var expected: Bool
+    var error: String?
+    // The certificate itself, for the detail screen. Absent in checks saved
+    // before it was kept.
+    var subject: String? = nil
+    var names: [String]? = nil
+    var issuerCommonName: String? = nil
+    var notBefore: Date? = nil
+    var notAfter: Date? = nil
+    var chain: [String]? = nil
+    var fingerprint: String? = nil
+    var trustError: String? = nil
+    var id: String { host }
+}
+
+/// Whether HTTPS to well-known sites arrives untouched.
+struct TLSCheck: Codable, Equatable, Sendable {
+    var observations: [TLSObservation]
+
+    /// A certificate iOS rejects, an issuer no public authority would use, or
+    /// one issuer signing for every site at once: something in the path
+    /// re-signs HTTPS.
+    var intercepted: Bool {
+        let seen = observations.filter { $0.error == nil }
+        if seen.contains(where: { !$0.trusted || !$0.expected }) { return true }
+        let issuers = Set(seen.compactMap { $0.issuer?.lowercased() })
+        return seen.count >= 3 && issuers.count == 1
+    }
+
+    var reachable: Int { observations.filter { $0.error == nil }.count }
+}
+
+/// Who really answers this network's name lookups.
+struct DNSReport: Codable, Equatable, Sendable {
+    /// Resolvers the phone is configured to ask.
+    var configured: [String] = []
+    /// The address the authoritative servers see the lookups come from.
+    var resolverIP: String?
+    var resolverName: String?
+    var resolverCountry: String?
+    /// The resolver returned an address for a name that does not exist.
+    var liesAboutMissingNames: Bool?
+    var dohReachable: Bool?
+    var dotReachable: Bool?
+}
+
+/// One port on the public address, tried from the internet.
+struct ExposedPort: Codable, Equatable, Sendable, Identifiable {
+    var port: Int
+    var open: Bool
+    var id: Int { port }
+}
+
+/// Which ports of the public address answer from outside.
+struct ExposureReport: Codable, Equatable, Sendable {
+    var ip: String
+    var checkedAt: Date
+    var ports: [ExposedPort]
+    var note: RemoteNote
+
+    var openPorts: [ExposedPort] { ports.filter(\.open) }
+}
+
 /// Filled in as a check runs. Replaced wholesale so SwiftUI notices each stage.
 struct LinkSnapshot: Codable, Equatable, Sendable {
     var checkedAt = Date()
@@ -95,16 +178,23 @@ struct LinkSnapshot: Codable, Equatable, Sendable {
     var localTrace: LocalTrace?
     var remoteTraces: [RemoteTrace] = []
     var traceNote: RemoteNote = .none
+    var tls: TLSCheck?
+    var resolver: DNSReport?
+    var exposure: ExposureReport?
+    /// The traffic light: full access, allow-list only, or nothing.
+    var access: AccessReport?
 }
 
 /// A finished connection check, kept on the LAN history session for that network.
 struct SavedConnection: Codable, Equatable, Identifiable {
     var viaVpn: Bool
+    /// The check went out through the mobile network. Nil in older saves.
+    var viaCellular: Bool? = nil
     var snapshot: LinkSnapshot
     var id: Date { snapshot.checkedAt }
 }
 
-/// Parsers for the replies a connection check collects. Kept in step with Android `LinkParse`.
+/// Parsers for the replies a connection check collects.
 enum LinkParse {
     static func external(fromTrace text: String) -> ExternalAddress? {
         var map: [String: String] = [:]
@@ -169,7 +259,7 @@ enum LinkParse {
                 continue
             }
             guard let outer = value as? [Any], let pings = outer.first as? [Any] else {
-                views.append(AbroadView(code: node.code, city: node.city, ok: false, millis: nil))
+                views.append(AbroadView(code: node.code, city: node.city, ok: false, millis: nil, node: node.id))
                 continue
             }
             var best: Int?
@@ -180,7 +270,7 @@ enum LinkParse {
                 guard let ms = secondsToMillis(row.dropFirst().first) else { continue }
                 best = min(best ?? ms, ms)
             }
-            views.append(AbroadView(code: node.code, city: node.city, ok: ok, millis: ok ? best : nil))
+            views.append(AbroadView(code: node.code, city: node.city, ok: ok, millis: ok ? best : nil, node: node.id))
         }
         return (complete, views)
     }
@@ -204,6 +294,25 @@ enum LinkParse {
             ))
         }
         return (complete, traces)
+    }
+
+    /// A check-tcp result for one node: true when it connected, false when it
+    /// could not, nil while the node is still working.
+    static func tcpOpen(_ data: Data, node: String) -> Bool? {
+        guard let root = jsonObject(data), let value = root[node], !(value is NSNull) else { return nil }
+        guard let rows = value as? [Any], let first = rows.first as? [String: Any] else { return false }
+        return first["time"] != nil && first["error"] == nil
+    }
+
+    /// `nameserver` lines of a resolv.conf, in order.
+    static func nameservers(in text: String) -> [String] {
+        text.split(whereSeparator: \.isNewline).compactMap { line in
+            let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            guard parts.count >= 2, parts[0] == "nameserver" else { return nil }
+            let address = String(parts[1])
+            // Scoped IPv6 link-local addresses carry an interface suffix.
+            return address.split(separator: "%").first.map(String.init) ?? address
+        }
     }
 
     static func compactPath(_ hops: [TraceHop], limit: Int = 5) -> String {

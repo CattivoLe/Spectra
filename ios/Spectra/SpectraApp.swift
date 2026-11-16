@@ -1,7 +1,9 @@
 import SwiftUI
+import UserNotifications
 
 @main
 struct SpectraApp: App {
+    @UIApplicationDelegateAdaptor(SpectraAppDelegate.self) private var appDelegate
     @State private var store: NetworkStore
     @State private var history: HistoryStore
     @State private var link: SensorLink
@@ -12,6 +14,10 @@ struct SpectraApp: App {
     @State private var watchList = WatchList()
     @State private var joiner = WiFiJoiner()
     @State private var sniffer = TrafficSniffer()
+    @State private var speedTester = SpeedTester()
+    @State private var resourceWatch = ResourceWatch()
+    @State private var routeTracer = RouteTracer()
+    @State private var assistant = AssistantModel()
 
     init() {
         let store = NetworkStore()
@@ -19,16 +25,25 @@ struct SpectraApp: App {
         _store = State(initialValue: store)
         _history = State(initialValue: history)
         _link = State(initialValue: SensorLink(store: store, history: history))
+        UNUserNotificationCenter.current().delegate = NewDeviceNotifier.presenter
     }
 
     var body: some Scene {
         WindowGroup {
             RootView()
+                .assistantLock(assistant)
+                .environment(assistant)
                 .environment(store)
                 .environment(history)
                 .environment(link)
                 .environment(lanScanner)
+                .environment(lanScanner.knownHosts)
+                .environment(lanScanner.labels)
+                .environment(lanScanner.wifi)
                 .environment(linkProbe)
+                .environment(speedTester)
+                .environment(resourceWatch)
+                .environment(routeTracer)
                 .environment(bleScanner)
                 .environment(location)
                 .environment(watchList)
@@ -45,13 +60,19 @@ struct SpectraApp: App {
                         location?.coordinate.map { ($0.latitude, $0.longitude) }
                     }
                     location.start()
+                    // The assistant reads what the scanners have found; it cannot start scans or change anything.
+                    let sources = AssistantSources(
+                        store: store, lan: lanScanner, ble: bleScanner, history: history,
+                        link: link, probe: linkProbe, joiner: joiner, speed: speedTester
+                    )
+                    assistant.dataSource = { question in sources.attachment(for: question) }
                 }
         }
     }
 }
 
 struct RootView: View {
-    enum Tab: Hashable { case networks, lan, bluetooth, history, sensor }
+    enum Tab: Hashable { case networks, lan, bluetooth, history, assistant }
 
     @Environment(HistoryStore.self) private var history
     @Environment(LinkProbe.self) private var linkProbe
@@ -61,7 +82,9 @@ struct RootView: View {
     @Environment(BLEScanner.self) private var bleScanner
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("autosaveHistory") private var autosave = true
+    @AppStorage("notifyNewDevices") private var notifyNewDevices = true
     @State private var tab: Tab = .networks
+    @State private var showSensor = false
     @State private var notice: SaveNotice?
 
     /// Folds whatever each source has found into its History session. Each
@@ -79,10 +102,18 @@ struct RootView: View {
         history.upsertBluetooth(Array(bleScanner.devices.values), source: "This iPhone")
     }
 
+    /// One notice per finished scan, for the hosts that scan marked new.
+    private func announceNewDevices() {
+        guard notifyNewDevices, let verdict = lanScanner.lastVerdict, !verdict.newIPs.isEmpty else { return }
+        let found = verdict.newIPs.compactMap { lanScanner.devices[$0] }
+        let label = lanScanner.networkLabel
+        Task { await NewDeviceNotifier.notify(found, networkLabel: label) }
+    }
+
     private func keepConnection(_ snapshot: LinkSnapshot, viaVpn: Bool) {
         guard autosave, snapshot.status != nil, snapshot.status != .noNetwork else { return }
         history.upsertConnection(
-            SavedConnection(viaVpn: viaVpn, snapshot: snapshot),
+            SavedConnection(viaVpn: viaVpn, viaCellular: ProbeRoute.current() == .cellular, snapshot: snapshot),
             networkKey: lanScanner.networkKey,
             networkLabel: lanScanner.networkLabel,
             source: "This iPhone"
@@ -91,7 +122,7 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            NetworksView(openSensor: { tab = .sensor })
+            NetworksView(openSensor: { showSensor = true })
                 .tabItem { Label("Wi‑Fi", systemImage: "wifi") }
                 .tag(Tab.networks)
             LANView()
@@ -103,9 +134,12 @@ struct RootView: View {
             HistoryView()
                 .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
                 .tag(Tab.history)
+            AssistantView()
+                .tabItem { Label("Assistant", systemImage: "sparkles") }
+                .tag(Tab.assistant)
+        }
+        .sheet(isPresented: $showSensor) {
             SensorView()
-                .tabItem { Label("Sensor", systemImage: "antenna.radiowaves.left.and.right") }
-                .tag(Tab.sensor)
         }
         .overlay(alignment: .top) {
             if let notice {
@@ -132,7 +166,10 @@ struct RootView: View {
             if phase != .active { autosaveNow() }
         }
         .onChange(of: store.scanCount) { _, _ in autosaveNow() }
-        .onChange(of: lanScanner.scanCount) { _, _ in autosaveNow() }
+        .onChange(of: lanScanner.scanCount) { _, _ in
+            autosaveNow()
+            announceNewDevices()
+        }
         .onChange(of: history.lastSave) { _, saved in
             guard let saved else { return }
             withAnimation(.spring(duration: 0.35)) { notice = saved }

@@ -7,6 +7,8 @@ struct BLEView: View {
     @AppStorage("bleSort") private var sort: Sort = .signal
     @AppStorage("bleScope") private var scope: Scope = .all
     @AppStorage("bleShowOutOfRange") private var showOutOfRange = false
+    @AppStorage("autosaveHistory") private var autosave = true
+    @Environment(HistoryStore.self) private var history
 
     enum Sort: String, CaseIterable, Identifiable {
         case signal, name, recent
@@ -42,6 +44,13 @@ struct BLEView: View {
                 BLEDeviceDetailView(id: id)
             }
             .toolbar {
+                if !autosave {
+                    ToolbarItem(placement: .topBarLeading) {
+                        SaveToHistoryButton(disabled: !scanner.hasDevices) {
+                            history.upsertBluetooth(Array(scanner.devices.values), source: "This iPhone")
+                        }
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     BLEStatusBar()
                 }
@@ -80,6 +89,12 @@ private struct BLEDeviceList: View {
         WatchList.present(watchList.ids, in: Array(scanner.devices.values), now: scanner.now)
     }
 
+    /// Tags heard recently, most worrying first.
+    private var trackers: [(device: BLEDevice, assessment: TrackerAssessment)] {
+        let now = scanner.now
+        return TrackerDetector.trackers(in: scanner.devices.values.filter { $0.isNearby(at: now) }, now: now)
+    }
+
     private var visible: [BLEDevice] {
         let now = scanner.now
         let query = search.trimmingCharacters(in: .whitespaces)
@@ -112,6 +127,25 @@ private struct BLEDeviceList: View {
 
     var body: some View {
         List {
+            if !trackers.isEmpty, search.isEmpty {
+                Section {
+                    ForEach(trackers, id: \.device.id) { item in
+                        NavigationLink(value: item.device.id) {
+                            TrackerRow(device: item.device, assessment: item.assessment)
+                        }
+                    }
+                } header: {
+                    Label("Trackers", systemImage: "tag.fill")
+                        .foregroundStyle(trackers.contains { $0.assessment.level == .alert } ? .red : .orange)
+                        .font(.subheadline.weight(.semibold))
+                } footer: {
+                    if trackers.contains(where: { $0.assessment.level == .alert }) {
+                        Text("A tag away from its owner has stayed near you for a while. Move somewhere else and check whether it is still here.")
+                    } else {
+                        Text("Tile, Samsung SmartTag, Chipolo and Find My Device tags report their position through other people's phones. One near its owner is just someone's keys.")
+                    }
+                }
+            }
             if !watching.isEmpty {
                 Section {
                     ForEach(watching) { device in
@@ -135,7 +169,7 @@ private struct BLEDeviceList: View {
                 } header: {
                     Text("\(scanner.nearbyCount) nearby")
                 } footer: {
-                    Text("iOS hears Bluetooth Low Energy advertisements only, and it hides the hardware address.")
+                    Text("iOS hears Bluetooth Low Energy advertisements only and hides the hardware address. It also withholds Apple's own advertisement data from apps, so AirTags show up as unknown devices; iOS itself warns when an AirTag that is not yours travels with you.")
                 }
             }
         }
@@ -370,7 +404,7 @@ struct BLEDeviceRow: View {
                             .fixedSize()
                     }
                     if device.isSpectraSensor {
-                        badge("Sensor", color: .blue)
+                        capsuleBadge("Sensor", color: .blue)
                     }
                     if isWatched {
                         Image(systemName: "star.fill")
@@ -420,15 +454,74 @@ struct BLEDeviceRow: View {
         }
     }
 
-    private func badge(_ text: LocalizedStringKey, color: Color) -> some View {
-        Text(text)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(color, in: .capsule)
-            .lineLimit(1)
-            .fixedSize()
-            .layoutPriority(-1)
+}
+
+/// A tag in the Trackers section: what it is, whether it has an owner nearby,
+/// and how long it has been within earshot.
+struct TrackerRow: View {
+    var device: BLEDevice
+    var assessment: TrackerAssessment
+
+    private var color: Color {
+        switch assessment.level {
+        case .alert: .red
+        case .watch: .orange
+        case .info: .secondary
+        }
     }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: assessment.level == .alert ? "exclamationmark.triangle.fill" : "tag.fill")
+                .font(.title3)
+                .foregroundStyle(color)
+                .frame(width: 30)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(device.displayName == assessment.kind.label ? device.displayName : "\(assessment.kind.label)")
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                    if device.displayName != assessment.kind.label, device.hasOwnName {
+                        Text(device.displayName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(assessment.level == .alert ? color : .secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Text("\(device.rssi)")
+                .font(.callout.monospacedDigit().weight(.semibold))
+                .accessibilityLabel("\(device.rssi) dBm")
+        }
+    }
+
+    private var detail: String {
+        var parts: [String] = []
+        if let owner = assessment.ownerLabel { parts.append(owner) }
+        let minutes = Int(assessment.presentFor / 60)
+        if minutes >= 1 {
+            parts.append(String(localized: "near you for \(minutes) min"))
+        } else {
+            parts.append(String(localized: "just appeared"))
+        }
+        if let battery = assessment.batteryLabel { parts.append(battery) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private func capsuleBadge(_ text: LocalizedStringKey, color: Color) -> some View {
+    Text(text)
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1)
+        .background(color, in: .capsule)
+        .lineLimit(1)
+        .fixedSize()
+        .layoutPriority(-1)
 }

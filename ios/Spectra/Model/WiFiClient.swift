@@ -20,7 +20,7 @@ nonisolated struct WiFiClient: Identifiable, Equatable, Codable, Sendable {
 
     /// The OUI manufacturer, when the MAC is not locally administered.
     var manufacturer: String? {
-        mac.isLocallyAdministered ? nil : OUIDatabase.lookup(mac.oui)
+        mac.isLocallyAdministered ? nil : OUIDatabase.lookup(bytes: mac.bytes)
     }
 
     /// A short display name: manufacturer when available, MAC otherwise.

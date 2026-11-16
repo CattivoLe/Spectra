@@ -319,7 +319,12 @@ struct LANIdentityTests {
         reply[2] = 0x81
         reply[3] = 0x80
         reply[7] = 1
-        let target: [UInt8] = [14] + Array("Galaxy-Z-Fold4".utf8) + [3] + Array("lan".utf8) + [0]
+        // Built in steps: one long `+` chain stops type-checking in reasonable time once more modules are imported.
+        var target: [UInt8] = [14]
+        target += Array("Galaxy-Z-Fold4".utf8)
+        target += [3]
+        target += Array("lan".utf8)
+        target += [0]
         reply.append(contentsOf: [0xC0, 0x0C, 0x00, 0x0C, 0x00, 0x01, 0, 0, 0x0E, 0x10, 0x00, UInt8(target.count)])
         reply.append(contentsOf: target)
         #expect(LANIdentity.parsePTR(reply, id: 0x1234) == "Galaxy-Z-Fold4.lan")
@@ -335,7 +340,7 @@ struct LANIdentityTests {
         #expect(NotableDevice.classify(manufacturer: "Apple", oui: nil, upnpType: nil, hasRTSP: false) == nil)
         #expect(NotableDevice.classify(manufacturer: "Apple", oui: nil, upnpType: nil, hasRTSP: true) == .camera)
         #expect(NotableDevice.classify(manufacturer: nil, oui: "44:19:B6", upnpType: nil, hasRTSP: false) == .camera)
-        #expect(OUIDatabase.lookup("44:19:B6") == nil)
+        #expect(OUIDatabase.lookup("44:19:B6") == "Hikvision")
         #expect(SuspiciousOUI.names["44:19:B6"] == "Hikvision")
     }
 

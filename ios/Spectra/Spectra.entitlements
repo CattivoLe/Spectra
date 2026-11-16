@@ -18,6 +18,11 @@
 	<array>
 		<string>packet-tunnel-provider</string>
 	</array>
+	<!-- The assistant loads a multi-gigabyte language model on the phone; without this
+	     the system kills the app at the default memory limit. Capability: "Increased
+	     Memory Limit" (free, enable it on the target in Xcode). -->
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
 	<!-- Shares captured flows / the local CA between app and extension. -->
 	<key>com.apple.security.application-groups</key>
 	<array>

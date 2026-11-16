@@ -152,6 +152,10 @@ final class DemoSensor {
             ("", 11, .none, .wpa2PSK, [.b, .g, .n], -81),
             ("iPhone 15", 1, .none, .wpa3PSK, [.b, .g, .n, .ax], -83),
             ("Rostelecom_A2", 13, .none, .wep, [.b, .g], -88),
+            // What an ESP32-C5 adds: the 5 GHz band.
+            ("Home-5G", 36, .above, .wpa2WPA3PSK, [.n, .ax], -55),
+            ("Keenetic-4120-5G", 44, .none, .wpa2PSK, [.n], -66),
+            ("Office_5G", 149, .above, .wpa2PSK, [.n, .ax], -74),
         ]
         return specs.enumerated().map { index, spec in
             let (ssid, channel, secondary, auth, caps, rssi) = spec

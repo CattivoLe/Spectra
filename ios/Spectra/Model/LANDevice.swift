@@ -3,6 +3,18 @@ import Foundation
 struct MACAddress: Hashable, Codable, Sendable, CustomStringConvertible {
     var bytes: [UInt8]
 
+    init(bytes: [UInt8]) {
+        self.bytes = bytes
+    }
+
+    /// Parses "aa:bb:cc:dd:ee:ff". iOS drops leading zeros ("0:1a:…"), so each part may be one digit.
+    init?(string: String) {
+        let parts = string.split(whereSeparator: { $0 == ":" || $0 == "-" })
+        let bytes = parts.compactMap { UInt8($0, radix: 16) }
+        guard parts.count == 6, bytes.count == 6 else { return nil }
+        self.bytes = bytes
+    }
+
     var description: String {
         bytes.map { String(format: "%02X", $0) }.joined(separator: ":")
     }
@@ -13,7 +25,7 @@ struct MACAddress: Hashable, Codable, Sendable, CustomStringConvertible {
 
     var isRandomized: Bool { (bytes.first ?? 0) & 0x02 != 0 }
 
-    var manufacturer: String? { OUIDatabase.lookup(oui) }
+    var manufacturer: String? { OUIDatabase.lookup(bytes: bytes) }
 }
 
 struct DiscoveredPort: Identifiable, Equatable, Codable, Sendable {
@@ -36,7 +48,7 @@ struct DiscoveredPort: Identifiable, Equatable, Codable, Sendable {
         (80, "HTTP"), (81, "HTTP"), (110, "POP3"), (111, "RPC"), (135, "MS RPC"),
         (139, "NetBIOS"), (143, "IMAP"), (443, "HTTPS"), (445, "SMB"), (515, "LPD"),
         (548, "AFP"), (554, "RTSP"), (631, "IPP"), (993, "IMAPS"), (1400, "Sonos"),
-        (8554, "RTSP"),
+        (8554, "RTSP"), (1935, "RTMP"),
         (1883, "MQTT"), (2049, "NFS"), (3000, "Dev"), (3283, "Apple Remote"),
         (3306, "MySQL"), (3389, "RDP"), (3689, "DAAP"), (5000, "UPnP"), (5001, "HTTPS"),
         (5357, "WSD"), (5432, "PostgreSQL"), (5555, "ADB"), (5900, "VNC"),
@@ -61,6 +73,15 @@ final class LANDevice: Identifiable {
     var portsScanned: Bool
     var isGateway: Bool
     var isLocalDevice: Bool
+    /// Never seen on this network before this scan. Set by `KnownHosts` once
+    /// the scan has learned the host's names; carried across rescans in the
+    /// same session so the mark stays until the list is cleared.
+    var isNew = false
+    /// What the user called this host, and what they think of it. Filled from
+    /// `DeviceLabels`; the scanner does not learn these.
+    var customName: String?
+    var trust: DeviceTrust = .unknown
+    var note: String?
     var profile: LANProfile {
         didSet { refreshPinnedName() }
     }
@@ -76,6 +97,7 @@ final class LANDevice: Identifiable {
     var id: String { ipAddress }
 
     var displayName: String {
+        if let customName { return customName }
         if let pinnedName, !Self.isWeakHostname(pinnedName) { return pinnedName }
         if let model = identity.model { return model }
         if let maker = identity.manufacturer ?? manufacturer { return maker }
@@ -117,10 +139,18 @@ final class LANDevice: Identifiable {
 
     /// "Android" and "android-1a2b…" are real DHCP names, but a worse title than a model.
     nonisolated static func isWeakHostname(_ name: String) -> Bool {
+        if isOpaqueIdentifier(name) { return true }
         let folded = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .replacingOccurrences(of: "-", with: " ")
             .replacingOccurrences(of: "_", with: " ")
         return folded == "android" || folded == "windows" || folded.hasPrefix("android ")
+    }
+
+    /// Long hex strings and UUIDs are identifiers, not names: a TV that publishes
+    /// "1b067baf05912b622b215c7a…" reads better as its model or maker.
+    nonisolated static func isOpaqueIdentifier(_ name: String) -> Bool {
+        let compact = name.filter { $0 != "-" && $0 != "_" }
+        return compact.count >= 12 && compact.allSatisfy(\.isHexDigit)
     }
 
     /// Strips a trailing `.local` and rejects blanks, placeholders and addresses.
@@ -239,6 +269,7 @@ final class LANDevice: Identifiable {
         portsScanned: Bool = false,
         isGateway: Bool = false,
         isLocalDevice: Bool = false,
+        isNew: Bool = false,
         profile: LANProfile = LANProfile(),
         firstSeen: Date = .now,
         lastSeen: Date = .now
@@ -251,6 +282,7 @@ final class LANDevice: Identifiable {
         self.portsScanned = portsScanned
         self.isGateway = isGateway
         self.isLocalDevice = isLocalDevice
+        self.isNew = isNew
         self.profile = profile
         self.firstSeen = firstSeen
         self.lastSeen = lastSeen

@@ -4,23 +4,27 @@ import SwiftUI
 struct ChannelsView: View {
     @Environment(NetworkStore.self) private var store
 
-    private var inRange: [AccessPointReading] {
+    private func inRange(_ band: Band) -> [AccessPointReading] {
         store.networks.values
-            .filter { $0.isInRange && $0.latest.band == .twoPointFourGHz }
+            .filter { $0.isInRange && $0.latest.band == band }
             .map(\.latest)
             .sorted { $0.rssi > $1.rssi }
     }
 
+    private var inRange: [AccessPointReading] { inRange(.twoPointFourGHz) }
+    private var five: [AccessPointReading] { inRange(.fiveGHz) }
+
     var body: some View {
         List {
-                if inRange.isEmpty {
+                if inRange.isEmpty && five.isEmpty {
                     ContentUnavailableView(
                         "Nothing on the air yet",
                         systemImage: "waveform.path",
                         description: Text("Channel use is drawn from the networks the sensor finds.")
                     )
                     .listRowBackground(Color.clear)
-                } else {
+                }
+                if !inRange.isEmpty {
                     Section {
                         ChannelSpectrumChart(readings: inRange)
                             .frame(height: 240)
@@ -39,9 +43,54 @@ struct ChannelsView: View {
                         }
                     }
                 }
+                if !five.isEmpty {
+                    fiveGHzSections
+                }
             }
             .navigationTitle("Channels")
-            .animation(.default, value: inRange.map(\.rssi))
+            .animation(.default, value: inRange.map(\.rssi) + five.map(\.rssi))
+    }
+
+    /// 5 GHz from an ESP32-C5 sensor: the spectrum over the channels in use,
+    /// the quietest common channel, and the busy channels one per row.
+    @ViewBuilder
+    private var fiveGHzSections: some View {
+        Section {
+            ChannelSpectrumChart(readings: five, band: .fiveGHz)
+                .frame(height: 240)
+                .padding(.vertical, 8)
+        } header: {
+            Text(Units.gigahertz(5))
+        } footer: {
+            Text("Heard by an ESP32-C5 sensor. The Cardputer and the WROOM-32 hear 2.4 GHz only.")
+        }
+        let best = ChannelAdvisor.recommendationFiveGHz(from: five)
+        Section {
+            adviceRow(best, detail: "Of the non-DFS channels 36–48 and 149–161, this one meets the least interference.")
+        }
+        Section("Networks per channel") {
+            ForEach(Array(Set(five.map(\.channel))).sorted(), id: \.self) { channel in
+                ChannelRow(channel: channel, readings: five)
+            }
+        }
+    }
+
+    private func adviceRow(_ channel: Int, detail: LocalizedStringKey) -> some View {
+        HStack(spacing: 14) {
+            Text("\(channel)")
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.accentColor)
+                .minimumScaleFactor(0.6)
+                .frame(width: 52, height: 52)
+                .background(Color.accentColor.opacity(0.12), in: .rect(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Quietest channel here").font(.headline)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     private var recommendation: some View {
@@ -75,7 +124,9 @@ private struct ChannelRow: View {
         HStack(spacing: 12) {
             Text("\(channel)")
                 .font(.body.monospacedDigit().weight(.semibold))
-                .frame(width: 26, alignment: .trailing)
+                .lineLimit(1)
+                .fixedSize()
+                .frame(minWidth: 36, alignment: .trailing)
             Gauge(value: level) { EmptyView() }
                 .gaugeStyle(.accessoryLinearCapacity)
                 .tint(level < 0.35 ? .green : level < 0.6 ? .yellow : level < 0.8 ? .orange : .red)
@@ -85,13 +136,14 @@ private struct ChannelRow: View {
                 .frame(width: 24, alignment: .trailing)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Channel \(channel)")
+        .accessibilityLabel(Text("Channel \(channel)"))
         .accessibilityValue("\(onChannel.count) networks, \(Int(level * 100))% busy")
     }
 }
 
 struct ChannelSpectrumChart: View {
     var readings: [AccessPointReading]
+    var band: Band = .twoPointFourGHz
 
     private static let floor = -100.0
 
@@ -158,11 +210,28 @@ struct ChannelSpectrumChart: View {
         return Array(stride(from: -90, through: ceiling, by: step))
     }
 
+    /// 2.4 GHz always shows channels 1–13; 5 GHz shows just the stretch in use,
+    /// since 36–165 would squeeze every network into a sliver.
     private var channelDomain: ClosedRange<Double> {
         let spans = readings.map(\.occupiedChannels)
+        if band == .fiveGHz {
+            let low = spans.map(\.lowerBound).min() ?? 36
+            let high = spans.map(\.upperBound).max() ?? 48
+            // Wide margins, so a three-digit label at either end is not cut.
+            return (low - 4) ... (high + 4)
+        }
         let low = min(1, spans.map(\.lowerBound).min() ?? 1)
         let high = max(13, spans.map(\.upperBound).max() ?? 13)
         return (low - 0.5) ... (high + 0.5)
+    }
+
+    private var channelMarks: [Int] {
+        guard band == .fiveGHz else { return Array(1...13) }
+        let domain = channelDomain
+        let used = Set(readings.map(\.channel))
+        // The used channels when they fit, otherwise the band's landmarks.
+        if used.count <= 8 { return used.sorted() }
+        return [36, 52, 100, 116, 132, 149, 165].filter { domain.contains(Double($0)) }
     }
 
     var body: some View {
@@ -202,7 +271,7 @@ struct ChannelSpectrumChart: View {
         .chartXScale(domain: channelDomain)
         .chartYScale(domain: Self.floor ... ceiling)
         .chartXAxis {
-            AxisMarks(values: Array(1...13)) { _ in
+            AxisMarks(values: channelMarks) { _ in
                 AxisGridLine()
                 AxisValueLabel()
             }

@@ -12,6 +12,15 @@ nonisolated enum BLENumbers {
         services[canonical(uuid)]
     }
 
+    static func characteristicName(uuid: String) -> String? {
+        characteristics[canonical(uuid)]
+    }
+
+    /// A SIG-assigned 16- or 32-bit number rather than a vendor's own 128-bit UUID.
+    static func isAssigned(_ uuid: String) -> Bool {
+        canonical(uuid).count <= 8
+    }
+
     /// Short codes stay short. A 128-bit value is grouped the way Bluetooth prints it.
     static func displayUUID(_ uuid: String) -> String {
         let canonical = canonical(uuid)
@@ -38,9 +47,10 @@ nonisolated enum BLENumbers {
 
     private static let companies: [UInt16: String] = load("ble-companies") { UInt16($0, radix: 16) }
     private static let services: [String: String] = load("ble-services") { canonical($0) }
+    private static let characteristics: [String: String] = load("ble-characteristics") { canonical($0) }
 
     /// Reads one of the shared tables from the bundled Catalog folder. The
-    /// files are the single source in data/spectra, shared with the Android app.
+    /// files live in the Catalog folder.
     private static func load<ID: Hashable>(_ name: String, id: (String) -> ID?) -> [ID: String] {
         guard let url = Bundle.main.url(forResource: name, withExtension: "tsv", subdirectory: "Catalog"),
               let text = try? String(contentsOf: url, encoding: .utf8) else {

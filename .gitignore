@@ -25,3 +25,6 @@ android/.idea/
 android/captures/
 *.apk
 *.aab
+
+# llama.cpp xcframework built by ios/Tools/build-llama.sh
+ios/Packages/LocalChatEngine/Vendor/

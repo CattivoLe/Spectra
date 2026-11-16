@@ -120,3 +120,25 @@ nonisolated enum Units {
             .formatted(.measurement(width: .abbreviated, usage: .asProvided, numberFormatStyle: .number.precision(.fractionLength(0...1))))
     }
 }
+
+// MARK: - Risk
+
+extension RiskLevel {
+    var color: Color {
+        switch self {
+        case .high: .red
+        case .medium: .orange
+        case .low: .yellow
+        case .info: .gray
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .high: "exclamationmark.shield.fill"
+        case .medium: "exclamationmark.triangle.fill"
+        case .low: "info.circle.fill"
+        case .info: "info.circle"
+        }
+    }
+}

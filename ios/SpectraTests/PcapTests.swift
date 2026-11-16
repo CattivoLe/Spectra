@@ -153,3 +153,30 @@ struct PcapTests {
         #expect(analysis.summary.talkers.contains { $0.endpoint == "192.168.1.10" })
     }
 }
+
+struct PacketFilterTests {
+    private func row(_ index: Int, _ transport: String, _ src: String, _ dst: String, app: String? = nil, info: String = "") -> PacketRow {
+        PacketRow(id: index, timestamp: nil, length: 100, transport: transport, source: src, destination: dst, info: info,
+                  app: app, netSource: String(src.split(separator: ":").first ?? ""), netDestination: String(dst.split(separator: ":").first ?? ""))
+    }
+
+    @Test func filtersNarrowThePacketList() {
+        let rows = [
+            row(0, "TCP", "10.0.0.2:51000", "1.1.1.1:443", app: "HTTPS", info: "TCP 10.0.0.2:51000 → 1.1.1.1:443"),
+            row(1, "UDP", "10.0.0.2:53000", "8.8.8.8:53", app: "DNS", info: "DNS query example.com"),
+            row(2, "UDP", "10.0.0.3:53001", "8.8.8.8:53", app: "DNS", info: "DNS query github.com"),
+            row(3, "ARP", "aabb", "ffff", info: "who has 10.0.0.1"),
+        ]
+        var filter = PacketFilter()
+        #expect(!filter.isActive)
+        #expect(rows.filter(filter.matches).count == 4)
+        filter.toggle(transport: "UDP")
+        filter.toggle(transport: "ARP")
+        #expect(rows.filter(filter.matches).map(\.id) == [1, 2, 3])
+        #expect(rows.filter(PacketFilter(app: "DNS").matches).map(\.id) == [1, 2])
+        #expect(rows.filter(PacketFilter(query: "GITHUB").matches).map(\.id) == [2])
+        // One host: either end. A conversation: exactly those two ends.
+        #expect(rows.filter(PacketFilter(endpoints: ["10.0.0.2"]).matches).map(\.id) == [0, 1])
+        #expect(rows.filter(PacketFilter(endpoints: ["8.8.8.8", "10.0.0.2"]).matches).map(\.id) == [1])
+    }
+}

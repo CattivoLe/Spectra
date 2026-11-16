@@ -39,6 +39,11 @@ final class BLEDevice: Identifiable {
     var packetCount = 0
     let firstSeen: Date
     var lastSeen: Date
+    /// Start of the current unbroken stretch of advertisements. A silence
+    /// longer than `presenceGap` starts a new one, so "near you for 20 min"
+    /// means it really stayed, not that it came back.
+    private(set) var presentSince: Date
+    static let presenceGap: TimeInterval = 90
 
     private var sampleCounter = 0
 
@@ -49,6 +54,31 @@ final class BLEDevice: Identifiable {
         self.smoothedRSSI = Double(rssi)
         self.firstSeen = seen
         self.lastSeen = seen
+        self.presentSince = seen
+    }
+
+    /// How long the device has been continuously nearby.
+    func presentFor(at now: Date) -> TimeInterval {
+        max(0, min(now, lastSeen).timeIntervalSince(presentSince))
+    }
+
+    /// The Find My status, when the device advertises Offline Finding.
+    var findMyStatus: FindMyStatus? {
+        for case .findMy(let status) in apple { return status }
+        return nil
+    }
+
+    var isSpectraSensor: Bool {
+        let sensor = SensorProtocol.service.uuidString
+        if services.contains(where: { $0.uuid.caseInsensitiveCompare(sensor) == .orderedSame }) {
+            return true
+        }
+        let name = localName ?? peripheralName ?? ""
+        return name.hasPrefix("Spectra-")
+    }
+
+    var advertisesFindMy: Bool {
+        apple.contains { if case .findMy = $0 { true } else { false } }
     }
 
     func isNearby(at now: Date) -> Bool {
@@ -61,15 +91,6 @@ final class BLEDevice: Identifiable {
         if proximity?.modelName != nil { return true }
         if heySiriDevice != nil { return true }
         return false
-    }
-
-    var isSpectraSensor: Bool {
-        let sensor = SensorProtocol.service.uuidString
-        if services.contains(where: { $0.uuid.caseInsensitiveCompare(sensor) == .orderedSame }) {
-            return true
-        }
-        let name = localName ?? peripheralName ?? ""
-        return name.hasPrefix("Spectra-")
     }
 
     var displayName: String {
@@ -164,6 +185,7 @@ final class BLEDevice: Identifiable {
     /// on every packet.
     func absorb(_ advertisement: BLEAdvertisement, peripheralName: String?, rssi: Int, at now: Date) {
         packetCount += 1
+        if now.timeIntervalSince(lastSeen) > Self.presenceGap { presentSince = now }
         if let name = cleaned(advertisement.localName) { localName = name }
         if let name = cleaned(peripheralName) { self.peripheralName = name }
         if let companyID = advertisement.companyID {

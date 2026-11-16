@@ -57,6 +57,9 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
     /// The phone this session came from, when it was imported from a shared file.
     var importedFrom: String?
 
+    /// Hosts this session saw on the network for the first time.
+    var newHostCount: Int { lan.filter(\.isNew).count }
+
     var itemCount: Int {
         switch kind {
         case .networks:
@@ -165,11 +168,34 @@ struct SavedLAN: Codable, Equatable, Identifiable {
     var portsScanned: Bool
     var isGateway: Bool
     var isLocalDevice: Bool
+    /// The host had never been seen on this network before this session.
+    var isNew: Bool
     var profile: LANProfile
     var firstSeen: Date
     var lastSeen: Date
 
     var id: String { ipAddress }
+
+    private enum CodingKeys: String, CodingKey {
+        case ipAddress, macAddress, hostnames, openPorts, services, portsScanned, isGateway, isLocalDevice, isNew, profile, firstSeen, lastSeen
+    }
+
+    /// History saved before the New mark existed decodes with it off.
+    init(from decoder: Decoder) throws {
+        let box = try decoder.container(keyedBy: CodingKeys.self)
+        ipAddress = try box.decode(String.self, forKey: .ipAddress)
+        macAddress = try box.decodeIfPresent(MACAddress.self, forKey: .macAddress)
+        hostnames = try box.decode([String].self, forKey: .hostnames)
+        openPorts = try box.decode([DiscoveredPort].self, forKey: .openPorts)
+        services = try box.decode([ServiceAdvertisement].self, forKey: .services)
+        portsScanned = try box.decode(Bool.self, forKey: .portsScanned)
+        isGateway = try box.decode(Bool.self, forKey: .isGateway)
+        isLocalDevice = try box.decode(Bool.self, forKey: .isLocalDevice)
+        isNew = try box.decodeIfPresent(Bool.self, forKey: .isNew) ?? false
+        profile = try box.decode(LANProfile.self, forKey: .profile)
+        firstSeen = try box.decode(Date.self, forKey: .firstSeen)
+        lastSeen = try box.decode(Date.self, forKey: .lastSeen)
+    }
 
     init(_ device: LANDevice) {
         ipAddress = device.ipAddress
@@ -180,6 +206,7 @@ struct SavedLAN: Codable, Equatable, Identifiable {
         portsScanned = device.portsScanned
         isGateway = device.isGateway
         isLocalDevice = device.isLocalDevice
+        isNew = device.isNew
         profile = device.profile
         firstSeen = device.firstSeen
         lastSeen = device.lastSeen
@@ -195,6 +222,7 @@ struct SavedLAN: Codable, Equatable, Identifiable {
             portsScanned: portsScanned,
             isGateway: isGateway,
             isLocalDevice: isLocalDevice,
+            isNew: isNew,
             profile: profile,
             firstSeen: firstSeen,
             lastSeen: lastSeen
@@ -631,6 +659,9 @@ final class HistoryStore {
             merged.openPorts = newer.openPorts.isEmpty ? (old.openPorts.isEmpty ? new.openPorts : old.openPorts) : newer.openPorts
             merged.services = newer.services.isEmpty ? (old.services.isEmpty ? new.services : old.services) : newer.services
             merged.macAddress = newer.macAddress ?? old.macAddress ?? new.macAddress
+            // Once new in this session, new for the whole session: the list is
+            // saved before the scan has decided, and again after.
+            merged.isNew = old.isNew || new.isNew
             byIP[new.ipAddress] = merged
         }
         return byIP.values.sorted { a, b in

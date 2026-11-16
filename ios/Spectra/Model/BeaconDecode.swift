@@ -15,6 +15,7 @@ nonisolated enum BeaconDecode {
         case "FE2C": return fastPair([UInt8](data))
         case "FD6F": return BeaconInfo(title: String(localized: "Exposure Notification"), detail: nil)
         case "FEED", "FEEC": return BeaconInfo(title: "Tile", detail: nil)
+        case "FD5A": return BeaconInfo(title: "Samsung SmartTag", detail: nil)
         default: return nil
         }
     }
@@ -84,6 +85,12 @@ nonisolated enum BeaconDecode {
 
     private static func fastPair(_ b: [UInt8]) -> BeaconInfo? {
         guard !b.isEmpty else { return nil }
+        // Find My Device network frame: a 20- or 32-byte ephemeral identifier.
+        // The last byte carries the unwanted-tracking flags when present.
+        if b[0] == 0x40, b.count >= 21 {
+            let flagged = b.count == 22 || b.count == 34
+            return BeaconInfo(title: String(localized: "Find My Device network"), detail: flagged ? String(localized: "Tracker frame") : nil)
+        }
         if b.count == 3 {
             let model = Int(b[0]) << 16 | Int(b[1]) << 8 | Int(b[2])
             return BeaconInfo(title: "Fast Pair", detail: String(format: "model 0x%06X", model))

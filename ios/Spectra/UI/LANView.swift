@@ -2,29 +2,50 @@ import SwiftUI
 
 struct LANView: View {
     @Environment(LANScanner.self) private var scanner
+    @Environment(WiFiInfo.self) private var wifi
     @Environment(LinkProbe.self) private var probe
-    @AppStorage("probeViaVpn") private var viaVpn = false
+    @AppStorage("notifyNewDevices") private var notifyNewDevices = true
+    @AppStorage("hideTrusted") private var hideTrusted = false
+    @AppStorage("autosaveHistory") private var autosave = true
+    @Environment(HistoryStore.self) private var history
     @State private var search = ""
-    @State private var path = NavigationPath()
+    @State private var confirmForget = false
+    /// Show only the hosts whose services need attention.
+    @State private var onlyAtRisk = false
+
+    private var atRisk: [LANDevice] { scanner.sortedDevices.filter(\.needsAttention) }
 
     private var visible: [LANDevice] {
         let query = search.trimmingCharacters(in: .whitespaces)
         return scanner.sortedDevices.filter { device in
-            query.isEmpty
+            (!onlyAtRisk || device.needsAttention) && !(hideTrusted && device.trust == .trusted && query.isEmpty) && (query.isEmpty
                 || device.ipAddress.localizedStandardContains(query)
                 || device.displayName.localizedStandardContains(query)
                 || (device.macAddress?.description ?? "").localizedStandardContains(query)
                 || (device.manufacturer ?? "").localizedStandardContains(query)
-                || device.identity.label.localizedStandardContains(query)
+                || device.identity.label.localizedStandardContains(query))
         }
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        NavigationStack {
             List {
-                connectionSection
-
                 Section {
+                    NavigationLink { ChecksView() } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Checks")
+                                if probe.report != nil || probe.running {
+                                    Text(connectionTitle(probe))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                        } icon: {
+                            Image(systemName: "checkmark.shield")
+                        }
+                    }
                     NavigationLink { SnifferView() } label: {
                         Label("Traffic", systemImage: "waveform.path.ecg")
                     }
@@ -42,15 +63,55 @@ struct LANView: View {
                     }
                 }
 
+                if case .done = scanner.state, !scanner.devices.isEmpty, search.isEmpty {
+                    Section {
+                        if wifi.current?.isSecure == false {
+                            summaryRow(
+                                "Open Wi-Fi",
+                                detail: "This network has no password. Anyone nearby can join it and read traffic that is not encrypted.",
+                                systemImage: "wifi.exclamationmark", color: .red
+                            )
+                        }
+                        if wifi.needsLocationAccess, let settings = URL(string: UIApplication.openSettingsURLString) {
+                            Link(destination: settings) {
+                                summaryRow(
+                                    "Wi-Fi name unavailable",
+                                    detail: "Allow location access in Settings so Spectra can read the network name.",
+                                    systemImage: "location.slash", color: .secondary
+                                )
+                            }
+                        }
+                        Button {
+                            withAnimation { onlyAtRisk.toggle() }
+                        } label: {
+                            riskSummary
+                        }
+                        .buttonStyle(.plain)
+                        .contentShape(Rectangle())
+                        .disabled(atRisk.isEmpty)
+                    }
+                }
+
                 if !visible.isEmpty {
                     Section {
                         ForEach(visible) { device in
-                            NavigationLink(value: LANRoute.device(device.ipAddress)) {
+                            NavigationLink(value: device.ipAddress) {
                                 DeviceRow(device: device)
                             }
                         }
                     } header: {
-                        Text("\(scanner.devices.count) devices")
+                        let fresh = scanner.newDevices.count
+                        if onlyAtRisk {
+                            Text("\(visible.count) of \(scanner.devices.count) devices")
+                        } else if fresh > 0 {
+                            Text("\(scanner.devices.count) devices · \(fresh) new")
+                        } else {
+                            Text("\(scanner.devices.count) devices")
+                        }
+                    } footer: {
+                        if scanner.lastVerdict?.isBaseline == true {
+                            Text("First scan of this network. Devices that show up in later scans will be marked New.")
+                        }
                     }
                 } else if scanner.devices.isEmpty, !scanner.isScanning, search.isEmpty {
                     Section {
@@ -60,6 +121,14 @@ struct LANView: View {
                                 systemImage: "wifi.slash",
                                 description: Text("Connect to a Wi-Fi network to scan devices on it.")
                             )
+                        } else if case .ipv6Only = scanner.state {
+                            ContentUnavailableView {
+                                Label("IPv6-only network", systemImage: "network.badge.shield.half.filled")
+                            } description: {
+                                Text("This Wi-Fi gives the iPhone no IPv4 address. The device scan walks an IPv4 subnet, so there is nothing to sweep here. Connection, speed and link checks work as usual.")
+                            } actions: {
+                                Button("Scan again", action: scanner.scan)
+                            }
                         } else {
                             ContentUnavailableView {
                                 Label("Local network", systemImage: "network")
@@ -80,19 +149,25 @@ struct LANView: View {
                     ContentUnavailableView.search(text: search)
                 }
             }
+            .onChange(of: atRisk.isEmpty) { _, empty in
+                if empty { onlyAtRisk = false }
+            }
             .sensoryFeedback(trigger: scanner.scanCount) { old, new in new > old ? .success : nil }
             .searchable(text: $search, prompt: Text("IP, name or MAC"))
             .refreshable { await runScan() }
             .navigationTitle("LAN")
-            .navigationDestination(for: LANRoute.self) { route in
-                switch route {
-                case .device(let ip):
-                    DeviceDetailView(ip: ip)
-                case .connection:
-                    LinkView()
-                }
+            .navigationDestination(for: String.self) { ip in
+                DeviceDetailView(ip: ip)
             }
             .toolbar {
+                if !autosave {
+                    ToolbarItem(placement: .topBarLeading) {
+                        SaveToHistoryButton(disabled: scanner.devices.isEmpty || scanner.isScanning) {
+                            history.upsertLAN(scanner.sortedDevices, networkKey: scanner.networkKey,
+                                              networkLabel: scanner.networkLabel, source: "This iPhone")
+                        }
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     LANStatusBar()
                 }
@@ -101,10 +176,19 @@ struct LANView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        Toggle("Notify about new devices", systemImage: "bell.badge", isOn: $notifyNewDevices)
+                        Toggle("Hide trusted devices", systemImage: "checkmark.seal", isOn: $hideTrusted)
+                        Toggle("Use Wi-Fi name", systemImage: "wifi", isOn: Binding(get: { wifi.enabled }, set: { wifi.setEnabled($0) }))
+                        if scanner.hasBaseline {
+                            Button("Forget known devices", systemImage: "eraser") {
+                                confirmForget = true
+                            }
+                            .disabled(scanner.isScanning)
+                        }
+                        Divider()
                         Button("Scan now", systemImage: "arrow.clockwise", action: scanner.scan)
-                            .disabled(scanner.isScanning || noNetwork)
+                            .disabled(scanner.isScanning)
                         if !scanner.devices.isEmpty {
-                            Divider()
                             Button("Clear list", systemImage: "trash", role: .destructive) {
                                 scanner.clear()
                             }
@@ -114,45 +198,57 @@ struct LANView: View {
                     }
                 }
             }
+            .confirmationDialog("Forget known devices?", isPresented: $confirmForget, titleVisibility: .visible) {
+                Button("Forget", role: .destructive) { scanner.forgetKnownHosts() }
+            } message: {
+                Text("The next scan of this network becomes the baseline: nothing in it is marked New.")
+            }
         }
     }
 
-    private var connectionSection: some View {
-        Section {
-            // There is nothing to open until the internet has been checked once.
-            if probe.report != nil || probe.running {
-                NavigationLink(value: LANRoute.connection) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(connectionTitle(probe))
-                            .font(.body.weight(.medium))
-                        Text(connectionDetail(probe))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                }
+    private func summaryRow(_ title: LocalizedStringKey, detail: LocalizedStringKey, systemImage: String, color: Color) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .foregroundStyle(color)
+                .frame(width: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            VpnToggle(viaVpn: $viaVpn)
-                .disabled(probe.running)
-            if probe.running {
-                ProgressView(value: probe.fraction)
-                    .tint(.teal)
-            } else {
-                Button {
-                    probe.check()
-                    path.append(LANRoute.connection)
-                } label: {
-                    Label(probe.report == nil ? "Check connection" : "Check again", systemImage: "gauge.with.dots.needle.67percent")
-                }
-            }
-        } header: {
-            Text("Connection")
+            Spacer(minLength: 0)
         }
     }
 
-    private var noNetwork: Bool {
-        if case .noNetwork = scanner.state { return true }
-        return false
+    /// One line on the network's open services. Tapping filters the list.
+    private var riskSummary: some View {
+        let count = atRisk.count
+        let worst = atRisk.compactMap(\.riskLevel).max()
+        return HStack(spacing: 12) {
+            Image(systemName: worst?.systemImage ?? "checkmark.shield.fill")
+                .font(.title3)
+                .foregroundStyle(worst?.color ?? .green)
+                .frame(width: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(count == 0 ? "No risky services found" : "\(count) devices need attention")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(count == 0
+                     ? "Open ports were checked against known weak services."
+                     : (onlyAtRisk ? "Showing only those. Tap to show every device." : "Telnet, open shares, remote access and the like. Tap to show only those."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if onlyAtRisk {
+                Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                    .foregroundStyle(.tint)
+            }
+        }
     }
 
     private func runScan() async {
@@ -202,6 +298,8 @@ struct LANStatusBar: View {
     private var title: String {
         if scanner.isScanning { return String(localized: "Scanning…") }
         if case .noNetwork = scanner.state { return String(localized: "No Wi-Fi") }
+        if case .ipv6Only = scanner.state { return scanner.wifi.current?.ssid ?? String(localized: "IPv6 only") }
+        if let ssid = scanner.wifi.current?.ssid { return ssid }
         if let ip = scanner.subnetInfo?.localIP { return ip }
         return String(localized: "LAN")
     }
@@ -209,6 +307,7 @@ struct LANStatusBar: View {
     private var detail: String {
         if case .scanning(_, let phase) = scanner.state { return phase }
         if case .noNetwork = scanner.state { return String(localized: "Join a network") }
+        if case .ipv6Only = scanner.state { return String(localized: "No IPv4 to scan") }
         if let info = scanner.subnetInfo {
             var parts = ["/\(info.cidr)"]
             if let gateway = info.gateway { parts.append(gateway) }
@@ -246,6 +345,17 @@ struct DeviceRow: View {
                     } else if let notable = device.notable {
                         badge(notable == .camera ? "Camera" : "IoT", color: notable == .camera ? .red : .orange)
                     }
+                    if device.isNew {
+                        badge("New", color: .purple)
+                    }
+                    if device.trust == .trusted {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                            .accessibilityLabel(Text("Trusted"))
+                    } else if device.trust == .suspicious {
+                        badge("Suspicious", color: .red)
+                    }
                 }
                 if !subtitleText.isEmpty {
                     Text(subtitleText)
@@ -254,9 +364,22 @@ struct DeviceRow: View {
                         .monospacedDigit()
                         .lineLimit(2)
                 }
+                if !portsText.isEmpty {
+                    Text(portsText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(2)
+                }
             }
 
             Spacer(minLength: 0)
+
+            if let level = device.riskLevel, level >= .medium {
+                Image(systemName: level.systemImage)
+                    .foregroundStyle(level.color)
+                    .accessibilityLabel(Text(level.label))
+            }
         }
         .contextMenu {
             Button("Copy IP", systemImage: "doc.on.doc") {
@@ -298,11 +421,16 @@ struct DeviceRow: View {
         if let mfr = device.manufacturer, device.identity.manufacturer == nil, device.displayName != mfr {
             parts.append(mfr)
         }
-        if !device.openPorts.isEmpty {
-            let portList = device.openPorts.prefix(4).map { "\($0.number)" }.joined(separator: ", ")
-            let suffix = device.openPorts.count > 4 ? "…" : ""
-            parts.append(String(localized: "ports \(portList)\(suffix)"))
-        }
         return parts.joined(separator: " · ")
+    }
+
+    /// Open ports on a line of their own under the address.
+    private var portsText: String {
+        guard !device.openPorts.isEmpty else { return "" }
+        let shown = 8
+        let portList = device.openPorts.prefix(shown).map { "\($0.number)" }.joined(separator: ", ")
+        let rest = device.openPorts.count - shown
+        let suffix = rest > 0 ? " +\(rest)" : ""
+        return String(localized: "ports \(portList)\(suffix)")
     }
 }

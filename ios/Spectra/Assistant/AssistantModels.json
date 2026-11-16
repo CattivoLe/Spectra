@@ -1,0 +1,52 @@
+{
+  "models": [
+    {
+      "id": "gemma-4-e2b",
+      "name": "Gemma 4 E2B",
+      "summary": "Fast and writes well in many languages, Russian included: about 27 words per second on iPhone 16. The best place to start.",
+      "fileName": "gemma-4-E2B-it-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+      "sizeBytes": 3106738272,
+      "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+      "licenseName": "Apache 2.0",
+      "licenseURL": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF",
+      "recommended": true
+    },
+    {
+      "id": "gemma-4-e4b",
+      "name": "Gemma 4 E4B",
+      "summary": "Larger and more thoughtful, but slower: about 15 words per second on iPhone 16. Needs a phone with 8 GB of memory.",
+      "fileName": "gemma-4-E4B-it-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+      "sizeBytes": 4977171584,
+      "sha256": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
+      "licenseName": "Apache 2.0",
+      "licenseURL": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF",
+      "recommended": false
+    },
+    {
+      "id": "qwen3-5-4b",
+      "name": "Qwen 3.5 4B",
+      "summary": "About 15 words per second on iPhone 16. Noticeably weaker than Gemma in Russian in our tests.",
+      "fileName": "Qwen3.5-4B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+      "sizeBytes": 2740937888,
+      "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+      "licenseName": "Apache 2.0",
+      "licenseURL": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF",
+      "recommended": false
+    },
+    {
+      "id": "lfm3-1-7b",
+      "name": "LFM3 1.7B",
+      "summary": "The lightest and fastest (about 42 words per second), good for older phones. Its Russian is clumsy.",
+      "fileName": "LFM3-1.7B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/resolve/main/LFM3-1.7B-Q4_K_M.gguf",
+      "sizeBytes": 1099627808,
+      "sha256": "3793e1e6e2266919d6e015287221b41100175a98eddaba92e111aed3b05c93c4",
+      "licenseName": "Лицензия Liquid AI (LFM Open License)",
+      "licenseURL": "https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF",
+      "recommended": false
+    }
+  ]
+}

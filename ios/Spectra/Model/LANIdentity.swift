@@ -6,9 +6,44 @@ nonisolated struct LANProfile: Equatable, Codable, Sendable {
     var banners: [HTTPBanner] = []
     var rtsp: [RTSPService] = []
     var windows: WindowsHost?
+    /// The router's UPnP port-forwarding table. Gateway only; nil until asked.
+    var portForwarding: PortForwarding?
+    /// Forwardings on the router that point at this host.
+    var inbound: [PortMapping] = []
+
+    init(
+        upnp: UPnPIdentity? = nil,
+        banners: [HTTPBanner] = [],
+        rtsp: [RTSPService] = [],
+        windows: WindowsHost? = nil,
+        portForwarding: PortForwarding? = nil,
+        inbound: [PortMapping] = []
+    ) {
+        self.upnp = upnp
+        self.banners = banners
+        self.rtsp = rtsp
+        self.windows = windows
+        self.portForwarding = portForwarding
+        self.inbound = inbound
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case upnp, banners, rtsp, windows, portForwarding, inbound
+    }
+
+    /// Fields added later are missing from older saved history.
+    init(from decoder: Decoder) throws {
+        let box = try decoder.container(keyedBy: CodingKeys.self)
+        upnp = try box.decodeIfPresent(UPnPIdentity.self, forKey: .upnp)
+        banners = try box.decodeIfPresent([HTTPBanner].self, forKey: .banners) ?? []
+        rtsp = try box.decodeIfPresent([RTSPService].self, forKey: .rtsp) ?? []
+        windows = try box.decodeIfPresent(WindowsHost.self, forKey: .windows)
+        portForwarding = try box.decodeIfPresent(PortForwarding.self, forKey: .portForwarding)
+        inbound = try box.decodeIfPresent([PortMapping].self, forKey: .inbound) ?? []
+    }
 
     var isEmpty: Bool {
-        upnp == nil && banners.isEmpty && rtsp.isEmpty && windows == nil
+        upnp == nil && banners.isEmpty && rtsp.isEmpty && windows == nil && portForwarding == nil && inbound.isEmpty
     }
 
     /// Keeps a name we already learned when a later probe comes back empty.
@@ -19,6 +54,8 @@ nonisolated struct LANProfile: Equatable, Codable, Sendable {
         result.windows = windows?.filled(from: previous.windows) ?? previous.windows
         if banners.isEmpty { result.banners = previous.banners }
         if rtsp.isEmpty { result.rtsp = previous.rtsp }
+        if portForwarding == nil { result.portForwarding = previous.portForwarding }
+        if inbound.isEmpty { result.inbound = previous.inbound }
         return result
     }
 }
@@ -556,7 +593,7 @@ nonisolated enum LANIdentity {
         return out
     }
 
-    private static func tag(_ name: String, in xml: String) -> String? {
+    static func tag(_ name: String, in xml: String) -> String? {
         let pattern = "<\(name)\\b[^>]*>([^<]*)</\(name)>"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
         let range = NSRange(xml.startIndex..., in: xml)

@@ -13,6 +13,9 @@ struct NetworksView: View {
     @State private var expandedThreats: Set<String> = []
     @AppStorage("networkSort") private var sort: Sort = .signal
     @AppStorage("showOutOfRange") private var showOutOfRange = false
+    @AppStorage("wifiOpenOnly") private var openOnly = false
+    @AppStorage("wifiKnownOnly") private var knownOnly = false
+    @State private var band: Band?
 
     enum Sort: String, CaseIterable, Identifiable {
         case signal, name, channel
@@ -39,15 +42,37 @@ struct NetworksView: View {
         WatchList.present(watchList.ids, in: Array(store.networks.values))
     }
 
+    /// Networks a password is stored for, among the ones heard.
+    private var hasKnown: Bool {
+        let known = link.knownSSIDs
+        return !known.isEmpty && store.networks.values.contains { $0.hasStoredPassword(in: known) }
+    }
+
+    /// Bands heard so far. The band chips appear only when there is a choice.
+    private var bands: [Band] {
+        let heard = Set(store.networks.values.map(\.latest.band))
+        return [Band.twoPointFourGHz, .fiveGHz].filter(heard.contains)
+    }
+
+    private var filter: WiFiFilter {
+        WiFiFilter(
+            showOutOfRange: showOutOfRange,
+            openOnly: openOnly,
+            knownOnly: knownOnly && hasKnown,
+            band: bands.count > 1 ? band : nil,
+            query: search,
+            knownSSIDs: link.knownSSIDs
+        )
+    }
+
+    private var visibleProbes: [ProbingDevice] {
+        let filter = filter
+        return store.probingDevices.filter(filter.passes)
+    }
+
     private var visible: [TrackedNetwork] {
-        let query = search.trimmingCharacters(in: .whitespaces)
-        let filtered = store.networks.values.filter { network in
-            (showOutOfRange || network.isInRange)
-                && (query.isEmpty
-                    || network.latest.displayName.localizedStandardContains(query)
-                    || network.revealedSSID?.localizedStandardContains(query) == true
-                    || network.id.description.localizedStandardContains(query))
-        }
+        let filter = filter
+        let filtered = store.networks.values.filter(filter.passes)
         return filtered.sorted { a, b in
             if a.isInRange != b.isInRange { return a.isInRange }
             switch sort {
@@ -58,6 +83,29 @@ struct NetworksView: View {
             case .channel:
                 return (a.latest.channel, -a.latest.rssi) < (b.latest.channel, -b.latest.rssi)
             }
+        }
+    }
+
+    /// Open, Known and the bands, as on the Android list. A chip narrows the
+    /// networks; probing devices stay only when the filter can apply to them.
+    private var filterChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                FilterChip(title: "Open", systemImage: "lock.open", isOn: openOnly) { openOnly.toggle() }
+                if hasKnown {
+                    FilterChip(title: "Known", systemImage: "key", isOn: knownOnly) { knownOnly.toggle() }
+                }
+                if bands.count > 1 {
+                    ForEach(bands, id: \.self) { shown in
+                        FilterChip(title: LocalizedStringKey(shown.rawValue), systemImage: nil, isOn: band == shown) {
+                            band = band == shown ? nil : shown
+                        }
+                    }
+                }
+                FilterChip(title: "Out of range", systemImage: nil, isOn: showOutOfRange) { showOutOfRange.toggle() }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 2)
         }
     }
 
@@ -119,6 +167,14 @@ struct NetworksView: View {
                         Text("Deauthentication frames force devices off the network. A burst or broadcast targets suggest an active attack.")
                     }
                 }
+                if !store.networks.isEmpty {
+                    Section {
+                        filterChips
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(Color.clear)
+                    }
+                    .listSectionSpacing(.compact)
+                }
                 if !visible.isEmpty {
                     Section {
                         ForEach(visible) { network in
@@ -130,13 +186,13 @@ struct NetworksView: View {
                         Text("\(store.networks.values.filter(\.wasInLastScan).count) in last scan")
                     }
                 }
-                if !store.probingDevices.isEmpty {
+                if !visibleProbes.isEmpty {
                     Section {
-                        ForEach(store.probingDevices) { device in
+                        ForEach(visibleProbes) { device in
                             ProbeDeviceRow(device: device)
                         }
                     } header: {
-                        Text("\(store.probingDevices.count) probing")
+                        Text("\(visibleProbes.count) probing")
                     } footer: {
                         Text("Devices sending probe requests nearby, revealing networks they have connected to before.")
                     }
@@ -158,14 +214,26 @@ struct NetworksView: View {
                         systemImage: "wifi",
                         description: Text("Networks appear here after the first scan.")
                     )
-                } else if visible.isEmpty, !search.isEmpty {
+                } else if visible.isEmpty, visibleProbes.isEmpty, !search.isEmpty {
                     ContentUnavailableView.search(text: search)
+                } else if visible.isEmpty, visibleProbes.isEmpty, filter.isNarrowing {
+                    ContentUnavailableView {
+                        Label("Nothing in this filter", systemImage: "line.3.horizontal.decrease.circle")
+                    } description: {
+                        Text("Nothing in this filter is nearby.")
+                    } actions: {
+                        Button("Show all") {
+                            openOnly = false
+                            knownOnly = false
+                            band = nil
+                        }
+                    }
                 }
             }
             .sensoryFeedback(.warning, trigger: store.deauthEvents.filter { $0.severity == .critical }.count) { old, new in
                 new > old
             }
-            .searchable(text: $search, prompt: Text("Name or BSSID"))
+            .searchable(text: $search, prompt: Text("Name, BSSID or maker"))
             .refreshable { link.scanNow() }
             .task(id: store.scanCount) { await joiner.refreshCurrent() }
             .onChange(of: scenePhase) { _, phase in
@@ -195,6 +263,8 @@ struct NetworksView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        Button("Sensor…", systemImage: "antenna.radiowaves.left.and.right", action: openSensor)
+                        Divider()
                         Picker("Sort by", selection: $sort) {
                             ForEach(Sort.allCases) { Text($0.label).tag($0) }
                         }
@@ -214,7 +284,7 @@ struct NetworksView: View {
 
 /// Sensor name, battery and time since the last sweep, in its own glass
 /// capsule, like the LAN and Bluetooth status. Tapping scans, or opens the
-/// Sensor tab when there is nothing to scan with.
+/// Sensor screen when there is nothing to scan with.
 struct SensorBar: View {
     var openSensor: () -> Void
 
@@ -253,7 +323,7 @@ struct SensorBar: View {
         .sensoryFeedback(.impact(weight: .light), trigger: taps)
         .accessibilityLabel(title)
         .accessibilityValue(spokenDetail)
-        .accessibilityHint(link.isConnected ? Text("Scans now") : Text("Opens the Sensor tab"))
+        .accessibilityHint(link.isConnected ? Text("Scans now") : Text("Opens the Sensor screen"))
         .onChange(of: store.isScanning, initial: true) { _, scanning in
             scanStarted = scanning ? .now : nil
         }
@@ -522,5 +592,34 @@ struct NetworkRow: View {
         Text(Image(systemName: reading.securitySymbol))
             .font(.caption)
             .foregroundStyle(reading.securityColor)
+    }
+}
+
+/// One toggle in the row of list filters.
+struct FilterChip: View {
+    var title: LocalizedStringKey
+    var systemImage: String?
+    var isOn: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { action() }
+        } label: {
+            HStack(spacing: 5) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.caption.weight(.semibold))
+                }
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .foregroundStyle(isOn ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .background(isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.fill.tertiary), in: .capsule)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }

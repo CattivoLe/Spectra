@@ -112,7 +112,7 @@ struct NetworkDetailView: View {
                         ? String(localized: "Randomised")
                         : String(localized: "Maker-assigned (OUI \(reading.bssid.oui))")
                 )
-                if !reading.bssid.isLocallyAdministered, let maker = OUIDatabase.lookup(reading.bssid.oui) {
+                if !reading.bssid.isLocallyAdministered, let maker = OUIDatabase.lookup(bytes: reading.bssid.bytes) {
                     InfoRow("Maker", value: maker)
                 }
                 if let country = reading.countryCode {

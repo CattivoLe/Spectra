@@ -236,6 +236,7 @@ enum HistoryDocument {
             "portsScanned": saved.portsScanned,
             "gateway": saved.isGateway,
             "local": saved.isLocalDevice,
+            "new": saved.isNew,
             "profile": profile(saved.profile),
             "firstSeen": millis(saved.firstSeen),
             "lastSeen": millis(saved.lastSeen),
@@ -261,6 +262,7 @@ enum HistoryDocument {
             portsScanned: bool(object["portsScanned"]),
             isGateway: bool(object["gateway"]),
             isLocalDevice: bool(object["local"]),
+            isNew: bool(object["new"]),
             profile: (object["profile"] as? Object).map(profile) ?? LANProfile(),
             firstSeen: date(object["firstSeen"]) ?? lastSeen,
             lastSeen: lastSeen
@@ -300,7 +302,40 @@ enum HistoryDocument {
             item["domain"] = windows.domain
             object["windows"] = item
         }
+        if let forwarding = profile.portForwarding {
+            var item: Object = [
+                "checkedAt": millis(forwarding.checkedAt),
+                "supported": forwarding.supported,
+                "mappings": forwarding.mappings.map(mapping),
+            ]
+            item["externalIP"] = forwarding.externalIP
+            object["forwarding"] = item
+        }
+        if !profile.inbound.isEmpty {
+            object["inbound"] = profile.inbound.map(mapping)
+        }
         return object
+    }
+
+    private static func mapping(_ mapping: PortMapping) -> Object {
+        var item: Object = [
+            "external": mapping.externalPort, "internal": mapping.internalPort,
+            "client": mapping.internalClient, "proto": mapping.proto, "enabled": mapping.enabled,
+        ]
+        item["description"] = mapping.description
+        item["lease"] = mapping.leaseSeconds
+        item["remote"] = mapping.remoteHost
+        return item
+    }
+
+    private static func mapping(_ object: Object) -> PortMapping? {
+        guard let external = int(object["external"]), let client = text(object["client"]) else { return nil }
+        return PortMapping(
+            externalPort: external, internalPort: int(object["internal"]) ?? external, internalClient: client,
+            proto: text(object["proto"]) ?? "TCP", description: text(object["description"]),
+            enabled: (object["enabled"] as? NSNumber)?.boolValue ?? true,
+            leaseSeconds: int(object["lease"]), remoteHost: text(object["remote"])
+        )
     }
 
     private static func profile(_ object: Object) -> LANProfile {
@@ -325,7 +360,14 @@ enum HistoryDocument {
                     computerName: text($0["computer"]), domain: text($0["domain"]),
                     shares: $0["shares"] as? [String] ?? [], guestSession: bool($0["guest"])
                 )
-            }
+            },
+            portForwarding: (object["forwarding"] as? Object).map {
+                PortForwarding(
+                    checkedAt: date($0["checkedAt"]) ?? .distantPast, supported: bool($0["supported"]),
+                    externalIP: text($0["externalIP"]), mappings: objects($0["mappings"]).compactMap(mapping)
+                )
+            },
+            inbound: objects(object["inbound"]).compactMap(mapping)
         )
     }
 
@@ -395,6 +437,7 @@ enum HistoryDocument {
         var object: Object = [
             "checkedAt": millis(snapshot.checkedAt),
             "viaVpn": saved.viaVpn,
+            "viaCellular": saved.viaCellular ?? false,
             "status": statusName(status),
             "speedFailed": snapshot.speedFailed,
             "regions": json(snapshot.regions) ?? [],
@@ -410,6 +453,10 @@ enum HistoryDocument {
         object["external"] = json(snapshot.external)
         object["speed"] = json(snapshot.speed)
         object["localTrace"] = json(snapshot.localTrace)
+        object["tls"] = json(snapshot.tls)
+        object["resolver"] = json(snapshot.resolver)
+        object["exposure"] = json(snapshot.exposure)
+        object["access"] = json(snapshot.access)
         return object
     }
 
@@ -429,9 +476,13 @@ enum HistoryDocument {
         snapshot.abroad = value(object["abroad"]) ?? []
         snapshot.abroadNote = text(object["abroadNote"]).flatMap { RemoteNote(rawValue: $0.lowercased()) } ?? .none
         snapshot.localTrace = value(object["localTrace"])
+        snapshot.tls = value(object["tls"])
+        snapshot.resolver = value(object["resolver"])
+        snapshot.exposure = value(object["exposure"])
+        snapshot.access = value(object["access"])
         snapshot.remoteTraces = value(object["remoteTraces"]) ?? []
         snapshot.traceNote = text(object["traceNote"]).flatMap { RemoteNote(rawValue: $0.lowercased()) } ?? .none
-        return SavedConnection(viaVpn: bool(object["viaVpn"]), snapshot: snapshot)
+        return SavedConnection(viaVpn: bool(object["viaVpn"]), viaCellular: bool(object["viaCellular"]), snapshot: snapshot)
     }
 
     private static func statusName(_ status: LinkStatus) -> String {
@@ -476,12 +527,16 @@ enum HistoryDocument {
     }
 
     private static func int(_ value: Any?) -> Int? {
-        guard let number = value as? NSNumber, !(value is Bool) else { return nil }
+        // `value is Bool` would also reject 0 and 1, since those bridge to
+        // Bool; the Core Foundation type tells a real boolean apart.
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
         return number.intValue
     }
 
     private static func double(_ value: Any?) -> Double? {
-        guard let number = value as? NSNumber, !(value is Bool) else { return nil }
+        // `value is Bool` would also reject 0 and 1, since those bridge to
+        // Bool; the Core Foundation type tells a real boolean apart.
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
         return number.doubleValue
     }
 

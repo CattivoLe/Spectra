@@ -44,7 +44,7 @@ nonisolated enum AppleAdvertisement: Equatable, Sendable {
     case instantHotspot
     case nearbyAction(NearbyAction?)
     case nearbyInfo(NearbyActivity?)
-    case findMy
+    case findMy(FindMyStatus?)
 
     /// A name worth showing in place of the company, when the packet has no
     /// local name. Background chatter (Nearby, Handoff) is left out: almost
@@ -123,6 +123,7 @@ nonisolated enum AppleAdvertisement: Equatable, Sendable {
 
     var detail: String? {
         switch self {
+        case .findMy(let status): status?.summary
         case .proximity(let pairing): pairing.batterySummary
         case .iBeacon(let uuid, let major, let minor, let power):
             "\(uuid.uuidString) · \(major) · \(minor) · \(String(localized: "\(power) dBm"))"
@@ -362,7 +363,7 @@ nonisolated struct BLEAdvertisement: Equatable, Sendable {
         case 0x10:
             let activity = bytes.isEmpty ? nil : NearbyActivity(rawValue: bytes[0] & 0x0F)
             return .nearbyInfo(activity)
-        case 0x12: return .findMy
+        case 0x12: return .findMy(FindMyStatus(payload: bytes))
         default: return nil
         }
     }
@@ -471,7 +472,7 @@ nonisolated struct BLEAdvertisement: Equatable, Sendable {
 
 extension AppleAdvertisement: Codable {
     private enum CodingKeys: String, CodingKey {
-        case kind, uuid, major, minor, power, category, device, action, activity, pairing
+        case kind, uuid, major, minor, power, category, device, action, activity, pairing, status
     }
 
     func encode(to encoder: Encoder) throws {
@@ -514,8 +515,9 @@ extension AppleAdvertisement: Codable {
         case .nearbyInfo(let activity):
             try box.encode("info", forKey: .kind)
             try box.encodeIfPresent(activity, forKey: .activity)
-        case .findMy:
+        case .findMy(let status):
             try box.encode("findmy", forKey: .kind)
+            try box.encodeIfPresent(status, forKey: .status)
         }
     }
 
@@ -542,12 +544,54 @@ extension AppleAdvertisement: Codable {
         case "hotspot": self = .instantHotspot
         case "action": self = .nearbyAction(try box.decodeIfPresent(NearbyAction.self, forKey: .action))
         case "info": self = .nearbyInfo(try box.decodeIfPresent(NearbyActivity.self, forKey: .activity))
-        case "findmy": self = .findMy
-        default: self = .findMy
+        case "findmy": self = .findMy(try box.decodeIfPresent(FindMyStatus.self, forKey: .status))
+        default: self = .findMy(nil)
         }
     }
 }
 
 nonisolated func bleHex(_ data: Data) -> String {
     data.map { String(format: "%02X", $0) }.joined(separator: " ")
+}
+
+/// What an Offline Finding (Find My) advertisement says about the tag.
+///
+/// A tag near its owner sends a short two-byte message. One that has lost
+/// its owner sends the long one with a public key, so the Find My network
+/// can report it: that is the form a tracker slipped into a bag transmits.
+nonisolated struct FindMyStatus: Equatable, Codable, Sendable {
+    /// The long advertisement: the tag is away from its owner.
+    var separated: Bool
+    /// 0 full, 1 medium, 2 low, 3 critical; nil when the tag does not say.
+    var battery: Int?
+
+    init(separated: Bool, battery: Int?) {
+        self.separated = separated
+        self.battery = battery
+    }
+
+    /// `payload` is the message body after the type and length bytes.
+    init?(payload: [UInt8]) {
+        guard let status = payload.first else { return nil }
+        separated = payload.count >= 24
+        battery = Int(status >> 6)
+    }
+
+    var batteryLabel: String? {
+        switch battery {
+        case 0: String(localized: "Battery full")
+        case 1: String(localized: "Battery medium")
+        case 2: String(localized: "Battery low")
+        case 3: String(localized: "Battery critical")
+        default: nil
+        }
+    }
+
+    var ownerLabel: String {
+        separated ? String(localized: "Away from its owner") : String(localized: "Near its owner")
+    }
+
+    var summary: String {
+        [ownerLabel, batteryLabel].compactMap { $0 }.joined(separator: " · ")
+    }
 }

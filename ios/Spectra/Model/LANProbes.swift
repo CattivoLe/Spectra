@@ -121,7 +121,8 @@ nonisolated enum LANProbes {
         let node = exchangeUDP(ip: ip, port: 137, payload: LANIdentity.netbiosNodeStatusRequest(), timeout: .milliseconds(800))
         for reply in node {
             for entry in LANIdentity.parseNetBIOS(reply) {
-                if entry.suffix == 0x00, !entry.group, host.computerName == nil {
+                if entry.suffix == 0x00, !entry.group, host.computerName == nil,
+                   !entry.name.trimmingCharacters(in: .whitespaces).isEmpty {
                     host.computerName = entry.name
                 } else if entry.group, entry.suffix == 0x00 || entry.suffix == 0x1E, host.domain == nil {
                     host.domain = entry.name
@@ -147,7 +148,7 @@ nonisolated enum LANProbes {
               let setup = readFrame(sock) else { return }
         let payload = LANIdentity.smbPayload(setup)
         if let names = LANIdentity.parseNTLMChallenge(payload) {
-            host.computerName = names.computer ?? host.computerName
+            host.computerName = names.computer.flatMap { $0.isEmpty ? nil : $0 } ?? host.computerName
             host.domain = names.domain ?? host.domain
         }
         let session = LANIdentity.smbSessionID(payload) ?? 0
@@ -174,7 +175,7 @@ nonisolated enum LANProbes {
 
     // MARK: Sockets
 
-    private static func exchangeUDP(ip: String, port: UInt16, payload: Data, timeout: Duration) -> [Data] {
+    static func exchangeUDP(ip: String, port: UInt16, payload: Data, timeout: Duration) -> [Data] {
         guard let ipVal = parseIP(ip) else { return [] }
         let sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
         guard sock >= 0 else { return [] }
@@ -207,7 +208,7 @@ nonisolated enum LANProbes {
         return collected
     }
 
-    private static func exchangeTCP(ip: String, port: UInt16, payload: Data, timeout: Duration, limit: Int = 4096) -> Data? {
+    static func exchangeTCP(ip: String, port: UInt16, payload: Data, timeout: Duration, limit: Int = 4096) -> Data? {
         guard let sock = connectTCP(ip, port: port, timeout: timeout) else { return nil }
         defer { close(sock) }
         guard writeAll(sock, payload) else { return nil }

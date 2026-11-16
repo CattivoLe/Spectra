@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct SensorView: View {
     @Environment(SensorLink.self) private var link
     @Environment(NetworkStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
     @State private var pickingFirmware = false
     @State private var pendingFirmware: PendingFirmware?
     @State private var installTaps = 0
@@ -201,6 +202,11 @@ struct SensorView: View {
                 }
             }
             .navigationTitle("Sensor")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
             .sensoryFeedback(trigger: link.firmwareUpdate?.stage) { _, stage in
                 switch stage {
                 case .succeeded: .success

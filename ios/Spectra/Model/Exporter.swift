@@ -71,7 +71,7 @@ enum Exporter {
                     "rssi": String(ap.rssi),
                     "channel": String(ap.channel),
                     "security": ap.auth.name,
-                    "vendor": ap.bssid.isLocallyAdministered ? "" : (OUIDatabase.lookup(ap.bssid.oui) ?? ""),
+                    "vendor": ap.bssid.isLocallyAdministered ? "" : (OUIDatabase.lookup(bytes: ap.bssid.bytes) ?? ""),
                     "notes": network.traffic.map { "\($0.bytes) bytes, \($0.packets) pkts" } ?? "",
                 ])
             }

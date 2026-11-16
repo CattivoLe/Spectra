@@ -19,6 +19,7 @@ struct PcapView: View {
     @State private var picking = false
     @State private var phase: Phase = .idle
     @State private var shareItem: ShareItem?
+    @State private var filter = PacketFilter()
 
     private func save(_ capture: Capture) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(capture.name)
@@ -88,6 +89,7 @@ struct PcapView: View {
         .task(id: capture?.id) {
             guard let capture, case .idle = phase else { return }
             phase = .loading(name: capture.name)
+            filter = PacketFilter()
             let data = capture.data
             switch await Task.detached(priority: .userInitiated) { Self.analyze(data) }.value {
             case .ok(let analysis): phase = .loaded(name: capture.name, analysis: analysis)
@@ -171,45 +173,142 @@ struct PcapView: View {
         }
 
         if !summary.talkers.isEmpty {
-            Section("Top hosts") {
+            Section {
                 ForEach(summary.talkers) { talker in
-                    HStack {
-                        Text(talker.endpoint).font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
-                        Spacer(minLength: 8)
-                        Text("\(talker.packets) · \(bytes(talker.bytes))")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                    Button {
+                        filter.endpoints = filter.endpoints == [talker.endpoint] ? [] : [talker.endpoint]
+                    } label: {
+                        HStack {
+                            Text(talker.endpoint).font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
+                            Spacer(minLength: 8)
+                            Text("\(talker.packets) · \(bytes(talker.bytes))")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            if filter.endpoints == [talker.endpoint] {
+                                Image(systemName: "line.3.horizontal.decrease.circle.fill").foregroundStyle(.tint)
+                            }
+                        }
                     }
+                    .buttonStyle(.plain)
                 }
+            } header: {
+                Text("Top hosts")
+            } footer: {
+                Text("Tap a host or a conversation to show only its packets.")
             }
         }
 
         if !summary.conversations.isEmpty {
             Section("Conversations") {
                 ForEach(summary.conversations) { conversation in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(conversation.a) ↔ \(conversation.b)")
-                            .font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
-                        Text("\(conversation.packets) packets · \(bytes(conversation.bytes))")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                    let pair = [conversation.a, conversation.b]
+                    Button {
+                        filter.endpoints = filter.endpoints == pair ? [] : pair
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(conversation.a) ↔ \(conversation.b)")
+                                    .font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
+                                Text("\(conversation.packets) packets · \(bytes(conversation.bytes))")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            if filter.endpoints == pair {
+                                Image(systemName: "line.3.horizontal.decrease.circle.fill").foregroundStyle(.tint)
+                            }
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }
 
         if !analysis.rows.isEmpty {
+            packetFilters(summary)
+            let matching = filter.isActive ? analysis.rows.filter(filter.matches) : analysis.rows
+            let shown = matching.prefix(CaptureAnalysis.shownRows)
             Section {
-                ForEach(analysis.rows) { row in
+                ForEach(shown) { row in
                     PacketRowView(row: row, start: summary.start)
                 }
+                if matching.isEmpty {
+                    Text("No packet matches these filters.")
+                        .foregroundStyle(.secondary)
+                }
             } header: {
-                Text("Packets")
+                if filter.isActive {
+                    Text("Packets: \(matching.count) of \(analysis.rows.count)")
+                } else {
+                    Text("Packets")
+                }
             } footer: {
-                if analysis.rowsTruncated {
-                    Text("Showing the first \(analysis.rows.count) packets. The summary above counts all \(summary.packetCount).")
+                if shown.count < matching.count {
+                    Text("Showing the first \(shown.count) of \(matching.count). Narrow the filters to see the rest.")
+                } else if analysis.rowsTruncated {
+                    Text("The list holds the first \(analysis.rows.count) packets. The summary above counts all \(summary.packetCount).")
                 }
             }
+        }
+    }
+
+    /// Search, protocol and application chips, and the host picked above.
+    @ViewBuilder
+    private func packetFilters(_ summary: CaptureSummary) -> some View {
+        Section {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Address, port or text", text: $filter.query)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if !filter.query.isEmpty {
+                    Button("Clear", systemImage: "xmark.circle.fill") { filter.query = "" }
+                        .labelStyle(.iconOnly)
+                        .foregroundStyle(.secondary)
+                        .buttonStyle(.borderless)
+                }
+            }
+            if summary.protocols.count > 1 {
+                FlowLayout(spacing: 8, lineSpacing: 8) {
+                    ForEach(summary.protocols) { item in
+                        FilterChip(title: LocalizedStringKey(item.name), systemImage: nil, isOn: filter.transports.contains(item.name)) {
+                            filter.toggle(transport: item.name)
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            if !summary.apps.isEmpty {
+                FlowLayout(spacing: 8, lineSpacing: 8) {
+                    ForEach(summary.apps) { item in
+                        FilterChip(title: LocalizedStringKey(item.name), systemImage: nil, isOn: filter.app == item.name) {
+                            filter.app = filter.app == item.name ? nil : item.name
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            if !filter.endpoints.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "network").foregroundStyle(.tint)
+                    Text(filter.endpoints.joined(separator: " ↔ "))
+                        .font(.callout.monospaced())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 8)
+                    Button("Remove", systemImage: "xmark.circle.fill") { filter.endpoints = [] }
+                        .labelStyle(.iconOnly)
+                        .foregroundStyle(.secondary)
+                        .buttonStyle(.borderless)
+                }
+            }
+            if filter.isActive {
+                Button("Reset filters", systemImage: "arrow.counterclockwise") { filter = PacketFilter() }
+                    .buttonStyle(.borderless)
+            }
+        } header: {
+            Text("Filter")
         }
     }
 
@@ -240,6 +339,7 @@ struct PcapView: View {
     private func beginLoading(_ url: URL) {
         let name = url.lastPathComponent
         phase = .loading(name: name)
+        filter = PacketFilter()
         Task {
             let outcome = await Self.readAndAnalyze(url)
             switch outcome {

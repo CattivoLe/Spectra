@@ -41,9 +41,6 @@ struct BLEDeviceDetailView: View {
                                 .font(.title2.weight(.semibold))
                                 .fixedSize(horizontal: false, vertical: true)
                             HStack(spacing: 6) {
-                                if device.isSpectraSensor {
-                                    badge("Sensor", color: .blue)
-                                }
                                 if let company = device.companyName, company != device.displayName {
                                     Text(company)
                                         .font(.subheadline)
@@ -92,6 +89,10 @@ struct BLEDeviceDetailView: View {
                 Text("Identity")
             } footer: {
                 Text("iOS assigns this identifier. It is not the Bluetooth address, and another app sees a different one.")
+            }
+
+            if let assessment = TrackerDetector.assess(device, now: snapshot == nil ? scanner.now : device.lastSeen) {
+                trackerSection(device, assessment)
             }
 
             if !device.apple.isEmpty {
@@ -184,6 +185,59 @@ struct BLEDeviceDetailView: View {
         }
     }
 
+    /// What kind of tag this is and whether it looks like it is travelling with the user.
+    private func trackerSection(_ device: BLEDevice, _ assessment: TrackerAssessment) -> some View {
+        let color: Color = switch assessment.level {
+        case .alert: .red
+        case .watch: .orange
+        case .info: .secondary
+        }
+        let minutes = Int(assessment.presentFor / 60)
+        return Section {
+            InfoRow("Kind", value: assessment.kind.label)
+            if let owner = assessment.ownerLabel {
+                InfoRow("Owner", value: owner)
+            }
+            if let battery = assessment.batteryLabel {
+                InfoRow("Battery", value: battery)
+            }
+            InfoRow("Near you for") {
+                Text(minutes >= 1 ? String(localized: "\(minutes) min") : String(localized: "under a minute"))
+            }
+            switch assessment.level {
+            case .alert:
+                Label {
+                    Text("This tag has lost its owner and has stayed within range of you. Move to another place and come back to this screen: if it is still here, look for it with Find.")
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                }
+                .foregroundStyle(color)
+                .font(.subheadline)
+            case .watch:
+                Text("Away from its owner, but only just nearby. Nothing to do unless it stays with you.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            case .info:
+                Text(assessment.separated == false
+                     ? "Its owner is nearby: someone's keys or luggage, not a tag planted on you."
+                     : "Out of range now.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            HStack {
+                Text("Tracker")
+                Spacer()
+                if assessment.level == .alert {
+                    Text("May be travelling with you")
+                        .foregroundStyle(color)
+                }
+            }
+        } footer: {
+            Text("A phone cannot tell a tag in your bag from one in the bag next to you. Only its staying with you as you move does.")
+        }
+    }
+
     @ViewBuilder
     private func gattSection(_ device: BLEDevice) -> some View {
         let bound = scanner.gattDeviceID == device.id
@@ -202,6 +256,16 @@ struct BLEDeviceDetailView: View {
             case .connected:
                 Button("Disconnect", systemImage: "xmark.circle", role: .destructive) {
                     scanner.disconnectGATT()
+                }
+            case .ended:
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("The device closed the connection. What it gave is kept below.", systemImage: "link.badge.plus")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Connect again", systemImage: "arrow.clockwise") {
+                        scanner.connectGATT(device.id)
+                    }
                 }
             case .failed(let message):
                 VStack(alignment: .leading, spacing: 6) {
@@ -222,49 +286,66 @@ struct BLEDeviceDetailView: View {
         } header: {
             Text("Services (GATT)")
         } footer: {
-            Text("Connects to the device to list its services and read the values it exposes. Many devices allow only a brief connection.")
+            Text("Connects to the device to list its services and read the values it exposes. Many devices allow only a brief connection. Short codes are standard Bluetooth ones; long UUIDs belong to the maker, who rarely publishes what they mean, so only the raw bytes can be shown.")
         }
     }
 
     private func gattServiceRow(_ service: GATTService) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(service.name ?? service.uuid)
-                .font(.body.weight(.medium))
-            if service.name != nil {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(service.name ?? String(localized: "Vendor service"))
+                    .font(.headline)
                 Text(service.uuid)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
             ForEach(service.characteristics) { characteristic in
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack {
-                        Text(characteristic.uuid)
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                        Spacer(minLength: 8)
-                        if !characteristic.properties.isEmpty {
-                            Text(characteristic.properties)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    if let value = characteristic.value, !value.isEmpty {
-                        if let decoded = GATTValue.decode(uuid: characteristic.uuid, bytes: value) {
-                            Text(decoded)
-                                .font(.caption2)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Text(gattValueText(value))
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .padding(.leading, 10)
+                characteristicRow(characteristic)
             }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func characteristicRow(_ characteristic: GATTCharacteristic) -> some View {
+        let name = BLENumbers.characteristicName(uuid: characteristic.uuid)
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(name ?? String(localized: "Vendor characteristic"))
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(name == nil ? .secondary : .primary)
+                Spacer(minLength: 8)
+                if !characteristic.properties.isEmpty {
+                    Text(characteristic.properties)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize()
+                }
+            }
+            Text(characteristic.uuid)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            if let value = characteristic.value, !value.isEmpty {
+                if let decoded = GATTValue.decode(uuid: characteristic.uuid, bytes: value) {
+                    Text(decoded)
+                        .font(.subheadline)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text(gattValueText(value))
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.leading, 12)
+        .overlay(alignment: .leading) {
+            Capsule()
+                .fill(.quaternary)
+                .frame(width: 3)
         }
     }
 
@@ -290,14 +371,6 @@ struct BLEDeviceDetailView: View {
         }
     }
 
-    private func badge(_ text: LocalizedStringKey, color: Color) -> some View {
-        Text(text)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color, in: .capsule)
-    }
 }
 
 private struct BLESignalChart: View {

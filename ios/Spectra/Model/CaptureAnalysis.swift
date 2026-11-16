@@ -33,6 +33,46 @@ nonisolated struct PacketRow: Sendable, Identifiable {
     var source: String
     var destination: String
     var info: String
+    /// The application guessed from the ports, when there is one.
+    var app: String? = nil
+    /// The addresses the summary counts hosts by, for the host filter.
+    var netSource: String? = nil
+    var netDestination: String? = nil
+}
+
+/// What the packet list is narrowed to. Mirrors the Android `PacketFilter`.
+nonisolated struct PacketFilter: Equatable, Sendable {
+    /// Text anywhere in the packet's line, addresses or ports.
+    var query = ""
+    /// Protocols to keep; empty keeps all.
+    var transports: Set<String> = []
+    var app: String?
+    /// One host, or the two ends of a conversation.
+    var endpoints: [String] = []
+
+    var isActive: Bool {
+        !query.trimmingCharacters(in: .whitespaces).isEmpty || !transports.isEmpty || app != nil || !endpoints.isEmpty
+    }
+
+    func matches(_ row: PacketRow) -> Bool {
+        if !transports.isEmpty, !transports.contains(row.transport) { return false }
+        if let app, row.app != app { return false }
+        switch endpoints.count {
+        case 0: break
+        case 1:
+            guard row.netSource == endpoints[0] || row.netDestination == endpoints[0] else { return false }
+        default:
+            guard Set([row.netSource, row.netDestination].compactMap { $0 }) == Set(endpoints.prefix(2)) else { return false }
+        }
+        let needle = query.trimmingCharacters(in: .whitespaces)
+        if needle.isEmpty { return true }
+        return [row.info, row.source, row.destination, row.transport, row.app ?? ""]
+            .contains { $0.localizedCaseInsensitiveContains(needle) }
+    }
+
+    mutating func toggle(transport: String) {
+        if transports.contains(transport) { transports.remove(transport) } else { transports.insert(transport) }
+    }
 }
 
 nonisolated struct CaptureSummary: Sendable {
@@ -59,12 +99,17 @@ nonisolated struct CaptureAnalysis: Sendable {
     var rows: [PacketRow]
     /// True when there were more packets than the row cap, so the list is partial.
     var rowsTruncated: Bool
+
+    /// How many rows the list shows at most, filtered or not.
+    static let shownRows = 2000
 }
 
 /// Turns raw file bytes into a summary and a (capped) packet list. Pure and
 /// `nonisolated`, so it runs off the main actor on a background task.
 nonisolated enum PcapAnalyzer {
-    static func analyze(_ data: Data, maxRows: Int = 2000) throws -> CaptureAnalysis {
+    /// Rows are kept for far more packets than the list shows, so a filter
+    /// finds matches anywhere in a large capture, not just in its start.
+    static func analyze(_ data: Data, maxRows: Int = 50_000) throws -> CaptureAnalysis {
         let file = try PcapParser.parse(data)
 
         var protocolCounts: [Transport: Int] = [:]
@@ -113,7 +158,8 @@ nonisolated enum PcapAnalyzer {
                 rows.append(PacketRow(
                     id: index, timestamp: packet.timestamp, length: size,
                     transport: info.transport.rawValue, source: info.source,
-                    destination: info.destination, info: info.info
+                    destination: info.destination, info: info.info,
+                    app: info.app, netSource: info.netSource, netDestination: info.netDestination
                 ))
             }
         }

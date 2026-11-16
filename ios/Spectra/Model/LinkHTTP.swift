@@ -56,14 +56,16 @@ enum LinkHTTP {
         }
     }
 
-    /// TCP handshake time, or nil when the host does not answer in time.
+    /// TCP handshake time, or nil when the host does not answer in time. With
+    /// `tls` the TLS handshake has to finish too, certificate check included.
     static func connectMillis(
         host: String,
         port: UInt16,
         timeout: TimeInterval,
-        interfaceType: NWInterface.InterfaceType?
+        interfaceType: NWInterface.InterfaceType?,
+        tls: Bool = false
     ) async -> Int? {
-        let params = NWParameters.tcp
+        let params: NWParameters = tls ? .tls : .tcp
         if let interfaceType { params.requiredInterfaceType = interfaceType }
         guard let endpointPort = NWEndpoint.Port(rawValue: port) else { return nil }
         let connection = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: params)
@@ -86,17 +88,31 @@ enum LinkHTTP {
         }
     }
 
-    /// `.system` follows the phone's route, VPN included. `.pinned` stays on Wi-Fi or Ethernet.
+    /// `.system` follows the phone's route, VPN included. `.pinned` stays on Wi-Fi
+    /// or Ethernet, or on the mobile network when the route setting asks for it.
     enum ProbeInterface: Sendable {
         case system
         case pinned(NWInterface.InterfaceType)
         case unavailable
     }
 
+    /// Sent as the User-Agent version, so services can tell builds apart.
+    nonisolated static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1"
+
+    /// The BSD name of the interface of this kind the system is using, like "en0".
+    static func interfaceName(_ type: NWInterface.InterfaceType) async -> String? {
+        await currentPath().availableInterfaces.first { $0.type == type }?.name
+    }
+
     static func probeInterface(viaVpn: Bool) async -> ProbeInterface {
         let path = await currentPath()
         guard path.status == .satisfied else { return .unavailable }
         if viaVpn { return .system }
+        // The mobile network is asked for by name: with Wi-Fi joined it is
+        // not the path the system uses, only one it has available.
+        if UserDefaults.standard.bool(forKey: ProbeRoute.cellularKey) {
+            return path.availableInterfaces.contains { $0.type == .cellular } ? .pinned(.cellular) : .unavailable
+        }
         if path.usesInterfaceType(.wifi) { return .pinned(.wifi) }
         if path.usesInterfaceType(.wiredEthernet) { return .pinned(.wiredEthernet) }
         return .unavailable
@@ -115,7 +131,7 @@ private func exchange(
     keepBody: Bool
 ) async throws -> LinkHTTP.Result {
     try await waitReady(connection)
-    var header = "\(method) \(path) HTTP/1.1\r\nHost: \(host)\r\nUser-Agent: Spectra\r\nAccept: \(accept)\r\nConnection: close\r\n"
+    var header = "\(method) \(path) HTTP/1.1\r\nHost: \(host)\r\nUser-Agent: Spectra/\(LinkHTTP.version)\r\nAccept: \(accept)\r\nConnection: close\r\n"
     if let body {
         header += "Content-Type: application/octet-stream\r\nContent-Length: \(body.count)\r\n"
     }
