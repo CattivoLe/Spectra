@@ -92,6 +92,12 @@ class Navigator(private val nav: NavHostController) {
 
     fun connection() = nav.navigate("connection")
 
+    fun linkCheck() = nav.navigate("link-check")
+
+    fun speedTest() = nav.navigate("speed-test")
+
+    fun traceRoute() = nav.navigate("trace-route")
+
     fun traffic() = nav.navigate("traffic")
 
     fun savedTraffic(id: String) = nav.navigate("traffic/saved/${Uri.encode(id)}")
@@ -232,6 +238,9 @@ fun SpectraApp(model: SpectraModel) {
                     composable(Tab.Lan.start) { LanScreen(model, navigator) }
                     composable("host/{ip}") { LanDetail(model, navigator, it.text("ip"), entryId = null) }
                     composable("connection") { LinkScreen(model, navigator) }
+                    composable("link-check") { LinkCheckScreen(navigator) }
+                    composable("speed-test") { SpeedTestScreen(model, navigator) }
+                    composable("trace-route") { TraceScreen(model, navigator) }
                     composable("traffic") { SnifferScreen(model, navigator, sessionId = null) }
                     composable("traffic/saved/{id}") { SnifferScreen(model, navigator, sessionId = it.text("id")) }
                     composable("traffic/flow/{id}/e/{exchange}/json") {

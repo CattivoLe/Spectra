@@ -42,7 +42,7 @@ class MacAddress(bytes: ByteArray) {
 
     fun vendor(): String? {
         if (isLocallyAdministered) return null
-        return Catalog.oui(oui) ?: Catalog.suspiciousOui(oui)
+        return Catalog.oui(bytes) ?: Catalog.suspiciousOui(oui)
     }
 
     override fun equals(other: Any?): Boolean =

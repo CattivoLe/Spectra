@@ -1,6 +1,18 @@
 package cattivole.spectra.platform
 
 import cattivole.spectra.core.AbroadView
+import cattivole.spectra.core.HopPlace
+import cattivole.spectra.core.RouteTrace
+import cattivole.spectra.core.AccessCheck
+import cattivole.spectra.core.AccessReport
+import cattivole.spectra.core.ProbeRoute
+import cattivole.spectra.core.ResourceReach
+import cattivole.spectra.core.DnsReport
+import cattivole.spectra.core.ExposedPort
+import cattivole.spectra.core.ExposureReport
+import cattivole.spectra.core.TlsCheck
+import cattivole.spectra.core.TlsInspector
+import cattivole.spectra.core.TlsObservation
 import cattivole.spectra.core.CheckStart
 import cattivole.spectra.core.ExternalAddress
 import cattivole.spectra.core.LinkParse
@@ -73,7 +85,120 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
             publish()
         }
 
+    /** The mobile network instead of Wi-Fi. Ignored while [viaVpn] is on. */
+    var viaCellular: Boolean
+        get() = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(VIA_CELLULAR, false)
+        set(value) {
+            app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(VIA_CELLULAR, value).apply()
+            if (!value) cellular.release()
+            publish()
+        }
+
+    var route: ProbeRoute
+        get() = if (viaVpn) ProbeRoute.VPN else if (viaCellular) ProbeRoute.CELLULAR else ProbeRoute.WIFI
+        set(value) {
+            app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean(VIA_VPN, value == ProbeRoute.VPN)
+                .putBoolean(VIA_CELLULAR, value == ProbeRoute.CELLULAR)
+                .apply()
+            if (value != ProbeRoute.CELLULAR) cellular.release()
+            publish()
+        }
+
+    /** The network the route setting asks for, for the other checks that share it. */
+    suspend fun currentNetwork(): Network? = probeNetwork()?.network
+
+    // The person's own sites
+
+    /** Sites to keep an eye on, kept across launches. */
+    var resources: List<String> = emptyList()
+        private set
+
+    /** The last answer of each site. Not kept: it goes stale in minutes. */
+    var resourceResults: Map<String, ResourceReach> = emptyMap()
+        private set
+    var checkingResources: Set<String> = emptySet()
+        private set
+
+    /** Adds a site. False when the text holds no site name or it is already listed. */
+    fun addResource(input: String): Boolean {
+        val host = AccessCheck.normalize(input) ?: return false
+        if (host in resources) return false
+        resources = resources + host
+        saveResources()
+        checkResource(host)
+        return true
+    }
+
+    fun removeResource(host: String) {
+        resources = resources - host
+        resourceResults = resourceResults - host
+        checkingResources = checkingResources - host
+        saveResources()
+        publish()
+    }
+
+    fun checkResource(host: String) {
+        if (host !in resources || host in checkingResources) return
+        checkingResources = checkingResources + host
+        publish()
+        scope.launch {
+            val reach = withContext(Dispatchers.IO) {
+                probeNetwork()?.let { reach(it.network, host) } ?: ResourceReach(host, false, null)
+            }
+            checkingResources = checkingResources - host
+            if (host in resources) resourceResults = resourceResults + (host to reach)
+            publish()
+        }
+    }
+
+    fun checkAllResources() = resources.forEach(::checkResource)
+
+    private fun saveResources() {
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(RESOURCES, resources.joinToString("\n")).apply()
+        publish()
+    }
+
+    /**
+     * A finished TLS handshake with the site's own certificate. That is where
+     * a filter cuts in: it reads the site name in the handshake and drops the
+     * connection. No page is requested, since some sites answer a bare
+     * request with silence.
+     */
+    private fun reach(network: Network, host: String): ResourceReach {
+        val start = System.nanoTime()
+        return try {
+            NetConnect.connect(network, host, 443, 5000).socket.use {
+                it.soTimeout = 6000
+                val secure = (javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory)
+                    .createSocket(it, host, 443, true) as javax.net.ssl.SSLSocket
+                secure.use { tls ->
+                    tls.startHandshake()
+                    if (!javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(host, tls.session)) {
+                        return ResourceReach(host, false, null)
+                    }
+                }
+            }
+            ResourceReach(host, true, elapsed(start))
+        } catch (_: Exception) {
+            ResourceReach(host, false, null)
+        }
+    }
+
+    private suspend fun checkAccess(network: Network): AccessReport = coroutineScope {
+        val open = AccessCheck.openHosts.map { async(Dispatchers.IO) { reach(network, it) } }
+        val listed = AccessCheck.listedHosts.map { async(Dispatchers.IO) { reach(network, it) } }
+        val blocked = AccessCheck.blockedHosts.map { async(Dispatchers.IO) { reach(network, it) } }
+        AccessReport(open.awaitAll(), listed.awaitAll(), blocked.awaitAll())
+    }
+
     private val app = context.applicationContext
+    private val cellular = CellularRoute(app)
+
+    init {
+        resources = AccessCheck.parseList(app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(RESOURCES, null))
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val listeners = mutableListOf<() -> Unit>()
     private var job: Job? = null
@@ -111,7 +236,9 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
     fun stop() {
         token++
         job?.cancel()
+        exposureJob?.cancel()
         cancelRechecks()
+        cellular.release()
         running = false
         phase = ""
         publish()
@@ -126,7 +253,7 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
         publish()
         recheckJobs[code] = scope.launch {
             val reach = withContext(Dispatchers.IO) {
-                val route = probeNetwork(viaVpn)
+                val route = probeNetwork()
                 if (route == null) RegionReach(code, host, false, null) else probeRegion(route.network, code, host)
             }
             report?.let { current ->
@@ -136,6 +263,262 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
             recheckJobs.remove(code)
             publish()
         }
+    }
+
+    // Ports from the internet
+
+    var checkingExposure: Boolean = false
+        private set
+
+    /** Bumped when a finished report gains something worth saving again. */
+    var revision: Int = 0
+        private set
+
+    /** Ports the person typed in, tried along with the usual ones next time. */
+    private val extraExposurePorts = mutableListOf<Int>()
+    private var exposureJob: Job? = null
+
+    /**
+     * Asks check-host.net to connect to the public address on each of the
+     * usual ports, one request per port, and keeps the answers on the report.
+     */
+    fun checkExposure() = checkExposure(TlsInspector.exposurePorts + extraExposurePorts, merge = false)
+
+    /** Tries one more port from outside and adds it to the list. */
+    fun checkExposure(port: Int) {
+        if (port !in 1..65535) return
+        if (port !in TlsInspector.exposurePorts && port !in extraExposurePorts) extraExposurePorts.add(port)
+        checkExposure(listOf(port), merge = true)
+    }
+
+    private fun checkExposure(ports: List<Int>, merge: Boolean) {
+        val ip = report?.external?.ip ?: return
+        if (running || checkingExposure) return
+        checkingExposure = true
+        publish()
+        exposureJob = scope.launch {
+            try {
+                val route = probeNetwork() ?: return@launch
+                var result = probeExposure(route.network, ip, ports)
+                val current = report ?: return@launch
+                if (current.external?.ip != ip) return@launch
+                val previous = current.exposure
+                if (merge && previous != null && previous.ip == ip) {
+                    val kept = previous.ports.filter { old -> result.ports.none { it.port == old.port } }
+                    result = result.copy(
+                        ports = kept + result.ports,
+                        note = if (result.note == RemoteNote.NONE) previous.note else result.note,
+                    )
+                }
+                current.exposure = result
+                revision += 1
+            } finally {
+                checkingExposure = false
+                publish()
+            }
+        }
+    }
+
+    private suspend fun probeExposure(network: Network, ip: String, ports: List<Int>): ExposureReport {
+        val started = mutableListOf<Triple<Int, String, String>>()
+        var note = RemoteNote.NONE
+        for (port in ports) {
+            val start = remoteStart(network, "https://check-host.net/check-tcp?host=${encode("$ip:$port")}&max_nodes=1")
+            when (start) {
+                is CheckStart.Ok -> start.nodes.firstOrNull()?.let { started.add(Triple(port, start.id, it.id)) }
+                CheckStart.Busy -> note = RemoteNote.BUSY
+                else -> if (note == RemoteNote.NONE) note = RemoteNote.FAILED
+            }
+            if (start == CheckStart.Busy) break
+            delay(250)
+        }
+        val results = HashMap<Int, Boolean>()
+        var pending = started.toList()
+        repeat(10) {
+            if (pending.isEmpty()) return@repeat
+            delay(1500)
+            val still = mutableListOf<Triple<Int, String, String>>()
+            for (item in pending) {
+                val body = withContext(Dispatchers.IO) {
+                    httpText(network, "https://check-host.net/check-result/${item.second}", acceptJson = true)
+                }
+                val open = body?.let { LinkParse.tcpOpen(it, item.third) }
+                if (open == null) still.add(item) else results[item.first] = open
+            }
+            pending = still
+        }
+        return ExposureReport(ip, System.currentTimeMillis(), started.map { ExposedPort(it.first, results[it.first] ?: false) }, note)
+    }
+
+    // Certificates and DNS
+
+    private suspend fun inspectTls(network: Network): TlsCheck = coroutineScope {
+        TlsCheck(
+            TlsInspector.references.map { reference ->
+                async(Dispatchers.IO) {
+                    CertificateProbe.fetch(reference.host, network = network).fold(
+                        onSuccess = { found ->
+                            TlsObservation(
+                                host = reference.host,
+                                issuer = found.issuer,
+                                trusted = found.trusted,
+                                expected = TlsInspector.isExpected(found.issuer, reference),
+                                subject = found.subject,
+                                names = found.names,
+                                issuerCommonName = found.issuerCommonName,
+                                notBefore = found.notBefore,
+                                notAfter = found.notAfter,
+                                chain = found.chain,
+                                fingerprint = found.fingerprint,
+                                trustError = found.trustError,
+                            )
+                        },
+                        onFailure = { error ->
+                            TlsObservation(reference.host, issuer = null, trusted = false, expected = true, error = error.message ?: "No reply")
+                        },
+                    )
+                }
+            }.awaitAll(),
+        )
+    }
+
+    /**
+     * Who answers this network's lookups: the resolvers the phone is told to
+     * use, the address the world sees the lookups come from, whether that
+     * resolver invents answers, and whether encrypted DNS gets through.
+     */
+    private suspend fun inspectDns(network: Network): DnsReport = withContext(Dispatchers.IO) {
+        val manager = app.getSystemService(ConnectivityManager::class.java)
+        val configured = manager?.getLinkProperties(network)?.dnsServers.orEmpty().mapNotNull { it.hostAddress?.substringBefore('%') }
+        coroutineScope {
+            // Akamai answers this name with the address of whoever asked: the recursive resolver, not the phone.
+            val egress = async { lookup(network, "whoami.akamai.net")?.ifEmpty { null } }
+            val lies = async {
+                val token = java.lang.Long.toString(kotlin.random.Random.nextLong(Long.MAX_VALUE), 36)
+                val answers = listOf("probe-$token.example.com", "spectra-$token-${token.take(4)}.net").map { lookup(network, it) }
+                if (answers.all { it == null }) null else answers.any { !it.isNullOrEmpty() }
+            }
+            val doh = async {
+                httpText(network, "https://cloudflare-dns.com/dns-query?name=example.com&type=A", accept = "application/dns-json") != null
+            }
+            val dot = async { tcpMillis(network, "1.1.1.1", 853, 3000) != null }
+            val resolverIp = egress.await()
+            val owner = resolverIp?.let { ip ->
+                httpText(network, "https://ipwho.is/${encode(ip)}")?.let { LinkParse.mergeWhois(it, ExternalAddress(ip)) }
+            }
+            DnsReport(
+                configured = configured,
+                resolverIp = resolverIp,
+                resolverName = owner?.isp,
+                resolverCountry = owner?.countryCode,
+                liesAboutMissingNames = lies.await(),
+                dohReachable = doh.await(),
+                dotReachable = dot.await(),
+            )
+        }
+    }
+
+    /** The first address of a name, IPv4 preferred: "" when the name does not exist, null when the lookup failed. */
+    private fun lookup(network: Network, name: String): String? = try {
+        val all = network.getAllByName(name)
+        (all.firstOrNull { it is Inet4Address } ?: all.firstOrNull())?.hostAddress.orEmpty()
+    } catch (_: java.net.UnknownHostException) {
+        ""
+    } catch (_: Exception) {
+        null
+    }
+
+    // Traceroute to a chosen target
+
+    var routeRunning: Boolean = false
+        private set
+    var routePhase: String = ""
+        private set
+    var routeTarget: String? = null
+        private set
+    var routeAddress: String? = null
+        private set
+    var routeTrace: LocalTrace? = null
+        private set
+    var routePlaces: Map<String, HopPlace> = emptyMap()
+        private set
+    var routeFailure: String? = null
+        private set
+    private var routeJob: Job? = null
+
+    /**
+     * Traces from this phone to [input] over the chosen route, then asks
+     * ipwho.is where each public hop is. Android's ping speaks IPv4 here, so
+     * a name is resolved to its IPv4 address.
+     */
+    fun traceRoute(input: String) {
+        val host = RouteTrace.target(input)
+        if (host == null) {
+            routeFailure = "That is not a site name or an IP address."
+            publish()
+            return
+        }
+        routeJob?.cancel()
+        routeRunning = true
+        routeFailure = null
+        routeTarget = host
+        routeAddress = null
+        routeTrace = null
+        routePlaces = emptyMap()
+        routePhase = "Looking up the address"
+        publish()
+        routeJob = scope.launch {
+            try {
+                val route = probeNetwork()
+                if (route == null) {
+                    routeFailure = "There is no network for the chosen connection."
+                    return@launch
+                }
+                val manager = app.getSystemService(ConnectivityManager::class.java)
+                val iface = route.interfaceName ?: manager?.getLinkProperties(route.network)?.interfaceName
+                val address = withContext(Dispatchers.IO) {
+                    runCatching { NetConnect.resolve(route.network, host).firstOrNull { it is Inet4Address }?.hostAddress }.getOrNull()
+                }
+                if (address == null) {
+                    routeFailure = "Could not find an IPv4 address for this target."
+                    return@launch
+                }
+                routeAddress = address
+                routePhase = "Tracing the path"
+                publish()
+                val trace = localTrace(iface, address, RouteTrace.MAX_HOPS)
+                routeTrace = trace
+                if (trace.unavailable) {
+                    routeFailure = "This phone blocked the probes a traceroute needs."
+                    return@launch
+                }
+                routePhase = "Placing the hops on the map"
+                publish()
+                val publicHops = trace.hops.mapNotNull { it.address }.filter(RouteTrace::isPublic).distinct()
+                val places = withContext(Dispatchers.IO) {
+                    coroutineScope {
+                        val gate = Semaphore(4)
+                        publicHops.map { ip ->
+                            async {
+                                gate.withPermit { httpText(route.network, "https://ipwho.is/$ip")?.let(RouteTrace::place)?.let { ip to it } }
+                            }
+                        }.awaitAll().filterNotNull().toMap()
+                    }
+                }
+                routePlaces = places
+            } finally {
+                routeRunning = false
+                routePhase = ""
+                publish()
+            }
+        }
+    }
+
+    fun stopRoute() {
+        routeJob?.cancel()
+        routeRunning = false
+        routePhase = ""
+        publish()
     }
 
     private fun cancelRechecks() {
@@ -148,11 +531,13 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
         val current = report ?: return
         suspend fun live() = token == mine && coroutineContext.isActive
         val throughVpn = viaVpn
-        val route = probeNetwork(throughVpn)
+        val route = probeNetwork()
         if (route == null) {
             current.status = LinkStatus.NO_NETWORK
             current.detail = if (throughVpn) {
                 "There is no network connection to check."
+            } else if (viaCellular) {
+                "There is no mobile network to check."
             } else {
                 "Connect to a Wi-Fi or Ethernet network first."
             }
@@ -185,12 +570,27 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
         }
         if (!live()) return
 
+        stage("Checking access", 0.34f)
+        current.access = checkAccess(network)
+        publish()
+        if (!live()) return
+
         stage("Checking countries", 0.42f)
         current.regions = probeRegions(network)
         publish()
         if (!live()) return
 
         if (webOk) {
+            stage("Checking certificates", 0.48f)
+            val inspected = coroutineScope {
+                val tls = async { inspectTls(network) }
+                val resolver = async { inspectDns(network) }
+                tls.await() to resolver.await()
+            }
+            if (!live()) return
+            current.tls = inspected.first
+            current.resolver = inspected.second
+            publish()
             stage("Measuring speed", 0.58f)
             val sample = measureSpeed(network)
             current.speed = sample
@@ -242,7 +642,12 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
     }
 
     /** Wi-Fi or Ethernet when the VPN is skipped; the system default route when it is not. */
-    private fun probeNetwork(throughVpn: Boolean): ProbeNetwork? {
+    private suspend fun probeNetwork(): ProbeNetwork? {
+        val throughVpn = viaVpn
+        if (!throughVpn && viaCellular) {
+            // No gateway to ask and no interface to trace from: the Wi-Fi router is not on this path.
+            return cellular.acquire()?.let { ProbeNetwork(it, null, false, null) }
+        }
         if (!throughVpn) {
             val route = lan.lanRoute() ?: return null
             return ProbeNetwork(route.network, route.subnet.gateway, route.captive, route.subnet.interfaceName)
@@ -437,12 +842,11 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
      * [iface] keeps the trace on the LAN when the check is not following the VPN.
      * If the phone refuses that bind, the trace falls back to the system route.
      */
-    private suspend fun localTrace(iface: String?): LocalTrace = withContext(Dispatchers.IO) {
-        val target = "1.1.1.1"
+    private suspend fun localTrace(iface: String?, target: String = "1.1.1.1", maxHops: Int = 16): LocalTrace = withContext(Dispatchers.IO) {
         val hops = mutableListOf<TraceHop>()
         var timeoutFlag: String? = "-W"
         var bind = iface
-        for (ttl in 1..16) {
+        for (ttl in 1..maxHops) {
             if (!coroutineContext.isActive) break
             var output = runPing(target, ttl, timeoutFlag, bind)
             if (output != null && timeoutFlag != null && optionRejected(output)) {
@@ -481,24 +885,16 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
         }
     }
 
-    private fun tcpMillis(network: Network, host: String, port: Int, timeoutMs: Int): Int? {
-        val start = System.nanoTime()
-        return try {
-            Socket().use { socket ->
-                network.bindSocket(socket)
-                val address = InetAddress.getByName(host)
-                socket.connect(InetSocketAddress(address, port), timeoutMs)
-            }
-            elapsed(start)
-        } catch (_: Exception) {
-            null
-        }
-    }
+    private fun tcpMillis(network: Network, host: String, port: Int, timeoutMs: Int): Int? =
+        NetConnect.millis(network, host, port, timeoutMs)
 
-    private fun httpText(network: Network, url: String, acceptJson: Boolean = false): String? {
+    private fun httpText(network: Network, url: String, acceptJson: Boolean = false, accept: String? = null): String? {
         val connection = open(network, URL(url), 8000)
         if (acceptJson) connection.setRequestProperty("Accept", "application/json")
+        if (accept != null) connection.setRequestProperty("Accept", accept)
         return try {
+            // A caller that names its own type wants a real answer, not an error page.
+            if (accept != null && connection.responseCode != 200) return null
             val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
             stream?.bufferedReader()?.use { it.readText() }
         } catch (_: Exception) {
@@ -551,6 +947,8 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
     private companion object {
         const val PREFS = "spectra"
         const val VIA_VPN = "probeViaVpn"
+        const val VIA_CELLULAR = "probeCellular"
+        const val RESOURCES = "watchedResources"
         const val DNS_NAME = "one.one.one.one"
 
         private data class ProbeNetwork(

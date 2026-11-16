@@ -2,6 +2,11 @@ package cattivole.spectra.core
 
 /** OUI names and Bluetooth SIG assigned numbers, loaded from the bundled tables. */
 object Catalog {
+    /**
+     * The IEEE MA-L, MA-M and MA-S registries, built by data/tools/build_oui.py.
+     * Keys are 24-bit prefixes ("AA:BB:CC"), 28-bit ("AA:BB:CC:D") and 36-bit
+     * ("AA:BB:CC:DD:E").
+     */
     private val oui: Map<String, String> by lazy { load("spectra/oui.tsv") { it.uppercase() } }
     private val companies: Map<Int, String> by lazy {
         load("spectra/ble-companies.tsv") { it.toIntOrNull(16) }
@@ -38,6 +43,18 @@ object Catalog {
     )
 
     fun oui(prefix: String): String? = oui[prefix.uppercase()]
+
+    /**
+     * The maker of a whole address: the most specific registry block wins,
+     * since a 36-bit block is carved out of a 24-bit one that belongs to the
+     * registration authority.
+     */
+    fun oui(bytes: ByteArray): String? {
+        if (bytes.size < 5) return null
+        val hex = bytes.take(5).map { "%02X".format(it.toInt() and 0xFF) }
+        val base = "${hex[0]}:${hex[1]}:${hex[2]}"
+        return oui["$base:${hex[3]}:${hex[4][0]}"] ?: oui["$base:${hex[3][0]}"] ?: oui[base]
+    }
 
     fun suspiciousOui(prefix: String): String? = suspiciousOui[prefix.uppercase()]
 
@@ -79,7 +96,7 @@ object Catalog {
     private fun <K> load(name: String, key: (String) -> K?): Map<K, String> {
         val stream = Catalog::class.java.classLoader?.getResourceAsStream(name) ?: return emptyMap()
         return stream.bufferedReader().useLines { lines ->
-            val map = linkedMapOf<K, String>()
+            val map = HashMap<K, String>(1024)
             for (line in lines) {
                 val tab = line.indexOf('\t')
                 if (tab <= 0) continue

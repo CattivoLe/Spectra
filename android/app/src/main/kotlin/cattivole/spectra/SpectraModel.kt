@@ -29,9 +29,17 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     val phone = PhoneWifiScanner(app, store)
     val ble = DeviceBleScanner(app, radio, link)
     val gatt = BleGattClient(app)
-    val lan = LanScanner(app)
+    private val hostStore = object : cattivole.spectra.core.TextStore {
+        private val prefs = app.getSharedPreferences("spectra-hosts", Context.MODE_PRIVATE)
+        override fun read(key: String): String? = prefs.getString(key, null)
+        override fun write(key: String, value: String) {
+            prefs.edit().putString(key, value).apply()
+        }
+    }
+    val lan = LanScanner(app, cattivole.spectra.core.KnownHosts(hostStore), cattivole.spectra.core.DeviceLabels(hostStore))
     val traffic = TrafficSniffer(app)
     val connection = LinkProbe(app, lan)
+    val speed = cattivole.spectra.platform.SpeedTester(app) { connection.currentNetwork() }
     val usb = UsbEspFlasher(app)
     val wifiJoiner = WifiJoiner(app)
 
@@ -45,6 +53,22 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         get() = prefs.getBoolean(AUTOSAVE_HISTORY, true)
         set(value) {
             prefs.edit().putBoolean(AUTOSAVE_HISTORY, value).apply()
+            generation += 1
+        }
+
+    /** Hosts marked Trusted leave the LAN list unless a search is on. */
+    var hideTrustedHosts: Boolean
+        get() = prefs.getBoolean(HIDE_TRUSTED, false)
+        set(value) {
+            prefs.edit().putBoolean(HIDE_TRUSTED, value).apply()
+            generation += 1
+        }
+
+    /** A finished LAN scan that found hosts new to the network posts a notification. */
+    var notifyNewDevices: Boolean
+        get() = prefs.getBoolean(NOTIFY_NEW, true)
+        set(value) {
+            prefs.edit().putBoolean(NOTIFY_NEW, value).apply()
             generation += 1
         }
 
@@ -65,6 +89,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     private var lastWifiScan = 0
     private var lastLanScan: Long? = null
     private var savedCheckAt = 0L
+    private var savedRevision = 0
 
     init {
         link.setWatched(watchedIds)
@@ -85,6 +110,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
             saveFinishedConnection()
         }
         usb.observe(bump)
+        speed.observe { generation += 1 }
         radio.onAdapterChange { ble.availabilityChanged() }
         // Rows that leave the live lists stay in History.
         store.onEvict = { gone -> if (autosaveHistory) history.upsertNetworks(gone, PHONE_SOURCE) }
@@ -113,9 +139,10 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         if (connection.running) return
         val report = connection.report ?: return
         if (report.status == null || report.status == LinkStatus.NO_NETWORK) return
-        if (report.checkedAt == savedCheckAt) return
-        val saved = SavedConnection.from(report, connection.viaVpn) ?: return
+        if (report.checkedAt == savedCheckAt && connection.revision == savedRevision) return
+        val saved = SavedConnection.from(report, connection.viaVpn, connection.route == cattivole.spectra.core.ProbeRoute.CELLULAR) ?: return
         savedCheckAt = report.checkedAt
+        savedRevision = connection.revision
         history.upsertConnection(saved, lan.networkKey, lan.networkLabel, PHONE_SOURCE)
     }
 
@@ -129,8 +156,15 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         if (lan.lastScanDate != lastLanScan) {
             lastLanScan = lan.lastScanDate
             finished = true
+            announceNewDevices()
         }
         if (finished) autosave()
+    }
+
+    private fun announceNewDevices() {
+        if (!notifyNewDevices || lan.lastScanDate == null) return
+        val fresh = lan.lastVerdict?.newIps.orEmpty().mapNotNull { ip -> lan.devices.firstOrNull { it.ipAddress == ip } }
+        cattivole.spectra.platform.NewDeviceNotifier.notify(getApplication(), fresh, lan.networkLabel)
     }
 
     fun onForeground() {
@@ -163,6 +197,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         lan.stop()
         traffic.close()
         connection.stop()
+        speed.close()
         link.close()
         usb.close()
         radio.stop()
@@ -173,5 +208,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         const val PHONE_SOURCE = "This phone"
         const val AUTOSAVE_HISTORY = "autosaveHistory"
         const val WATCHED = "watchedIds"
+        const val HIDE_TRUSTED = "hideTrustedHosts"
+        const val NOTIFY_NEW = "notifyNewDevices"
     }
 }

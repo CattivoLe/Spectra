@@ -29,12 +29,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Finds an Espressif chip or a CH340 UART in ROM download mode on the phone's
  * USB port and writes the flash bundle that matches the chip. A blank chip
- * enumerates on its own. One that is already running firmware has to be held
- * in download mode with the BOOT button.
+ * enumerates on its own. USB-Serial/JTAG (S3, C5) drops off the bus during
+ * the DTR/RTS reset, so the pipe re-opens the same VID:PID before SYNC.
  */
 class UsbEspFlasher(context: Context) {
     data class Board(val id: Int, val title: String, val port: String, val kind: EspReset.Kind)
@@ -48,6 +50,8 @@ class UsbEspFlasher(context: Context) {
     private var job: Job? = null
     private var session: EspFlashSession? = null
     private var pending: Int? = null
+    @Volatile private var permissionLatch: CountDownLatch? = null
+    @Volatile private var permissionOk = false
 
     var boards: List<Board> = emptyList()
         private set
@@ -71,6 +75,13 @@ class UsbEspFlasher(context: Context) {
                 ACTION_USB_PERMISSION -> {
                     val device = deviceExtra(intent)
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    val latch = permissionLatch
+                    if (latch != null) {
+                        permissionOk = device != null && granted
+                        permissionLatch = null
+                        latch.countDown()
+                        return
+                    }
                     val waiting = pending
                     pending = null
                     if (device != null && granted && waiting != null && waiting == device.deviceId) {
@@ -238,6 +249,11 @@ class UsbEspFlasher(context: Context) {
     }
 
     private fun open(device: UsbDevice): CdcPipe? {
+        val handle = openHandle(device) ?: return null
+        return CdcPipe(handle)
+    }
+
+    private fun openHandle(device: UsbDevice): UsbHandle? {
         val manager = usb ?: return null
         val connection = manager.openDevice(device) ?: return null
         val comm = interfaces(device).firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_COMM }
@@ -285,10 +301,46 @@ class UsbEspFlasher(context: Context) {
             connection.close()
             return null
         }
-        return CdcPipe(connection, data, comm, input, output, control, bridge)
+        if (device.vendorId == ESPRESSIF) Thread.sleep(100)
+        return UsbHandle(connection, data, comm, input, output, control, bridge, device.vendorId, device.productId)
+    }
+
+    private fun requestPermissionBlocking(device: UsbDevice, timeoutMs: Long): Boolean {
+        val manager = usb ?: return false
+        if (manager.hasPermission(device)) return true
+        val latch = CountDownLatch(1)
+        permissionOk = false
+        permissionLatch = latch
+        val flags = if (Build.VERSION.SDK_INT >= 31) {
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val intent = PendingIntent.getBroadcast(
+            app,
+            0,
+            Intent(ACTION_USB_PERMISSION).setPackage(app.packageName),
+            flags,
+        )
+        manager.requestPermission(device, intent)
+        val granted = latch.await(timeoutMs.coerceAtLeast(1), TimeUnit.MILLISECONDS) && permissionOk
+        if (permissionLatch === latch) permissionLatch = null
+        return granted
     }
 
     private enum class Bridge { CDC, CH340, CP210X }
+
+    private class UsbHandle(
+        val connection: UsbDeviceConnection,
+        val data: UsbInterface,
+        val comm: UsbInterface?,
+        val input: UsbEndpoint,
+        val output: UsbEndpoint,
+        val control: UsbInterface,
+        val bridge: Bridge,
+        val vid: Int,
+        val pid: Int,
+    )
 
     private fun board(device: UsbDevice): Board? {
         if (device.vendorId !in VENDORS) return null
@@ -311,15 +363,16 @@ class UsbEspFlasher(context: Context) {
         }
     }
 
-    private class CdcPipe(
-        private val connection: UsbDeviceConnection,
-        private val data: UsbInterface,
-        private val comm: UsbInterface?,
-        private val input: UsbEndpoint,
-        private val output: UsbEndpoint,
-        private val control: UsbInterface,
-        private val bridge: Bridge,
-    ) : EspPipe {
+    private inner class CdcPipe(handle: UsbHandle) : EspPipe {
+        private var connection = handle.connection
+        private var data = handle.data
+        private var comm = handle.comm
+        private var input = handle.input
+        private var output = handle.output
+        private var control = handle.control
+        private var bridge = handle.bridge
+        private val vid = handle.vid
+        private val pid = handle.pid
         private val buffer = ByteArray(16 * 1024)
 
         override fun write(bytes: ByteArray) {
@@ -356,10 +409,48 @@ class UsbEspFlasher(context: Context) {
             }
         }
 
-        override fun close() {
+        override fun recover(timeoutMs: Long): Boolean {
+            release()
+            val deadline = System.nanoTime() + timeoutMs * 1_000_000
+            while (System.nanoTime() < deadline) {
+                val device = usb?.deviceList?.values?.firstOrNull { it.vendorId == vid && it.productId == pid }
+                if (device != null) {
+                    val manager = usb
+                    if (manager != null && !manager.hasPermission(device)) {
+                        val left = ((deadline - System.nanoTime()) / 1_000_000).coerceAtLeast(1)
+                        if (!requestPermissionBlocking(device, left)) {
+                            Thread.sleep(150)
+                            continue
+                        }
+                    }
+                    val opened = openHandle(device)
+                    if (opened != null) {
+                        adopt(opened)
+                        setLines(false, false)
+                        return true
+                    }
+                }
+                Thread.sleep(150)
+            }
+            return false
+        }
+
+        override fun close() = release()
+
+        private fun adopt(handle: UsbHandle) {
+            connection = handle.connection
+            data = handle.data
+            comm = handle.comm
+            input = handle.input
+            output = handle.output
+            control = handle.control
+            bridge = handle.bridge
+        }
+
+        private fun release() {
             runCatching { connection.releaseInterface(data) }
             if (comm != null) runCatching { connection.releaseInterface(comm) }
-            connection.close()
+            runCatching { connection.close() }
         }
     }
 

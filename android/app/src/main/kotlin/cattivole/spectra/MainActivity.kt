@@ -1,5 +1,6 @@
 package cattivole.spectra
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -30,5 +31,11 @@ class MainActivity : ComponentActivity() {
                 SpectraApp(model)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        model.usb.refresh()
     }
 }

@@ -63,6 +63,12 @@ interface EspPipe {
     fun read(timeoutMs: Long): ByteArray
     fun setLines(dtr: Boolean, rts: Boolean) {}
     fun close() {}
+    /**
+     * Re-open the USB device after a reset that dropped the link. USB-Serial/JTAG
+     * is the chip itself, so toggling DTR/RTS re-enumerates it. A UART bridge
+     * stays put; the default is that the link is still there.
+     */
+    fun recover(timeoutMs: Long): Boolean = true
 }
 
 object EspSlip {
@@ -584,10 +590,15 @@ class EspFlashSession(
     }
 
     private fun resetIntoRom(kind: EspReset.Kind): Boolean {
-        val holds = if (kind == EspReset.Kind.UART) EspReset.UART_HOLDS + EspReset.UART_HOLDS else listOf(0L)
+        val holds = if (kind == EspReset.Kind.UART) EspReset.UART_HOLDS + EspReset.UART_HOLDS else List(3) { 0L }
         for (hold in holds) {
             checkCancel()
             runCatching { EspReset.play(pipe, EspReset.enter(kind, hold), sleep) }
+            if (kind == EspReset.Kind.USB_JTAG) {
+                // The chip leaves the bus while it resets. esptool reopens the port; so do we.
+                if (!pipe.recover(12_000)) continue
+                sleep(200)
+            }
             decoder.clear()
             pending.clear()
             if (sync()) return true
@@ -596,14 +607,15 @@ class EspFlashSession(
     }
 
     private fun sync(): Boolean {
-        repeat(syncAttempts) {
+        for (attempt in 0 until syncAttempts) {
             checkCancel()
             decoder.clear()
             pending.clear()
             try {
                 pipe.write(EspSlip.encode(EspRom.sync()))
-            } catch (e: IOException) {
-                throw e
+            } catch (_: IOException) {
+                if (!pipe.recover(2_000)) return false
+                continue
             }
             val deadline = System.nanoTime() + syncWindowMs * 1_000_000
             while (System.nanoTime() < deadline) {

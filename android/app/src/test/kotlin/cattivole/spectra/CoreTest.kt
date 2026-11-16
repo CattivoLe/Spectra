@@ -398,7 +398,7 @@ class CoreTest {
         assertEquals(NotableDevice.IOT, NotableDevice.classify("Espressif", null, null, false))
         assertNull(NotableDevice.classify("Apple", null, null, false))
         assertEquals(NotableDevice.CAMERA, NotableDevice.classify("Apple", null, null, true))
-        assertNull(Catalog.oui("44:19:B6"))
+        assertEquals("Hikvision", Catalog.oui("44:19:B6"))
         assertEquals("Hikvision", Catalog.suspiciousOui("44:19:B6"))
         assertEquals("Apple, Inc.", Catalog.company(0x004C))
 

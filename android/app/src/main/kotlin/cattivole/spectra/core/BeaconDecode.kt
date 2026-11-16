@@ -15,6 +15,7 @@ object BeaconDecode {
         "FE2C" -> fastPair(data)
         "FD6F" -> BeaconInfo("Exposure Notification")
         "FEED", "FEEC" -> BeaconInfo("Tile")
+        "FD5A" -> BeaconInfo("Samsung SmartTag")
         else -> null
     }
 
@@ -84,6 +85,12 @@ object BeaconDecode {
 
     private fun fastPair(b: ByteArray): BeaconInfo? {
         if (b.isEmpty()) return null
+        // Find My Device network frame: a 20- or 32-byte ephemeral identifier.
+        // The last byte carries the unwanted-tracking flags when present.
+        if (b[0].toInt() == 0x40 && b.size >= 21) {
+            val flagged = b.size == 22 || b.size == 34
+            return BeaconInfo("Find My Device network", if (flagged) "Tracker frame" else null)
+        }
         if (b.size == 3) {
             val model = u8(b, 0) shl 16 or (u8(b, 1) shl 8) or u8(b, 2)
             return BeaconInfo("Fast Pair", String.format(Locale.US, "model 0x%06X", model))

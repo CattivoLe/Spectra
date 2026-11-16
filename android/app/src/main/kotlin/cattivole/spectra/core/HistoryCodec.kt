@@ -153,6 +153,7 @@ object HistoryCodec {
         .put("portsScanned", device.portsScanned)
         .put("gateway", device.isGateway)
         .put("local", device.isLocalDevice)
+        .put("new", device.isNew)
         .put("profile", profile(device.profile))
         .put("firstSeen", device.firstSeen)
         .put("lastSeen", device.lastSeen)
@@ -175,7 +176,7 @@ object HistoryCodec {
             profile = json.optJSONObject("profile")?.let(::profile) ?: LanProfile(),
             firstSeen = json.optLong("firstSeen"),
             lastSeen = json.optLong("lastSeen"),
-        )
+        ).also { it.isNew = json.optBoolean("new") }
     }
 
     private fun profile(profile: LanProfile): JSONObject = JSONObject()
@@ -211,6 +212,42 @@ object HistoryCodec {
                 .put("shares", JSONArray(it.shares))
                 .put("guest", it.guestSession)
         })
+        .putOpt("forwarding", profile.portForwarding?.let {
+            JSONObject()
+                .put("checkedAt", it.checkedAt)
+                .put("supported", it.supported)
+                .putOpt("externalIP", it.externalIp)
+                .put("mappings", JSONArray().apply { it.mappings.forEach { rule -> put(mapping(rule)) } })
+        })
+        .apply {
+            if (profile.inbound.isNotEmpty()) put("inbound", JSONArray().apply { profile.inbound.forEach { put(mapping(it)) } })
+        }
+
+    private fun mapping(rule: PortMapping): JSONObject = JSONObject()
+        .put("external", rule.externalPort)
+        .put("internal", rule.internalPort)
+        .put("client", rule.internalClient)
+        .put("proto", rule.proto)
+        .put("enabled", rule.enabled)
+        .putOpt("description", rule.description)
+        .putOpt("lease", rule.leaseSeconds)
+        .putOpt("remote", rule.remoteHost)
+
+    private fun mapping(json: JSONObject): PortMapping? {
+        if (!json.has("external")) return null
+        val client = json.optStringOrNull("client") ?: return null
+        val external = json.optInt("external")
+        return PortMapping(
+            externalPort = external,
+            internalPort = if (json.has("internal")) json.optInt("internal") else external,
+            internalClient = client,
+            proto = json.optStringOrNull("proto") ?: "TCP",
+            description = json.optStringOrNull("description"),
+            enabled = json.optBoolean("enabled", true),
+            leaseSeconds = if (json.has("lease")) json.optInt("lease") else null,
+            remoteHost = json.optStringOrNull("remote"),
+        )
+    }
 
     private fun profile(json: JSONObject): LanProfile = LanProfile(
         upnp = json.optJSONObject("upnp")?.let {
@@ -246,6 +283,15 @@ object HistoryCodec {
                 guestSession = it.optBoolean("guest"),
             )
         },
+        portForwarding = json.optJSONObject("forwarding")?.let {
+            PortForwarding(
+                checkedAt = it.optLong("checkedAt"),
+                supported = it.optBoolean("supported"),
+                externalIp = it.optStringOrNull("externalIP"),
+                mappings = it.optJSONArray("mappings").orEmpty().mapNotNull { item -> (item as? JSONObject)?.let(::mapping) },
+            )
+        },
+        inbound = json.optJSONArray("inbound").orEmpty().mapNotNull { item -> (item as? JSONObject)?.let(::mapping) },
     )
 
     // Bluetooth

@@ -45,14 +45,26 @@ fun LazyListScope.connectionEntry(model: SpectraModel, nav: Navigator) {
         if (link.report != null || link.running) {
             add {
                 ListRow(
-                    title = connectionTitle(link),
+                    title = link.report?.access?.verdict?.title() ?: connectionTitle(link),
                     subtitle = connectionDetail(link),
-                    leading = { IconTile(Icons.Rounded.Public, connectionTint(link)) },
+                    leading = {
+                        val verdict = link.report?.access?.verdict
+                        if (verdict != null) TrafficLight(verdict, lamp = 9.dp) else IconTile(Icons.Rounded.Public, connectionTint(link))
+                    },
+                    onClick = { nav.connection() },
+                )
+            }
+        } else {
+            add {
+                ListRow(
+                    title = tr("Resources"),
+                    subtitle = tr("Your own list of sites: see which of them open."),
+                    leading = { IconTile(Icons.Rounded.Public, MaterialTheme.colorScheme.primary) },
                     onClick = { nav.connection() },
                 )
             }
         }
-        add { VpnSwitch(link) }
+        add { RouteRow(link) }
         if (link.running) {
             add { ProgressRow(tr(link.phase.ifEmpty { "Checking…" }), link.fraction) }
         } else {
@@ -87,24 +99,22 @@ fun LinkScreen(model: SpectraModel, nav: Navigator) {
                 )
             }
         },
-        overlay = {
-            if (report == null && !link.running) {
-                EmptyState(
-                    Icons.Rounded.Public,
-                    tr("Not checked yet"),
-                    tr("Run a check to see whether this network reaches the internet, how fast it is, which countries answer, and the path out."),
-                    action = tr("Check connection"),
-                    onAction = link::check,
-                )
-            }
-        },
     ) {
-        card(key = "route", rows = listOf { VpnSwitch(link) })
+        card(key = "route", rows = listOf { RouteRow(link) })
         if (link.running) {
             card(key = "progress", rows = listOf { ProgressRow(tr(link.phase.ifEmpty { "Checking…" }), link.fraction) })
         }
+        if (report == null && !link.running) {
+            card(
+                key = "start",
+                footer = tr("Run a check to see whether this network reaches the internet, how fast it is, which countries answer, and the path out."),
+                rows = listOf { ActionRow(tr("Check connection"), Icons.Rounded.NetworkCheck, onClick = link::check) },
+            )
+        }
+        report?.access?.let { accessCard(it) }
+        resourcesCard(link)
         if (report != null && report.status != null) {
-            connectionCards(report, link.recheckingRegions, link::recheckRegion)
+            connectionCards(report, link.recheckingRegions, link::recheckRegion, link)
         }
     }
 }
@@ -126,8 +136,18 @@ fun SavedLinkScreen(model: SpectraModel, nav: Navigator, entryId: String, checke
         onBack = nav::back,
     ) {
         card(key = "route", rows = listOf {
-            NoteRow(vpnRouteText(saved.viaVpn), warning = false)
+            NoteRow(
+                routeText(
+                    when {
+                        saved.viaVpn -> cattivole.spectra.core.ProbeRoute.VPN
+                        saved.viaCellular -> cattivole.spectra.core.ProbeRoute.CELLULAR
+                        else -> cattivole.spectra.core.ProbeRoute.WIFI
+                    },
+                ),
+                warning = false,
+            )
         })
+        report.access?.let { accessCard(it) }
         connectionCards(report)
     }
 }
@@ -136,9 +156,13 @@ private fun LazyListScope.connectionCards(
     report: LinkReport,
     rechecking: Set<String> = emptySet(),
     onRecheck: ((String) -> Unit)? = null,
+    link: cattivole.spectra.platform.LinkProbe? = null,
 ) {
     internetCard(report)
     report.external?.let { externalCard(it) }
+    exposureCard(report, link)
+    report.tls?.let { tlsCard(it) }
+    report.resolver?.let { resolverCard(it, report.external?.ip) }
     if (report.speed != null || report.speedFailed) speedCard(report)
     if (report.regions.isNotEmpty()) {
         cardSection(
@@ -257,32 +281,6 @@ private fun LazyListScope.remoteCard(report: LinkReport) {
             note(report.traceNote)?.let { text -> add { NoteRow(text, warning = true) } }
         },
     )
-}
-
-private fun vpnRouteText(viaVpn: Boolean): String =
-    if (viaVpn) {
-        tr("Speed, external address and countries are measured through the VPN tunnel.")
-    } else {
-        tr("The VPN is bypassed: the check measures the Wi-Fi or Ethernet connection itself.")
-    }
-
-@Composable
-private fun VpnSwitch(link: LinkProbe) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(tr("Check through VPN"), style = MaterialTheme.typography.bodyLarge)
-            Text(
-                vpnRouteText(link.viaVpn),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Switch(checked = link.viaVpn, onCheckedChange = { link.viaVpn = it }, enabled = !link.running)
-    }
 }
 
 @Composable

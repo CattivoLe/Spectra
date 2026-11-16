@@ -7,7 +7,7 @@ data class DiscoveredPort(val number: Int, val service: String) {
             80 to "HTTP", 81 to "HTTP", 110 to "POP3", 111 to "RPC", 135 to "MS RPC",
             139 to "NetBIOS", 143 to "IMAP", 443 to "HTTPS", 445 to "SMB", 515 to "LPD",
             548 to "AFP", 554 to "RTSP", 631 to "IPP", 993 to "IMAPS", 1400 to "Sonos",
-            8554 to "RTSP", 1883 to "MQTT", 2049 to "NFS", 3000 to "Dev", 3283 to "Apple Remote",
+            8554 to "RTSP", 1935 to "RTMP", 1883 to "MQTT", 2049 to "NFS", 3000 to "Dev", 3283 to "Apple Remote",
             3306 to "MySQL", 3389 to "RDP", 3689 to "DAAP", 5000 to "UPnP", 5001 to "HTTPS",
             5357 to "WSD", 5432 to "PostgreSQL", 5555 to "ADB", 5900 to "VNC",
             6379 to "Redis", 6466 to "Android TV", 6668 to "Tuya", 7000 to "AirPlay",
@@ -33,6 +33,59 @@ fun LanDevice.webAddress(port: Int): String? {
     val scheme = if (secure) "https" else "http"
     val default = if (secure) 443 else 80
     return if (port == default) "$scheme://$ipAddress" else "$scheme://$ipAddress:$port"
+}
+
+/**
+ * Where a camera's video stream lives, for a player like VLC. Mirrors the iOS
+ * `StreamAddress`; keep the paths in step.
+ */
+object StreamAddress {
+    val rtspPorts = setOf(554, 8554)
+    const val RTMP_PORT = 1935
+
+    /**
+     * The stream path a maker's cameras use by default. A bare address shows
+     * nothing on most cameras; the player asks for the password itself.
+     */
+    private val pathsByMaker = listOf(
+        listOf("hikvision", "ezviz", "hiwatch") to "/Streaming/Channels/101",
+        listOf("dahua", "amcrest", "imou", "lorex") to "/cam/realmonitor?channel=1&subtype=0",
+        listOf("reolink") to "/h264Preview_01_main",
+        listOf("tp-link", "tapo") to "/stream1",
+        listOf("uniview", "unv") to "/media/video1",
+        listOf("axis") to "/axis-media/media.amp",
+        listOf("foscam") to "/videoMain",
+    )
+
+    fun rtspPath(maker: String?): String {
+        val folded = maker?.lowercase() ?: return "/"
+        return pathsByMaker.firstOrNull { (names, _) -> names.any { it in folded } }?.second ?: "/"
+    }
+
+    /**
+     * The player address of [port], or null when the port carries no stream.
+     * [speaksRtsp] is true when the port answered an RTSP probe, whatever its number.
+     */
+    fun url(ip: String, port: Int, speaksRtsp: Boolean, maker: String?): String? {
+        val host = if (':' in ip) "[$ip]" else ip
+        return when {
+            speaksRtsp || port in rtspPorts -> {
+                val portPart = if (port == 554) "" else ":$port"
+                "rtsp://$host$portPart${rtspPath(maker)}"
+            }
+            port == RTMP_PORT -> "rtmp://$host:$port/"
+            else -> null
+        }
+    }
+}
+
+/** The player address of [port] when it carries a camera stream; null otherwise. */
+fun LanDevice.streamAddress(port: Int): String? {
+    val maker = listOfNotNull(
+        identity.manufacturer, manufacturer, profile.upnp?.manufacturer,
+        profile.rtsp.firstOrNull { it.port == port }?.server,
+    ).joinToString(" ").ifEmpty { null }
+    return StreamAddress.url(ipAddress, port, profile.rtsp.any { it.port == port }, maker)
 }
 
 data class SubnetInfo(
@@ -106,6 +159,17 @@ class LanDevice(
     var pinnedName: String? = null
         private set
 
+    /**
+     * Never seen on this network before this scan. Set by [KnownHosts];
+     * carried across rescans so the mark stays until the list is cleared.
+     */
+    var isNew: Boolean = false
+
+    /** What the user called this host, and what they think of it. Filled from [DeviceLabels]. */
+    var customName: String? = null
+    var trust: DeviceTrust = DeviceTrust.UNKNOWN
+    var note: String? = null
+
     /** 0..1 while a port scan of this host runs. */
     var portScanFraction: Float? = null
     private var pinnedRank = 0
@@ -136,6 +200,7 @@ class LanDevice(
 
     val displayName: String
         get() {
+            customName?.let { return it }
             val pinned = pinnedName?.takeUnless { isWeakHostname(it) }
             return pinned
                 ?: identity.model
@@ -181,12 +246,22 @@ class LanDevice(
         }
     }
 
-    private fun isWeakHostname(name: String): Boolean {
-        val folded = name.lowercase().replace('-', ' ').replace('_', ' ')
-        return folded == "android" || folded == "windows" || folded.startsWith("android ")
-    }
-
     companion object {
+        fun isWeakHostname(name: String): Boolean {
+            if (isOpaqueIdentifier(name)) return true
+            val folded = name.lowercase().replace('-', ' ').replace('_', ' ')
+            return folded == "android" || folded == "windows" || folded.startsWith("android ")
+        }
+
+        /**
+         * Long hex strings and UUIDs are identifiers, not names: a TV that
+         * publishes "1b067baf05912b622b215c7a…" reads better as its model or maker.
+         */
+        fun isOpaqueIdentifier(name: String): Boolean {
+            val compact = name.filter { it != '-' && it != '_' }
+            return compact.length >= 12 && compact.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+        }
+
         fun usefulHostname(name: String, ip: String): String? {
             val shown = presentable(name) ?: return null
             if (shown.equals(ip, ignoreCase = true)) return null

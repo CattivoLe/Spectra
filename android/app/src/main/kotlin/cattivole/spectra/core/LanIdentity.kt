@@ -70,8 +70,13 @@ data class LanProfile(
     val banners: List<HttpBanner> = emptyList(),
     val rtsp: List<RtspService> = emptyList(),
     val windows: WindowsHost? = null,
+    /** The router's UPnP port-forwarding table. Gateway only; null until asked. */
+    val portForwarding: PortForwarding? = null,
+    /** Forwardings on the router that point at this host. */
+    val inbound: List<PortMapping> = emptyList(),
 ) {
-    val isEmpty: Boolean get() = upnp == null && banners.isEmpty() && rtsp.isEmpty() && windows == null
+    val isEmpty: Boolean
+        get() = upnp == null && banners.isEmpty() && rtsp.isEmpty() && windows == null && portForwarding == null && inbound.isEmpty()
 
     fun filled(previous: LanProfile): LanProfile {
         if (isEmpty) return previous
@@ -80,6 +85,8 @@ data class LanProfile(
             banners = banners.ifEmpty { previous.banners },
             rtsp = rtsp.ifEmpty { previous.rtsp },
             windows = windows?.filled(previous.windows) ?: previous.windows,
+            portForwarding = portForwarding ?: previous.portForwarding,
+            inbound = inbound.ifEmpty { previous.inbound },
         )
     }
 }
@@ -729,7 +736,7 @@ object LanIdentity {
         return out.toByteArray()
     }
 
-    private fun tag(name: String, xml: String): String? {
+    internal fun tag(name: String, xml: String): String? {
         val regex = Regex("<$name\\b[^>]*>([^<]*)</$name>", RegexOption.IGNORE_CASE)
         for (match in regex.findAll(xml)) {
             val value = decodeXmlEntities(match.groupValues[1])

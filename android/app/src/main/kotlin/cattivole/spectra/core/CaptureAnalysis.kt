@@ -18,7 +18,43 @@ class PacketRow(
     val source: String,
     val destination: String,
     val info: String,
+    /** The application guessed from the ports, when there is one. */
+    val app: String? = null,
+    /** The addresses the summary counts hosts by, for the host filter. */
+    val netSource: String? = null,
+    val netDestination: String? = null,
 )
+
+/** What the packet list is narrowed to. Mirrors the iOS `PacketFilter`. */
+data class PacketFilter(
+    /** Text anywhere in the packet's line, addresses or ports. */
+    val query: String = "",
+    /** Protocols to keep; empty keeps all. */
+    val transports: Set<String> = emptySet(),
+    val app: String? = null,
+    /** One host, or the two ends of a conversation. */
+    val endpoints: List<String> = emptyList(),
+) {
+    val isActive: Boolean
+        get() = query.isNotBlank() || transports.isNotEmpty() || app != null || endpoints.isNotEmpty()
+
+    fun matches(row: PacketRow): Boolean {
+        if (transports.isNotEmpty() && row.transport !in transports) return false
+        if (app != null && row.app != app) return false
+        when (endpoints.size) {
+            0 -> Unit
+            1 -> if (row.netSource != endpoints[0] && row.netDestination != endpoints[0]) return false
+            else -> if (setOfNotNull(row.netSource, row.netDestination) != endpoints.take(2).toSet()) return false
+        }
+        val needle = query.trim()
+        if (needle.isEmpty()) return true
+        return listOf(row.info, row.source, row.destination, row.transport, row.app.orEmpty())
+            .any { it.contains(needle, ignoreCase = true) }
+    }
+
+    fun toggle(transport: String): PacketFilter =
+        copy(transports = if (transport in transports) transports - transport else transports + transport)
+}
 
 class CaptureSummary(
     val packetCount: Int,
@@ -50,7 +86,14 @@ class CaptureAnalysis(
  * runs off the main thread from the UI. Mirrors the iOS `PcapAnalyzer`.
  */
 object PcapAnalyzer {
-    fun analyze(data: ByteArray, maxRows: Int = 2000): CaptureAnalysis {
+    /** How many rows the list shows at most, filtered or not. */
+    const val SHOWN_ROWS = 2000
+
+    /**
+     * Rows are kept for far more packets than the list shows, so a filter
+     * finds matches anywhere in a large capture, not just in its start.
+     */
+    fun analyze(data: ByteArray, maxRows: Int = 50_000): CaptureAnalysis {
         val file = PcapParser.parse(data)
 
         val protocolCounts = HashMap<Transport, Int>()
@@ -102,6 +145,7 @@ object PcapAnalyzer {
                     PacketRow(
                         index, packet.timestamp, size, info.transport.label,
                         info.source, info.destination, info.info,
+                        info.app, info.netSource, info.netDestination,
                     ),
                 )
             }

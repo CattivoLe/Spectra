@@ -312,7 +312,6 @@ Each hump is one network: its width is the channels it covers, its height how lo
 Quietest channel here	Самый тихий канал
 Of the non-overlapping channels 1, 6 and 11, this one meets the least interference. Set it on your router if you control one.	Из непересекающихся каналов 1, 6 и 11 на этом меньше всего помех. Выставьте его на роутере, если он ваш.
 Networks per channel	Сети по каналам
-Heard by the phone; the Cardputer is 2.4 GHz only.	Слышит телефон; Cardputer работает только на 2,4 ГГц.
 5 and 6 GHz from the phone	5 и 6 ГГц с телефона
 %.1f Mbit/s	%.1f Мбит/с
 %.0f kbit/s	%.0f кбит/с
@@ -831,3 +830,300 @@ Install the certificate in Settings	Установите сертификат в
 Android does not let an app install a CA certificate. spectra-ca.crt is in Downloads. In Settings open Security, then Encryption and credentials, Install a certificate, CA certificate, and choose that file.	Android не даёт приложению установить сертификат ЦС. Файл spectra-ca.crt лежит в «Загрузках». В настройках откройте «Безопасность», затем «Шифрование и учётные данные», «Установить сертификат», «Сертификат ЦС» и выберите этот файл.
 The certificate could not be saved.	Не удалось сохранить сертификат.
 Open settings	Открыть настройки
+
+# port risk, known hosts, labels, trackers (shared with iOS)
+%d devices need attention	Требуют внимания: %d
+%d of %d devices	Устройства: %d из %d
+%s accepted a connection without a password. Anyone on the Wi-Fi can read them.	%s: подключение без пароля принято. Содержимое может прочитать любой в этой Wi-Fi.
+A database answers on the network. It should listen on localhost only unless other machines need it.	База данных отвечает по сети. Ей стоит слушать только localhost, если доступ не нужен другим машинам.
+A developer tool is listening on the network. Such servers are not built to be reachable by others.	В сети слушает инструмент разработчика. Такие серверы не рассчитаны на доступ посторонних.
+A server administration panel. Keep it updated and behind a strong password.	Панель администрирования сервера. Обновляйте её и защитите надёжным паролем.
+A tag away from its owner has stayed near you for a while. Move somewhere else and check whether it is still here.	Метка без владельца уже некоторое время рядом с вами. Перейдите в другое место и проверьте, осталась ли она здесь.
+AirTags, Tile, Samsung SmartTag, Chipolo and Find My Device tags report their position through other people's phones. One near its owner is just someone's keys.	AirTag, Tile, Samsung SmartTag, Chipolo и метки Find My Device сообщают своё положение через чужие телефоны. Метка рядом с владельцем — это просто чьи-то ключи.
+Android debugging (ADB)	Отладка Android (ADB)
+Anyone on the Wi-Fi can send print jobs.	Любой в этой Wi-Fi может отправлять задания на печать.
+Anything typed into this page, like a password, crosses the Wi-Fi unencrypted.	Всё, что вводится на этой странице, включая пароль, идёт по Wi-Fi без шифрования.
+Apple Remote Desktop	Apple Remote Desktop
+Away from its owner	Вдали от владельца
+Battery critical	Батарея почти села
+Battery full	Батарея полная
+Battery low	Батарея низкая
+Battery medium	Батарея средняя
+Database	База данных
+Development server	Сервер разработки
+Devices: %d · new: %d	Устройства: %d · новых: %d
+Edit name and trust	Изменить имя и доверие
+FTP	FTP
+File sharing (SMB)	Общий доступ к файлам (SMB)
+Find My Device network	Сеть Find My Device
+Find My Device tag	Метка Find My Device
+Find My tag	Метка Find My
+First scan of this network. Devices that show up in later scans will be marked New.	Первое сканирование этой сети. Устройства, которые появятся в следующих сканированиях, будут помечены как новые.
+Forget	Забыть
+Forget known devices	Забыть известные устройства
+Forget known devices?	Забыть известные устройства?
+Hide trusted devices	Скрыть доверенные устройства
+High risk	Высокий риск
+Judged from the open ports alone. Nothing was logged in to or tested.	Оценка только по открытым портам. Входа и проверок не выполнялось.
+Kept on this phone. The device is found again by its hardware address or name.	Хранится на этом телефоне. Устройство узнаётся по аппаратному адресу или имени.
+Legacy remote-procedure ports. Rarely needed on a home network and often a hint that other old services are on.	Устаревшие порты удалённого вызова процедур. В домашней сети почти не нужны и часто выдают другие старые службы.
+Logins cross the network in clear text. Telnet is the first door botnets try, usually with factory passwords.	Логин и пароль идут по сети открытым текстом. Telnet — первая дверь, в которую стучатся ботнеты, обычно с заводскими паролями.
+Low risk	Низкий риск
+MQTT broker	Брокер MQTT
+Mail protocols without TLS. Passwords may cross the network in the clear.	Почтовые протоколы без TLS. Пароли могут идти по сети открытым текстом.
+NFS shares	Папки NFS
+NFS trusts the client's word about who is asking. Anyone on the network can usually mount an unrestricted export.	NFS верит клиенту на слово, кто он такой. Экспорт без ограничений обычно может смонтировать любой в сети.
+Name and trust	Имя и доверие
+Near its owner	Рядом с владельцем
+Needs attention	Требует внимания
+Network debugging gives a shell on the device without a password. Turn it off when not in use.	Отладка по сети даёт командную оболочку на устройстве без пароля. Выключайте её, когда не нужна.
+New	Новое
+No risky services found	Рискованных сервисов не найдено
+Not decided	Не решено
+Note	Заметка
+Open ports were checked against known weak services.	Открытые порты сверены со списком известных слабых сервисов.
+Open print queue	Открытая очередь печати
+Passwords and files are sent unencrypted; anyone on the Wi-Fi can read them.	Пароли и файлы передаются без шифрования; их может прочитать любой в этой Wi-Fi.
+RDP is constantly tried with guessed passwords. Make sure the account has a strong one.	RDP постоянно перебирают по паролям. Убедитесь, что у учётной записи надёжный пароль.
+RPC services	Службы RPC
+Redis	Redis
+Redis accepts commands without a password unless it was configured with one.	Redis принимает команды без пароля, если пароль не задан явно.
+Remote Desktop	Удалённый рабочий стол
+Remote login is on. Safe with a strong password or keys; a factory password is not.	Удалённый вход включён. Безопасно с надёжным паролем или ключами; с заводским паролем — нет.
+Router admin page without encryption	Админка роутера без шифрования
+SSH	SSH
+Shared folders are reachable from the Wi-Fi. Check that each share asks for a password.	Общие папки доступны из Wi-Fi. Проверьте, что каждая запрашивает пароль.
+Shares open to guests	Папки открыты для гостей
+Showing only those. Tap to show every device.	Показаны только они. Нажмите, чтобы показать все устройства.
+Smart-home messages pass through here. Many brokers accept connections without a login, which lets anyone read sensors and send commands.	Через него идут сообщения умного дома. Многие брокеры принимают подключения без логина: любой может читать датчики и отправлять команды.
+Suspicious	Подозрительное
+TR-069 remote management	Удалённое управление TR-069
+Telnet	Telnet
+Telnet on a router is how most router botnets got in. Turn it off in the router's settings.	Через Telnet на роутере попадало большинство роутерных ботнетов. Выключите его в настройках роутера.
+Telnet, open shares, remote access and the like. Tap to show only those.	Telnet, открытые папки, удалённый доступ и подобное. Нажмите, чтобы показать только их.
+The Mac can be controlled from the network. Fine if you set it up; otherwise turn off Remote Management.	Этим Mac можно управлять по сети. Нормально, если вы это настроили; иначе выключите «Удалённое управление».
+The camera's stream is reachable from the Wi-Fi. Many cameras ship with a default password; change it.	Поток камеры доступен из Wi-Fi. Многие камеры продаются с заводским паролем — смените его.
+The next scan of this network becomes the baseline: nothing in it is marked New.	Следующее сканирование этой сети станет точкой отсчёта: в нём ничего не будет помечено как новое.
+The port an internet provider uses to manage routers. Flaws in it have let worms in; it should not answer on the Wi-Fi.	Порт, через который провайдер управляет роутерами. Через его уязвимости проникали черви; в Wi-Fi он отвечать не должен.
+The router's password crosses the Wi-Fi in the clear when you log in. Use the https address if the router offers one.	При входе пароль роутера идёт по Wi-Fi открытым текстом. Используйте адрес https, если роутер его предлагает.
+Tracker frame	Кадр трекера
+Trackers	Трекеры
+Trusted	Доверенное
+UPnP	UPnP
+UPnP lets any device on the Wi-Fi reconfigure this one without a login. On a router it can open ports to the internet.	UPnP позволяет любому устройству в Wi-Fi перенастраивать это без входа. На роутере он может открывать порты в интернет.
+Unencrypted mail	Почта без шифрования
+VNC often runs with a weak password or none, and its traffic is not encrypted.	VNC часто работает со слабым паролем или вовсе без него, а трафик не шифруется.
+VNC screen sharing	Общий экран VNC
+Video stream (RTSP)	Видеопоток (RTSP)
+Web page without encryption	Веб-страница без шифрования
+Webmin	Webmin
+just appeared	только появилась
+near you for %d min	рядом с вами %d мин
+
+# link check (shared with iOS)
+This is not a web page: a %s: link runs code or opens a file.	Это не веб-страница: ссылка %s: запускает код или открывает файл.
+This is not a web link but a %s: link.	Это не веб-ссылка, а ссылка %s:.
+Yandex	Яндекс
+Gosuslugi	Госуслуги
+Sberbank	Сбербанк
+Sber	Сбер
+T-Bank	Т-Банк
+Alfa-Bank	Альфа-Банк
+VTB	ВТБ
+Raiffeisen	Райффайзенбанк
+Avito	Авито
+Russian Post	Почта России
+CDEK	СДЭК
+the Federal Tax Service	ФНС
+Paste a link or a whole message	Вставьте ссылку или всё сообщение
+No link found in that text.	В этом тексте нет ссылки.
+A short link: the real address is hidden.	Короткая ссылка: настоящий адрес скрыт.
+An unusually long name: %s levels in front of %s.	Необычно длинное имя: %s уровней перед %s.
+Check a link	Проверить ссылку
+Who really owns the site, look-alike names and phishing bait.	Кому на самом деле принадлежит сайт, имена-двойники и приманки фишинга.
+No warning signs	Тревожных признаков нет
+Look closer	Стоит присмотреться
+Looks like phishing	Похоже на фишинг
+The address itself shows nothing wrong. That does not prove the page is safe.	В самом адресе ничего подозрительного. Это не доказывает, что страница безопасна.
+One thing about this address deserves a second look before you open it.	Одна деталь в адресе заслуживает внимания, прежде чем открывать ссылку.
+Several things about this address are typical of phishing. Do not enter passwords or card numbers.	Несколько признаков в адресе типичны для фишинга. Не вводите пароли и номера карт.
+Do not open this link and do not enter anything on it.	Не открывайте эту ссылку и ничего на ней не вводите.
+Checked on this phone: the link is not sent anywhere and the page is not opened.	Проверяется на этом телефоне: ссылка никуда не отправляется, страница не открывается.
+Paste	Вставить
+Check	Проверить
+Site	Сайт
+Full name	Полное имя
+In the address bar	В адресной строке
+Link	Ссылка
+What stands out	Что бросается в глаза
+The address inside this link	Адрес внутри этой ссылки
+Checks	Проверки
+The browser skips everything before the @ (%s) and opens %s.	Всё до знака @ (%s) браузер пропустит и откроет %s.
+The site name contains encoded characters, which real sites do not use.	В имени сайта закодированные символы — настоящие сайты так не делают.
+The page is not encrypted (http): anything typed on it can be read on the way.	Страница без шифрования (http): всё, что на ней вводится, можно прочитать по пути.
+The address uses an unusual port, %s.	В адресе необычный порт: %s.
+A bare IP address (%s) stands where a site name should be.	Вместо имени сайта — голый IP-адрес (%s).
+In the address bar this shows as %s.	В адресной строке он выглядит так: %s.
+“%s” mixes letters from different alphabets, a classic way to fake a familiar name.	В «%s» смешаны буквы разных алфавитов — классический способ подделать знакомое имя.
+“%s” is written in letters that only look Latin.	«%s» написано буквами, которые только похожи на латинские.
+The site name uses non-Latin letters.	Имя сайта написано не латиницей.
+%s belongs to %s.	%s — официальный адрес (%s).
+Pretends to be %s. Its real site is %s.	Выдаёт себя за %s. Настоящий сайт — %s.
+The address starts with %s, but the site belongs to %s.	Адрес начинается с %s, но на самом деле это сайт %s.
+Uses the name %s, but it is not its site (%s).	Использует имя %s, но это не его сайт (%s).
+The site sits on %s, where anyone can make an address like this.	Сайт размещён на %s — такой адрес может завести кто угодно.
+The .%s zone is common in phishing mail.	Зона .%s часто встречается в фишинговых письмах.
+The link passes on another address: %s.	Ссылка передаёт дальше другой адрес: %s.
+
+# port forwarding, certificates, DNS, exposure, site check, speed test, QR (shared with iOS)
+HTTPS certificates	Сертификаты HTTPS
+Four well-known sites are asked for their certificates without loading a page. A proxy, an antivirus or an attacker on the network has to sign them itself, and that shows here.	У четырёх известных сайтов запрашиваются сертификаты без загрузки страницы. Прокси, антивирус или злоумышленник в сети вынуждены подписывать их сами, и это здесь видно.
+Could not reach the reference sites to compare certificates.	Не удалось связаться с эталонными сайтами, чтобы сравнить сертификаты.
+Certificates do not come from the expected authorities: something between you and the internet re-signs HTTPS, such as a corporate proxy, an antivirus or an attacker on the Wi-Fi.	Сертификаты выданы не теми центрами, которых ждёшь: кто-то между вами и интернетом переподписывает HTTPS — корпоративный прокси, антивирус или злоумышленник в Wi-Fi.
+Certificates come from the expected authorities: no sign of HTTPS interception.	Сертификаты выданы ожидаемыми центрами: признаков подмены HTTPS нет.
+The address the lookups come from is learned by resolving whoami.akamai.net; ipwho.is names its owner. Encrypted DNS is tried against Cloudflare over HTTPS and over TLS on port 853.	Адрес, с которого уходят запросы, узнаётся разрешением whoami.akamai.net; ipwho.is называет его владельца. Шифрованный DNS проверяется на Cloudflare через HTTPS и через TLS на порту 853.
+Configured	Настроено
+Answers from	Отвечает из
+This network resolves names itself: the lookups leave from your own public address.	Эта сеть разрешает имена сама: запросы уходят с вашего публичного адреса.
+The router takes the lookups and forwards them: the world sees them come from the resolver above.	Роутер принимает запросы и пересылает их: мир видит их от резолвера выше.
+The phone asks a public resolver directly.	Телефон спрашивает публичный резолвер напрямую.
+Could not learn where the lookups go.	Не удалось узнать, куда уходят запросы.
+Invents addresses for names that do not exist	Выдумывает адреса для несуществующих имён
+Does not invent addresses for missing names	Не выдумывает адреса для несуществующих имён
+DNS over HTTPS	DNS через HTTPS
+Reachable	Доступен
+Blocked	Заблокирован
+DNS over TLS	DNS через TLS
+Ports from the internet	Порты из интернета
+check-host.net tries to connect to your public address on ten common ports, plus any you add, from one of its servers. An open port means your router forwards it to something inside.	check-host.net пытается подключиться к вашему публичному адресу на десяти распространённых портах и тех, что вы добавили, с одного из своих серверов. Открытый порт значит, что роутер пробрасывает его внутрь.
+No tested port answers from the internet: the router does not let these in.	Ни один из проверенных портов не отвечает из интернета: роутер их не пропускает.
+%d ports answer from the internet. Anyone online can reach what is behind them.	Портов отвечает из интернета: %d. До того, что за ними, может добраться любой в сети.
+check-host.net could not be asked about some ports.	check-host.net не удалось спросить о части портов.
+Asking check-host.net…	Запрос к check-host.net…
+Through a VPN the public address belongs to the VPN server, so its ports say nothing about your router.	Через VPN публичный адрес принадлежит серверу VPN, поэтому его порты ничего не говорят о вашем роутере.
+Check ports from the internet	Проверить порты из интернета
+Another port	Другой порт
+Speed test	Тест скорости
+Measuring…	Идёт измерение…
+Result	Результат
+Jitter	Джиттер
+Latency under load	Задержка под нагрузкой
+Bufferbloat	Bufferbloat
+Mbit/s	Мбит/с
+Wi-Fi network code	Код Wi-Fi-сети
+This code joins a Wi-Fi network named “%s”.	Этот код подключает к Wi-Fi-сети «%s».
+Security: %s.	Защита: %s.
+The network has no password: traffic on it can be read by anyone nearby.	У сети нет пароля: трафик в ней может прочитать любой поблизости.
+The network is hidden, which is unusual for a public one.	Сеть скрытая, что необычно для публичной.
+Spectra did not join it. Join only networks you expected to find here.	Spectra к ней не подключался. Подключайтесь только к сетям, которые ожидали здесь увидеть.
+Scan QR code	Сканировать QR-код
+Certificate and domain	Сертификат и домен
+Asking the site and the registry…	Запрос к сайту и реестру…
+Check certificate and domain age	Проверить сертификат и возраст домена
+Notify about new devices	Уведомлять о новых устройствах
+Port forwarding	Проброс портов
+Public address	Публичный адрес
+Asking the router…	Запрос к роутеру…
+The certificate expired on %s.	Срок сертификата истёк %s.
+The certificate was issued today. Phishing sites are usually only days old.	Сертификат выдан сегодня. Фишинговым сайтам обычно всего несколько дней.
+Certificate from %s, issued %s.	Сертификат от %s, выдан %s.
+No usable HTTPS on this site: %s.	На сайте нет рабочего HTTPS: %s.
+The registry lists %s but gives no registration date.	Реестр знает %s, но не сообщает дату регистрации.
+The domain was registered today.	Домен зарегистрирован сегодня.
+The domain was registered on %s.	Домен зарегистрирован %s.
+The registry has no record of %s. The name may be free, or the link may be a decoy.	В реестре нет записи о %s. Имя может быть свободно, либо ссылка — приманка.
+The .%s registry does not publish registration dates.	Реестр зоны .%s не публикует даты регистрации.
+The registry could not be reached: %s.	Реестр недоступен: %s.
+UPnP port control	Управление портами по UPnP
+Reachable from the internet	Доступно из интернета
+The router forwards %s from the internet to this device. Anyone online can try those ports, not just people on the Wi-Fi.	Роутер пробрасывает %s из интернета на это устройство. Эти порты может проверить любой в интернете, а не только те, кто в Wi-Fi.
+Eight seconds down and eight up to Cloudflare, with latency under load.	Восемь секунд на загрузку и восемь на отдачу до Cloudflare, с задержкой под нагрузкой.
+Several streams for eight seconds each way to Cloudflare, which sees your public IP address. On mobile data this can use a few hundred megabytes.	Несколько потоков по восемь секунд в каждую сторону до Cloudflare, который видит ваш внешний IP-адрес. В мобильной сети тест может израсходовать несколько сотен мегабайт.
+Run again	Запустить снова
+Start	Начать
+The QR scanner needs Google Play services, which this phone does not have or has not finished setting up.	Сканеру QR нужны сервисы Google Play, которых на этом телефоне нет или они ещё не настроены.
+Checking connects to the site's HTTPS port without loading a page, and asks the zone's own registry over RDAP. The site and the registry see your IP address.	Проверка подключается к HTTPS-порту сайта, не загружая страницу, и спрашивает реестр зоны по RDAP. Сайт и реестр видят ваш IP-адрес.
+Read from the router over UPnP. Rules made in the router's own settings may not be listed.	Прочитано с роутера по UPnP. Правила, заданные в настройках самого роутера, могут не отображаться.
+The router does not answer UPnP, so its forwardings cannot be read from here.	Роутер не отвечает по UPnP, поэтому его пробросы отсюда не прочитать.
+No forwarded ports	Проброшенных портов нет
+off	выкл.
+This phone does not trust this site's certificate: %s.	Телефон не доверяет сертификату этого сайта: %s.
+The certificate was issued %s days ago. Phishing sites are usually only days old.	Сертификат выпущен %s дн. назад. Фишинговым сайтам обычно всего несколько дней.
+The domain was registered %s days ago, on %s.	Домен зарегистрирован %s дн. назад, %s.
+The domain is only %s days old, registered on %s.	Домену всего %s дн., зарегистрирован %s.
+The domain has existed since %s, %s years.	Домен существует с %s, лет: %s.
+Rules from the internet to devices on this network: %s. Each one is a door; keep only the ones you set up yourself.	Правил, ведущих из интернета к устройствам этой сети: %s. Каждое — открытая дверь; оставьте только те, что настроили сами.
+Checking certificates	Проверка сертификатов
+Asking the router	Опрос роутера
+unknown reason	причина неизвестна
+New devices on the network	Новые устройства в сети
+and %d more	и ещё %d
+New device on your network	Новое устройство в вашей сети
+%d new devices on your network	Новых устройств в вашей сети: %d
+The certificate is for another site.	Сертификат выдан другому сайту.
+
+# traffic light, resources, route
+Full access	Полный доступ
+Allow-list only	Только белые списки
+No access	Нет доступа
+Only sites from the provider's allow-list open. The rest of the internet does not answer.	Открываются только сайты из белого списка оператора. Остальной интернет не отвечает.
+Neither foreign sites nor allow-listed ones answer.	Не отвечают ни зарубежные сайты, ни сайты из белого списка.
+Access	Доступ
+Sites asked	Опрошенные сайты
+Hide sites	Скрыть сайты
+allow-list	белый список
+Resources	Ресурсы
+Your own list of sites: see which of them open.	Свой список сайтов: проверьте, какие из них открываются.
+Tap a site to see whether it opens from the chosen connection; hold it to remove. Each one is asked over HTTPS without loading the page.	Нажмите на сайт, чтобы проверить, открывается ли он через выбранное соединение; удерживайте, чтобы удалить. Сайт опрашивается по HTTPS без загрузки страницы.
+Check all	Проверить все
+Add a site, like youtube.com	Добавить сайт, например youtube.com
+Add	Добавить
+That is not a site name, or it is already in the list.	Это не имя сайта, или он уже есть в списке.
+Check through	Проверять через
+Cellular	Сотовая сеть
+The check goes out through the mobile network, even while Wi-Fi is joined. It uses mobile data.	Проверка идёт через сотовую сеть, даже когда подключён Wi-Fi. Расходуется мобильный трафик.
+There is no mobile network to check.	Нет сотовой сети для проверки.
+Checking access	Проверка доступа
+Opens	Открывается
+Does not open	Не открывается
+Some services blocked	Есть блокировки
+Foreign sites open, and so do services that are often blocked.	Зарубежные сайты и часто блокируемые сервисы открываются.
+The internet works, but services that are often blocked do not open.	Интернет работает, но часто блокируемые сервисы не открываются.
+Not opening: %s	Не открываются: %s
+often blocked	часто блокируют
+Large foreign sites, services that are often blocked, and sites from the Russian allow-list are asked over HTTPS. Two often-blocked services that do not open mean the connection is filtered.	По HTTPS опрашиваются крупные зарубежные сайты, часто блокируемые сервисы и сайты из российского белого списка. Если не открываются два часто блокируемых сервиса, соединение считается фильтруемым.
+There is no network for the chosen connection. Check Wi-Fi, or pick another route under Connection.	Нет сети для выбранного соединения. Проверьте Wi-Fi или выберите другой маршрут в разделе «Подключение».
+The speed server did not answer.	Сервер теста скорости не ответил.
+No data got through. The network may be blocking the speed server.	Данные не прошли. Возможно, сеть блокирует сервер теста скорости.
+The test stopped with an error: %s	Тест остановился с ошибкой: %s
+Cloudflare is turning away speed tests from this address for now (HTTP 429). Try again in a few minutes.	Cloudflare временно не пускает тесты скорости с этого адреса (HTTP 429). Попробуйте через несколько минут.
+Cloudflare limited this test after several in a row from your address, so the figures may be lower than the line can do.	Cloudflare ограничил этот тест после нескольких подряд с вашего адреса, поэтому цифры могут быть ниже реальной скорости линии.
+Stream address	Адрес потока
+Open stream in a player	Открыть поток в плеере
+No app here opens %s links. Install a player such as VLC; the address is copied.	На телефоне нет приложения для ссылок %s. Установите плеер, например VLC; адрес скопирован.
+Heard by the phone or an ESP32-C5 sensor. The Cardputer and the WROOM-32 hear 2.4 GHz only.	Слышит телефон или датчик ESP32-C5. Cardputer и WROOM-32 слышат только 2,4 ГГц.
+Filter	Фильтр
+Address, port or text	Адрес, порт или текст
+Reset filters	Сбросить фильтры
+No packet matches these filters.	Ни один пакет не подходит под фильтры.
+Tap a host or a conversation to show only its packets.	Нажмите на узел или разговор, чтобы показать только его пакеты.
+Filtered	Отфильтровано
+Packets: %d of %d	Пакеты: %d из %d
+Showing the first %d of %d. Narrow the filters to see the rest.	Показаны первые %d из %d. Уточните фильтры, чтобы увидеть остальные.
+The list holds the first %d packets. The summary above counts all %d.	В списке первые %d пакетов. Сводка выше учитывает все %d.
+Traceroute	Трассировка
+Target	Цель
+Site or IP address	Сайт или IP-адрес
+Trace	Трассировать
+Trace again	Трассировать снова
+That is not a site name or an IP address.	Это не имя сайта и не IP-адрес.
+There is no network for the chosen connection.	Нет сети для выбранного соединения.
+Looking up the address	Поиск адреса
+Placing the hops on the map	Хопы наносятся на карту
+Hops are placed by ipwho.is from their addresses, which it sees. A router's registered place can be far from where it stands, so the map is a rough picture.	Хопы размещает ipwho.is по их адресам, которые он видит. Зарегистрированное место роутера может быть далеко от того, где он стоит, так что карта приблизительная.
+One probe per hop; a hop that does not answer shows as an asterisk.	По одному пакету на хоп; не ответивший хоп показан звёздочкой.
+Private network	Частная сеть
+The path from this phone to any site or address, hop by hop, on a map.	Путь от телефона до любого сайта или адреса, хоп за хопом, на карте.
+Could not find an IPv4 address for this target.	Не удалось найти IPv4-адрес этой цели.
+Path to %s	Путь до %s
+%s is %s. One probe per hop; a hop that does not answer shows as an asterisk.	%s — это %s. По одному пакету на хоп; не ответивший хоп показан звёздочкой.

@@ -49,6 +49,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.platform.BleGattClient
+import androidx.compose.material.icons.rounded.Sell
+import androidx.compose.material.icons.rounded.Warning
+import cattivole.spectra.core.TrackerAssessment
+import cattivole.spectra.core.TrackerDetector
 import cattivole.spectra.core.BleAdvertisement
 import cattivole.spectra.core.BleDevice
 import cattivole.spectra.core.BleServiceRef
@@ -132,6 +136,8 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
     val heard = ble.devices.values
     val rows = heard.arranged(now, sort, scope, showOut, needle)
     val watching = WatchList.presentDevices(model.watchedIds, heard, now)
+    val trackers = if (needle.isEmpty()) TrackerDetector.trackers(heard.filter { it.isNearby(now) }, now) else emptyList()
+    val alarming = trackers.any { it.second.level == TrackerAssessment.Level.ALERT }
     val state = ble.state
     SpectraScreen(
         title = "Bluetooth",
@@ -263,6 +269,20 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
             })
         }
         cardSection(
+            trackers,
+            header = tr("Trackers"),
+            footer = if (alarming) {
+                tr("A tag away from its owner has stayed near you for a while. Move somewhere else and check whether it is still here.")
+            } else {
+                tr("AirTags, Tile, Samsung SmartTag, Chipolo and Find My Device tags report their position through other people's phones. One near its owner is just someone's keys.")
+            },
+            key = { "tracker-" + it.first.address },
+            sectionKey = "trackers",
+            headerTint = { if (alarming) Spectra.colors.danger else Spectra.colors.warning },
+            headerIcon = Icons.Rounded.Sell,
+            dividerInset = 70.dp,
+        ) { (device, assessment) -> TrackerRow(device, assessment, onClick = { nav.ble(device.address) }) }
+        cardSection(
             watching,
             header = tr("Watching"),
             key = { "watch-" + it.address },
@@ -307,6 +327,30 @@ private fun MenuLabel(text: String) {
 @Composable
 private fun MenuCheck(selected: Boolean) {
     if (selected) Icon(Icons.Rounded.Check, contentDescription = null) else Spacer(Modifier.size(24.dp))
+}
+
+/** A tag in the Trackers section: what it is, whether its owner is nearby, and how long it has stayed. */
+@Composable
+private fun TrackerRow(device: BleDevice, assessment: TrackerAssessment, onClick: () -> Unit) {
+    val color = when (assessment.level) {
+        TrackerAssessment.Level.ALERT -> Spectra.colors.danger
+        TrackerAssessment.Level.WATCH -> Spectra.colors.warning
+        TrackerAssessment.Level.INFO -> MaterialTheme.colorScheme.outline
+    }
+    val minutes = (assessment.presentFor / 60_000).toInt()
+    val detail = listOfNotNull(
+        assessment.ownerLabel?.let { tr(it) },
+        if (minutes >= 1) tr("near you for %d min", minutes) else tr("just appeared"),
+        assessment.batteryLabel?.let { tr(it) },
+    ).joinToString(" · ")
+    ListRow(
+        title = tr(assessment.kind.label),
+        subtitle = detail,
+        detail = device.address,
+        leading = { IconTile(if (assessment.level == TrackerAssessment.Level.ALERT) Icons.Rounded.Warning else Icons.Rounded.Sell, color) },
+        trailing = { SignalTrailing(device.rssi, true, device.samples.map { it.rssi }) },
+        onClick = onClick,
+    )
 }
 
 @Composable

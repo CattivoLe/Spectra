@@ -1259,7 +1259,7 @@ fun ChannelsScreen(model: SpectraModel, nav: Navigator) {
             freeCard(
                 "spectrum-5",
                 header = tr("5 GHz"),
-                footer = tr("Heard by the phone; the Cardputer is 2.4 GHz only."),
+                footer = tr("Heard by the phone or an ESP32-C5 sensor. The Cardputer and the WROOM-32 hear 2.4 GHz only."),
                 padding = androidx.compose.foundation.layout.PaddingValues(start = 8.dp, end = 12.dp, top = 16.dp, bottom = 12.dp),
             ) {
                 val span = wideDomain(five)

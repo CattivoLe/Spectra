@@ -138,3 +138,30 @@ class PcapTest {
         assertTrue(analysis.summary.talkers.any { it.endpoint == "192.168.1.10" })
     }
 }
+
+class PacketFilterTest {
+    private fun row(index: Int, transport: String, src: String, dst: String, app: String? = null, info: String = "") =
+        cattivole.spectra.core.PacketRow(index, null, 100, transport, src, dst, info, app, src.substringBeforeLast(':'), dst.substringBeforeLast(':'))
+
+    private val rows = listOf(
+        row(0, "TCP", "10.0.0.2:51000", "1.1.1.1:443", "HTTPS", "TCP 10.0.0.2:51000 → 1.1.1.1:443"),
+        row(1, "UDP", "10.0.0.2:53000", "8.8.8.8:53", "DNS", "DNS query example.com"),
+        row(2, "UDP", "10.0.0.3:53001", "8.8.8.8:53", "DNS", "DNS query github.com"),
+        row(3, "ARP", "aa:bb", "ff:ff", null, "who has 10.0.0.1"),
+    )
+
+    @Test
+    fun filtersNarrowThePacketList() {
+        val none = cattivole.spectra.core.PacketFilter()
+        org.junit.Assert.assertFalse(none.isActive)
+        org.junit.Assert.assertEquals(4, rows.count(none::matches))
+        org.junit.Assert.assertEquals(listOf(1, 2, 3), rows.filter(none.toggle("UDP").toggle("ARP")::matches).map { it.index })
+        org.junit.Assert.assertEquals(listOf(1, 2), rows.filter(none.copy(app = "DNS")::matches).map { it.index })
+        org.junit.Assert.assertEquals(listOf(2), rows.filter(none.copy(query = "GITHUB")::matches).map { it.index })
+        // One host: either end. A conversation: exactly those two ends.
+        org.junit.Assert.assertEquals(listOf(0, 1), rows.filter(none.copy(endpoints = listOf("10.0.0.2"))::matches).map { it.index })
+        org.junit.Assert.assertEquals(listOf(1), rows.filter(none.copy(endpoints = listOf("8.8.8.8", "10.0.0.2"))::matches).map { it.index })
+        org.junit.Assert.assertTrue(none.toggle("TCP").isActive)
+        org.junit.Assert.assertFalse(none.toggle("TCP").toggle("TCP").isActive)
+    }
+}

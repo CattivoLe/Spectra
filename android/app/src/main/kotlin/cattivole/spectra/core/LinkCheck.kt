@@ -22,6 +22,12 @@ class LinkReport {
     var localTrace: LocalTrace? = null
     var remoteTraces: List<RemoteTrace> = emptyList()
     var traceNote: RemoteNote = RemoteNote.NONE
+    var tls: TlsCheck? = null
+    var resolver: DnsReport? = null
+    var exposure: ExposureReport? = null
+
+    /** The traffic light: full access, allow-list only, or nothing. */
+    var access: AccessReport? = null
 }
 
 enum class LinkStatus { ONLINE, CAPTIVE, LAN, OFFLINE, NO_NETWORK }
@@ -44,6 +50,12 @@ data class SavedConnection(
     val localTrace: LocalTrace?,
     val remoteTraces: List<RemoteTrace>,
     val traceNote: RemoteNote,
+    val tls: TlsCheck? = null,
+    val resolver: DnsReport? = null,
+    val exposure: ExposureReport? = null,
+    val access: AccessReport? = null,
+    /** The check went out through the mobile network. */
+    val viaCellular: Boolean = false,
 ) {
     fun toReport(): LinkReport = LinkReport().also {
         it.checkedAt = checkedAt
@@ -61,6 +73,10 @@ data class SavedConnection(
         it.localTrace = localTrace
         it.remoteTraces = remoteTraces
         it.traceNote = traceNote
+        it.tls = tls
+        it.resolver = resolver
+        it.exposure = exposure
+        it.access = access
     }
 
     fun toJson(): JSONObject = JSONObject()
@@ -80,9 +96,14 @@ data class SavedConnection(
         .putOpt("localTrace", localTrace?.let(::localJson))
         .put("remoteTraces", JSONArray().apply { remoteTraces.forEach { put(remoteJson(it)) } })
         .put("traceNote", traceNote.name)
+        .putOpt("tls", tls?.let(InspectJson::tls))
+        .putOpt("resolver", resolver?.let(InspectJson::dns))
+        .putOpt("exposure", exposure?.let(InspectJson::exposure))
+        .putOpt("access", access?.toJson())
+        .put("viaCellular", viaCellular)
 
     companion object {
-        fun from(report: LinkReport, viaVpn: Boolean): SavedConnection? {
+        fun from(report: LinkReport, viaVpn: Boolean, viaCellular: Boolean = false): SavedConnection? {
             val status = report.status ?: return null
             return SavedConnection(
                 checkedAt = report.checkedAt,
@@ -101,6 +122,11 @@ data class SavedConnection(
                 localTrace = report.localTrace,
                 remoteTraces = report.remoteTraces,
                 traceNote = report.traceNote,
+                tls = report.tls,
+                resolver = report.resolver,
+                exposure = report.exposure,
+                access = report.access,
+                viaCellular = viaCellular,
             )
         }
 
@@ -123,6 +149,11 @@ data class SavedConnection(
                 localTrace = json.optJSONObject("localTrace")?.let(::localOf),
                 remoteTraces = json.optJSONArray("remoteTraces").objects().map(::remoteOf),
                 traceNote = enumOrNull<RemoteNote>(json.optString("traceNote")) ?: RemoteNote.NONE,
+                tls = json.optJSONObject("tls")?.let(InspectJson::tls),
+                resolver = json.optJSONObject("resolver")?.let(InspectJson::dns),
+                exposure = json.optJSONObject("exposure")?.let(InspectJson::exposure),
+                access = json.optJSONObject("access")?.let(AccessReport::fromJson),
+                viaCellular = json.optBoolean("viaCellular"),
             )
         }
     }
@@ -172,6 +203,21 @@ data class PingReply(
 
 /** Parsers for the replies a connection check collects. No network of their own. */
 object LinkParse {
+    /**
+     * A check-tcp result for one node: true when it connected, false when it
+     * could not, null while the node is still working.
+     */
+    fun tcpOpen(json: String, node: String): Boolean? {
+        val root = try {
+            JSONObject(json)
+        } catch (_: Exception) {
+            return null
+        }
+        if (!root.has(node) || root.isNull(node)) return null
+        val first = root.optJSONArray(node)?.optJSONObject(0) ?: return false
+        return first.has("time") && !first.has("error")
+    }
+
     /** `https://1.1.1.1/cdn-cgi/trace` — ip, loc, colo, warp. */
     fun externalFromTrace(text: String): ExternalAddress? {
         val map = text.lineSequence().mapNotNull { line ->

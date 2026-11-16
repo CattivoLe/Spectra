@@ -222,7 +222,7 @@ fun BleDevice.icon(): ImageVector {
     }
     if (apple.any { it is AppleAdvertisement.HomeKit }) return Icons.Rounded.Home
     if (apple.any { it is AppleAdvertisement.AirPlayTarget || it is AppleAdvertisement.AirPlaySource }) return Icons.Rounded.Tv
-    if (apple.any { it is AppleAdvertisement.FindMy }) return Icons.Rounded.LocationOn
+    if (advertisesFindMy) return Icons.Rounded.LocationOn
     if (apple.any { it is AppleAdvertisement.AirPrint }) return Icons.Rounded.Print
     for (service in services) {
         when (Catalog.canonicalUuid(service.uuid)) {
@@ -293,5 +293,8 @@ fun appleLabel(message: AppleAdvertisement): String = when (message) {
 
 fun appleDetail(message: AppleAdvertisement): String? = when (message) {
     is AppleAdvertisement.Proximity -> message.pairing.batterySummary?.let(::batteryText)
+    is AppleAdvertisement.FindMy -> message.status?.let { status ->
+        listOfNotNull(status.ownerLabel, status.batteryLabel).joinToString(" · ") { tr(it) }
+    }
     else -> message.detail
 }

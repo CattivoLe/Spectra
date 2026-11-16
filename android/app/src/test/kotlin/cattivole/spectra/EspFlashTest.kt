@@ -15,6 +15,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.security.MessageDigest
 import java.util.ArrayDeque
 import java.util.zip.ZipEntry
@@ -70,6 +71,37 @@ class EspFlashTest {
         val both = steps.indexOfFirst { it.dtr && it.rts }
         assertEquals(false, steps[both + 1].dtr)
         assertEquals(true, steps[both + 1].rts)
+    }
+
+    @Test
+    fun usbJtagResetRecoversAfterTheLinkDrops() {
+        val rom = object : FakeRom() {
+            var live = true
+            var inRom = false
+            var recovered = false
+            override fun write(bytes: ByteArray) {
+                if (!live) throw IOException("usb write")
+                if (!inRom) return
+                super.write(bytes)
+            }
+            override fun setLines(dtr: Boolean, rts: Boolean) {
+                live = false
+            }
+            override fun recover(timeoutMs: Long): Boolean {
+                recovered = true
+                live = true
+                inRom = true
+                return true
+            }
+        }
+        val session = EspFlashSession(rom, sleep = {}, syncAttempts = 1, syncWindowMs = 50)
+        val boot = byteArrayOf(0xE9.toByte(), 1, 2, 3)
+        session.flash(
+            FlashBundle.Image(EspChip.S3, FlashBundle.FLASH_8MB, listOf(FlashBundle.Segment(0, boot))),
+            EspReset.Kind.USB_JTAG,
+        ) {}
+        assertTrue(rom.recovered)
+        assertEquals(boot.toList(), rom.bytes(0, boot.size))
     }
 
     @Test
@@ -223,7 +255,7 @@ class EspFlashTest {
 }
 
 /** A ROM that answers the commands a real ESP32-S3 answers, and keeps what was written. */
-private class FakeRom : EspPipe {
+private open class FakeRom : EspPipe {
     var chipId: Int = EspRom.ESP32_S3
     var securityOk = true
     var magic = 0L

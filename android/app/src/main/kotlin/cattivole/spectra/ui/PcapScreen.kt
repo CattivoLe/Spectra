@@ -41,6 +41,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.core.CaptureAnalysis
+import cattivole.spectra.core.CaptureSummary
+import cattivole.spectra.core.PacketFilter
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.FilterAlt
+import androidx.compose.material.icons.rounded.Lan
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import cattivole.spectra.core.PacketRow
 import cattivole.spectra.core.PcapAnalyzer
 import cattivole.spectra.core.PcapError
@@ -71,8 +81,10 @@ fun PcapScreen(onBack: () -> Unit, capture: Pair<String, ByteArray>? = null, onS
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var phase by remember { mutableStateOf<PcapPhase>(capture?.let { PcapPhase.Loading(it.first) } ?: PcapPhase.Idle) }
+    var filter by remember { mutableStateOf(PacketFilter()) }
     LaunchedEffect(capture) {
         val (name, bytes) = capture ?: return@LaunchedEffect
+        filter = PacketFilter()
         phase = withContext(Dispatchers.Default) { analyze(bytes, name) }
     }
 
@@ -80,6 +92,7 @@ fun PcapScreen(onBack: () -> Unit, capture: Pair<String, ByteArray>? = null, onS
         if (uri == null) return@rememberLauncherForActivityResult
         val name = queryName(context, uri) ?: "capture.pcap"
         phase = PcapPhase.Loading(name)
+        filter = PacketFilter()
         scope.launch {
             phase = withContext(Dispatchers.Default) { readAndAnalyze(context, uri, name) }
         }
@@ -122,12 +135,17 @@ fun PcapScreen(onBack: () -> Unit, capture: Pair<String, ByteArray>? = null, onS
                 Button(onClick = { pick() }) { Text(tr("Choose a file…")) }
             }
 
-            is PcapPhase.Loaded -> results(current.name, current.analysis)
+            is PcapPhase.Loaded -> results(current.name, current.analysis, filter) { filter = it }
         }
     }
 }
 
-private fun LazyListScope.results(name: String, analysis: CaptureAnalysis) {
+private fun LazyListScope.results(
+    name: String,
+    analysis: CaptureAnalysis,
+    filter: PacketFilter,
+    onFilter: (PacketFilter) -> Unit,
+) {
     val summary = analysis.summary
 
     val captureRows = buildList<@Composable () -> Unit> {
@@ -163,9 +181,18 @@ private fun LazyListScope.results(name: String, analysis: CaptureAnalysis) {
         CountBar(it.name, it.count, summary.packetCount)
     }
 
-    cardSection(items = summary.talkers, header = tr("Top hosts"), key = { it.endpoint }) { talker ->
+    cardSection(
+        items = summary.talkers,
+        header = tr("Top hosts"),
+        footer = tr("Tap a host or a conversation to show only its packets."),
+        key = { it.endpoint },
+    ) { talker ->
+        val picked = filter.endpoints == listOf(talker.endpoint)
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            Modifier
+                .fillMaxWidth()
+                .clickable { onFilter(filter.copy(endpoints = if (picked) emptyList() else listOf(talker.endpoint))) }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -181,36 +208,117 @@ private fun LazyListScope.results(name: String, analysis: CaptureAnalysis) {
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (picked) FilteredMark()
         }
     }
 
     cardSection(items = summary.conversations, header = tr("Conversations"), key = { it.a + "|" + it.b }) { conversation ->
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                "${conversation.a} ↔ ${conversation.b}",
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                tr("%d packets · %s", conversation.packets, byteSize(conversation.bytes.toLong())),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        val pair = listOf(conversation.a, conversation.b)
+        val picked = filter.endpoints == pair
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { onFilter(filter.copy(endpoints = if (picked) emptyList() else pair)) }
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "${conversation.a} ↔ ${conversation.b}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    tr("%d packets · %s", conversation.packets, byteSize(conversation.bytes.toLong())),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (picked) FilteredMark()
         }
     }
 
+    if (analysis.rows.isEmpty()) return
+    packetFilters(summary, filter, onFilter)
+    val matching = if (filter.isActive) analysis.rows.filter(filter::matches) else analysis.rows
+    val shown = matching.take(PcapAnalyzer.SHOWN_ROWS)
+    if (matching.isEmpty()) {
+        card(key = "no-match", rows = listOf { NoteRow(tr("No packet matches these filters."), warning = false) })
+    }
     cardSection(
-        items = analysis.rows,
-        header = tr("Packets"),
-        footer = if (analysis.rowsTruncated) {
-            tr("Showing the first %d packets. The summary above counts all %d.", analysis.rows.size, summary.packetCount)
-        } else {
-            null
+        items = shown,
+        header = if (filter.isActive) tr("Packets: %d of %d", matching.size, analysis.rows.size) else tr("Packets"),
+        footer = when {
+            shown.size < matching.size -> tr("Showing the first %d of %d. Narrow the filters to see the rest.", shown.size, matching.size)
+            analysis.rowsTruncated -> tr("The list holds the first %d packets. The summary above counts all %d.", analysis.rows.size, summary.packetCount)
+            else -> null
         },
         key = { it.index },
+        sectionKey = "packets",
     ) { row ->
         PacketRowView(row, summary.start)
+    }
+}
+
+@Composable
+private fun FilteredMark() {
+    Icon(
+        Icons.Rounded.FilterAlt,
+        contentDescription = tr("Filtered"),
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 8.dp).size(18.dp),
+    )
+}
+
+/** Search, protocol and application chips, and the host picked above. */
+private fun LazyListScope.packetFilters(summary: CaptureSummary, filter: PacketFilter, onFilter: (PacketFilter) -> Unit) {
+    freeCard("packet-filter", header = tr("Filter")) {
+        OutlinedTextField(
+            value = filter.query,
+            onValueChange = { onFilter(filter.copy(query = it)) },
+            placeholder = { Text(tr("Address, port or text")) },
+            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+            trailingIcon = if (filter.query.isEmpty()) {
+                null
+            } else {
+                { IconButton(onClick = { onFilter(filter.copy(query = "")) }) { Icon(Icons.Rounded.Close, contentDescription = tr("Clear")) } }
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (summary.protocols.size > 1) {
+            ChipRow(contentPadding = PaddingValues(top = 10.dp)) {
+                summary.protocols.forEach { item ->
+                    ToggleChip(tr(item.name), item.name in filter.transports, { onFilter(filter.toggle(item.name)) })
+                }
+            }
+        }
+        if (summary.apps.isNotEmpty()) {
+            ChipRow(contentPadding = PaddingValues(top = 4.dp)) {
+                summary.apps.forEach { item ->
+                    ToggleChip(item.name, filter.app == item.name, { onFilter(filter.copy(app = if (filter.app == item.name) null else item.name)) })
+                }
+            }
+        }
+        if (filter.endpoints.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Lan, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                Text(
+                    filter.endpoints.joinToString(" ↔ "),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                )
+                IconButton(onClick = { onFilter(filter.copy(endpoints = emptyList())) }) {
+                    Icon(Icons.Rounded.Close, contentDescription = tr("Remove"))
+                }
+            }
+        }
+        if (filter.isActive) {
+            TextButton(onClick = { onFilter(PacketFilter()) }) { Text(tr("Reset filters")) }
+        }
     }
 }
 

@@ -4,6 +4,9 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.rounded.PlayCircle
+import cattivole.spectra.core.streamAddress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +17,28 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckBox
+import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.FilterList
+import androidx.compose.material.icons.rounded.GppMaybe
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.Verified
+import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.graphics.vector.ImageVector
+import cattivole.spectra.core.DeviceLabel
+import cattivole.spectra.core.DeviceTrust
+import cattivole.spectra.core.RiskFinding
+import cattivole.spectra.core.RiskLevel
+import cattivole.spectra.core.needsAttention
+import cattivole.spectra.core.riskFindings
+import cattivole.spectra.core.riskLevel
 import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.automirrored.rounded.ManageSearch
 import androidx.compose.material.icons.rounded.MoreVert
@@ -67,7 +91,36 @@ private fun LanBadges(device: LanDevice, all: Boolean = false) {
     if (notable != null && (all || (!device.isLocalDevice && !device.isGateway))) {
         Pill(if (notable == NotableDevice.CAMERA) tr("Camera") else tr("IoT"), if (notable == NotableDevice.CAMERA) Spectra.colors.danger else Spectra.colors.weak)
     }
+    if (device.isNew) Pill(tr("New"), MaterialTheme.colorScheme.tertiary)
+    when (device.trust) {
+        DeviceTrust.TRUSTED -> Icon(
+            Icons.Rounded.Verified,
+            contentDescription = tr("Trusted"),
+            tint = Spectra.colors.success,
+            modifier = Modifier.size(14.dp),
+        )
+        DeviceTrust.SUSPICIOUS -> Pill(tr("Suspicious"), Spectra.colors.danger)
+        DeviceTrust.UNKNOWN -> Unit
+    }
 }
+
+@Composable
+internal fun RiskLevel.color(): Color = when (this) {
+    RiskLevel.HIGH -> Spectra.colors.danger
+    RiskLevel.MEDIUM -> Spectra.colors.warning
+    RiskLevel.LOW -> Spectra.colors.weak
+    RiskLevel.INFO -> MaterialTheme.colorScheme.outline
+}
+
+internal fun RiskLevel.icon(): ImageVector = when (this) {
+    RiskLevel.HIGH -> Icons.Rounded.GppMaybe
+    RiskLevel.MEDIUM -> Icons.Rounded.Warning
+    RiskLevel.LOW, RiskLevel.INFO -> Icons.Rounded.Info
+}
+
+/** The finding's explanation in the reader's words, with its list filled in. */
+internal fun RiskFinding.shownDetail(): String =
+    if (detailArg == null) tr(detail) else tr(detail, detailArg)
 
 /** The scanner reports its phase in English with numbers in it; this puts it in the reader's words. */
 internal fun lanPhase(text: String): String {
@@ -83,8 +136,19 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
     val lan = model.lan
     var query by rememberSaveable { mutableStateOf("") }
     var menu by rememberSaveable { mutableStateOf(false) }
+    var onlyAtRisk by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
+    val askNotifications = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) {}
+    var confirmForget by rememberSaveable { mutableStateOf(false) }
+    val hideTrusted = model.hideTrustedHosts
     val needle = query.trim()
+    val atRisk = lan.devices.filter { it.needsAttention }
+    if (atRisk.isEmpty() && onlyAtRisk) onlyAtRisk = false
     val visible = lan.devices.filter { device ->
+        if (onlyAtRisk && !device.needsAttention) return@filter false
+        if (hideTrusted && needle.isEmpty() && device.trust == DeviceTrust.TRUSTED) return@filter false
         needle.isEmpty() ||
             device.ipAddress.contains(needle, true) ||
             device.displayName.contains(needle, true) ||
@@ -107,6 +171,34 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
                             menu = false
                         },
                     )
+                    DropdownMenuItem(
+                        text = { Text(tr("Notify about new devices")) },
+                        leadingIcon = { Icon(if (model.notifyNewDevices) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank, null) },
+                        onClick = {
+                            model.notifyNewDevices = !model.notifyNewDevices
+                            if (model.notifyNewDevices && android.os.Build.VERSION.SDK_INT >= 33 &&
+                                !cattivole.spectra.platform.NewDeviceNotifier.allowed(context)
+                            ) {
+                                askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(tr("Hide trusted devices")) },
+                        leadingIcon = { Icon(if (hideTrusted) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank, null) },
+                        onClick = { model.hideTrustedHosts = !hideTrusted },
+                    )
+                    if (lan.hasBaseline) {
+                        DropdownMenuItem(
+                            text = { Text(tr("Forget known devices")) },
+                            leadingIcon = { Icon(Icons.Rounded.RestartAlt, null) },
+                            enabled = !lan.scanning,
+                            onClick = {
+                                confirmForget = true
+                                menu = false
+                            },
+                        )
+                    }
                     if (lan.devices.isNotEmpty()) {
                         HorizontalDivider()
                         DropdownMenuItem(
@@ -181,13 +273,106 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
         }
         trafficEntry(model, nav)
         connectionEntry(model, nav)
+        linkCheckEntry(model, nav)
+        if (!lan.scanning && lan.devices.isNotEmpty() && needle.isEmpty()) {
+            val worst = atRisk.mapNotNull { it.riskLevel }.maxOrNull()
+            card(key = "risk", rows = listOf {
+                ListRow(
+                    title = if (atRisk.isEmpty()) tr("No risky services found") else tr("%d devices need attention", atRisk.size),
+                    subtitle = when {
+                        atRisk.isEmpty() -> tr("Open ports were checked against known weak services.")
+                        onlyAtRisk -> tr("Showing only those. Tap to show every device.")
+                        else -> tr("Telnet, open shares, remote access and the like. Tap to show only those.")
+                    },
+                    leading = { IconTile(worst?.icon() ?: Icons.Rounded.VerifiedUser, worst?.color() ?: Spectra.colors.success) },
+                    trailing = if (onlyAtRisk) {
+                        { Icon(Icons.Rounded.FilterList, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                    } else {
+                        null
+                    },
+                    onClick = if (atRisk.isEmpty()) null else ({ onlyAtRisk = !onlyAtRisk }),
+                )
+            })
+        }
+        val fresh = lan.devices.count { it.isNew }
         cardSection(
             visible,
-            header = tr("Devices: %d", lan.devices.size),
+            header = when {
+                onlyAtRisk -> tr("%d of %d devices", visible.size, lan.devices.size)
+                fresh > 0 -> tr("Devices: %d · new: %d", lan.devices.size, fresh)
+                else -> tr("Devices: %d", lan.devices.size)
+            },
+            footer = if (lan.lastVerdict?.isBaseline == true) {
+                tr("First scan of this network. Devices that show up in later scans will be marked New.")
+            } else {
+                null
+            },
             key = { it.ipAddress },
             sectionKey = "devices",
             dividerInset = 70.dp,
         ) { device -> DeviceRow(device, onClick = { nav.host(device.ipAddress) }) }
+    }
+    if (confirmForget) {
+        AlertDialog(
+            onDismissRequest = { confirmForget = false },
+            title = { Text(tr("Forget known devices?")) },
+            text = { Text(tr("The next scan of this network becomes the baseline: nothing in it is marked New.")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    lan.forgetKnownHosts()
+                    confirmForget = false
+                }) { Text(tr("Forget")) }
+            },
+            dismissButton = { TextButton(onClick = { confirmForget = false }) { Text(tr("Cancel")) } },
+        )
+    }
+}
+
+/** Name, verdict and note for one host. */
+@Composable
+private fun LabelDialog(device: LanDevice, onSave: (DeviceLabel) -> Unit, onDismiss: () -> Unit) {
+    var name by rememberSaveable { mutableStateOf(device.customName.orEmpty()) }
+    var note by rememberSaveable { mutableStateOf(device.note.orEmpty()) }
+    var trust by rememberSaveable { mutableStateOf(device.trust) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("Name and trust")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(name, { name = it }, label = { Text(tr("Name")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                ChipRow(contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+                    DeviceTrust.entries.forEach { option ->
+                        ToggleChip(tr(option.label), trust == option, { trust = option })
+                    }
+                }
+                OutlinedTextField(note, { note = it }, label = { Text(tr("Note")) }, minLines = 2, modifier = Modifier.fillMaxWidth())
+                Text(
+                    tr("Kept on this phone. The device is found again by its hardware address or name."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(DeviceLabel(name, trust, note)) }) { Text(tr("Save")) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(tr("Cancel")) } },
+    )
+}
+
+@Composable
+private fun FindingRow(finding: RiskFinding) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(finding.level.icon(), contentDescription = tr(finding.level.label), tint = finding.level.color(), modifier = Modifier.size(20.dp))
+        Column(Modifier.weight(1f)) {
+            val ports = finding.ports.joinToString(", ")
+            Text(
+                if (ports.isEmpty()) tr(finding.title) else "${tr(finding.title)} · $ports",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(finding.shownDetail(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -219,6 +404,9 @@ fun DeviceRow(device: LanDevice, onClick: () -> Unit) {
             detail = ports,
             leading = { IconTile(device.icon(), device.tint()) },
             badges = { LanBadges(device) },
+            trailing = device.riskLevel?.takeIf { it >= RiskLevel.MEDIUM }?.let { level ->
+                { Icon(level.icon(), contentDescription = tr(level.label), tint = level.color(), modifier = Modifier.size(20.dp)) }
+            },
             onClick = onClick,
             onLongClick = open,
         )
@@ -239,6 +427,18 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
     }
     val snapshot = entryId != null
     val context = LocalContext.current
+    var editing by rememberSaveable { mutableStateOf(false) }
+    if (!snapshot) lan.labels.apply(device)
+    if (editing) {
+        LabelDialog(
+            device,
+            onSave = {
+                lan.setLabel(device, it)
+                editing = false
+            },
+            onDismiss = { editing = false },
+        )
+    }
     SpectraScreen(
         title = device.displayName,
         subtitle = if (snapshot) entry?.let { tr("Saved %s", dateTime(it.savedAt)) } else device.ipAddress,
@@ -259,6 +459,72 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
                     }
                 }
             }
+        }
+        if (!snapshot) {
+            card(
+                key = "label",
+                rows = buildList {
+                    device.note?.let { note -> add { NoteRow(note, warning = false) } }
+                    add {
+                        ActionRow(
+                            if (device.customName == null && device.trust == DeviceTrust.UNKNOWN && device.note == null) tr("Name and trust") else tr("Edit name and trust"),
+                            Icons.Rounded.Edit,
+                            onClick = { editing = true },
+                        )
+                    }
+                },
+            )
+        }
+        val findings = device.riskFindings
+        if (findings.isNotEmpty()) {
+            card(
+                header = tr("Security"),
+                key = "risk",
+                footer = tr("Judged from the open ports alone. Nothing was logged in to or tested."),
+                rows = findings.map { finding -> { FindingRow(finding) } },
+            )
+        }
+        val table = device.profile.portForwarding
+        if (device.isGateway && (table != null || !snapshot)) {
+            card(
+                header = tr("Port forwarding"),
+                key = "forwarding",
+                footer = tr("Read from the router over UPnP. Rules made in the router's own settings may not be listed."),
+                rows = buildList {
+                    when {
+                        table == null -> Unit
+                        !table.supported -> add { NoteRow(tr("The router does not answer UPnP, so its forwardings cannot be read from here."), warning = false) }
+                        table.mappings.isEmpty() -> add {
+                            ListRow(
+                                title = tr("No forwarded ports"),
+                                leading = { IconTile(Icons.Rounded.Shield, Spectra.colors.success, size = 32.dp) },
+                            )
+                        }
+                        else -> table.mappings.forEach { rule ->
+                            add {
+                                val target = lan.devices.firstOrNull { it.ipAddress == rule.internalClient }?.displayName ?: rule.internalClient
+                                InfoRow(
+                                    "${rule.proto} ${rule.externalPort}",
+                                    listOfNotNull(
+                                        "$target:${rule.internalPort}",
+                                        rule.description,
+                                        if (rule.enabled) null else tr("off"),
+                                    ).joinToString(" · "),
+                                    mono = false,
+                                )
+                            }
+                        }
+                    }
+                    table?.externalIp?.let { ip -> add { InfoRow(tr("Public address"), ip, mono = true, copyable = true) } }
+                    if (!snapshot) {
+                        if (lan.checkingForwarding) {
+                            add { ProgressRow(tr("Asking the router…"), null) }
+                        } else {
+                            add { ActionRow(tr("Check again"), Icons.Rounded.Refresh, onClick = { lan.checkPortForwarding() }, enabled = !lan.scanning) }
+                        }
+                    }
+                },
+            )
         }
         card(
             header = tr("Network"),
@@ -336,14 +602,28 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
                             }
                         } else {
                             device.openPorts.forEach { port ->
-                                val url = device.webAddress(port.number)
+                                val web = device.webAddress(port.number)
+                                val stream = if (web == null) device.streamAddress(port.number) else null
                                 add {
+                                    val notify = LocalNotify.current
+                                    val copy = rememberCopier()
                                     PortRow(
                                         port,
                                         device,
-                                        onOpen = url?.let {
-                                            { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) } }
+                                        stream = stream != null,
+                                        onOpen = (web ?: stream)?.let { address ->
+                                            {
+                                                try {
+                                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(address)))
+                                                } catch (_: android.content.ActivityNotFoundException) {
+                                                    // Android has no player for rtsp:// or rtmp:// of its own.
+                                                    copy(tr("Stream address"), address)
+                                                    notify(tr("No app here opens %s links. Install a player such as VLC; the address is copied.", address.substringBefore("://")))
+                                                } catch (_: Exception) {
+                                                }
+                                            }
                                         },
+                                        onCopy = stream?.let { address -> { copy(tr("Stream address"), address) } },
                                     )
                                 }
                             }
@@ -386,14 +666,31 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun PortRow(port: DiscoveredPort, device: LanDevice, onOpen: (() -> Unit)? = null) {
+private fun PortRow(
+    port: DiscoveredPort,
+    device: LanDevice,
+    stream: Boolean = false,
+    onOpen: (() -> Unit)? = null,
+    onCopy: (() -> Unit)? = null,
+) {
     val detail = device.profile.banners.firstOrNull { it.port == port.number }?.summary
         ?: device.profile.rtsp.firstOrNull { it.port == port.number }?.summary
     Row(
         Modifier
             .fillMaxWidth()
-            .then(if (onOpen != null) Modifier.clickable(onClickLabel = tr("Open in browser"), onClick = onOpen) else Modifier)
+            .then(
+                if (onOpen != null) {
+                    Modifier.combinedClickable(
+                        onClickLabel = if (stream) tr("Open stream in a player") else tr("Open in browser"),
+                        onClick = onOpen,
+                        onLongClick = onCopy,
+                    )
+                } else {
+                    Modifier
+                },
+            )
             .padding(horizontal = 16.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -410,7 +707,12 @@ private fun PortRow(port: DiscoveredPort, device: LanDevice, onOpen: (() -> Unit
             }
         }
         if (onOpen != null) {
-            Icon(Icons.Rounded.OpenInBrowser, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            Icon(
+                if (stream) Icons.Rounded.PlayCircle else Icons.Rounded.OpenInBrowser,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
         }
         Box(Modifier.size(8.dp).clip(CircleShape).background(Spectra.colors.success))
     }

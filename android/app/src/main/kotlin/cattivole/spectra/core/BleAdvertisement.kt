@@ -34,7 +34,7 @@ sealed class AppleAdvertisement {
     data object InstantHotspot : AppleAdvertisement()
     data class NearbyActionMessage(val action: NearbyAction?) : AppleAdvertisement()
     data class NearbyInfoMessage(val activity: NearbyActivity?) : AppleAdvertisement()
-    data object FindMy : AppleAdvertisement()
+    data class FindMy(val status: FindMyStatus?) : AppleAdvertisement()
 
     val distinctiveName: String?
         get() = when (this) {
@@ -45,7 +45,7 @@ sealed class AppleAdvertisement {
             is Proximity -> pairing.modelName ?: "Apple audio"
             is HeySiri -> device ?: "Hey Siri"
             AirPlayTarget, AirPlaySource -> "AirPlay"
-            FindMy -> "Find My"
+            is FindMy -> "Find My"
             else -> null
         }
 
@@ -55,7 +55,7 @@ sealed class AppleAdvertisement {
             is Proximity, is HeySiri -> 0
             is HomeKit -> 1
             AirPlayTarget, AirPlaySource -> 2
-            FindMy -> 3
+            is FindMy -> 3
             is IBeacon -> 4
             AirPrint -> 5
             AirDrop -> 6
@@ -78,7 +78,7 @@ sealed class AppleAdvertisement {
             InstantHotspot -> "Instant Hotspot"
             is NearbyActionMessage -> action?.label ?: "Nearby"
             is NearbyInfoMessage -> activity?.label ?: "Nearby"
-            FindMy -> "Find My"
+            is FindMy -> "Find My"
         }
 
     val detail: String?
@@ -86,8 +86,44 @@ sealed class AppleAdvertisement {
             is Proximity -> pairing.batterySummary
             is IBeacon -> "$uuid · $major · $minor · $measuredPower dBm"
             is HomeKit -> if (category == null) null else "HomeKit"
+            is FindMy -> status?.summary
             else -> null
         }
+}
+
+/**
+ * What an Offline Finding (Find My) advertisement says about the tag.
+ *
+ * A tag near its owner sends a short two-byte message. One that has lost its
+ * owner sends the long one with a public key, so the Find My network can
+ * report it: that is the form a tracker slipped into a bag transmits.
+ */
+data class FindMyStatus(
+    /** The long advertisement: the tag is away from its owner. */
+    val separated: Boolean,
+    /** 0 full, 1 medium, 2 low, 3 critical. */
+    val battery: Int?,
+) {
+    val batteryLabel: String?
+        get() = when (battery) {
+            0 -> "Battery full"
+            1 -> "Battery medium"
+            2 -> "Battery low"
+            3 -> "Battery critical"
+            else -> null
+        }
+
+    val ownerLabel: String get() = if (separated) "Away from its owner" else "Near its owner"
+
+    val summary: String get() = listOfNotNull(ownerLabel, batteryLabel).joinToString(" · ")
+
+    companion object {
+        /** [payload] is the message body after the type and length bytes. */
+        fun parse(payload: ByteArray): FindMyStatus? {
+            if (payload.isEmpty()) return null
+            return FindMyStatus(separated = payload.size >= 24, battery = (payload[0].toInt() and 0xFF) shr 6)
+        }
+    }
 }
 
 enum class NearbyActivity(val raw: Int, val label: String) {
@@ -264,7 +300,7 @@ data class BleAdvertisement(
             0x10 -> AppleAdvertisement.NearbyInfoMessage(
                 if (payload.isEmpty()) null else NearbyActivity.from(payload.u8(0) and 0x0F),
             )
-            0x12 -> AppleAdvertisement.FindMy
+            0x12 -> AppleAdvertisement.FindMy(FindMyStatus.parse(payload))
             else -> null
         }
 
@@ -384,6 +420,24 @@ class BleDevice(
     var packetCount: Int = 0
     val firstSeen: Long = seen
     var lastSeen: Long = seen
+
+    /**
+     * Start of the current unbroken stretch of advertisements. A silence
+     * longer than [PRESENCE_GAP_MS] starts a new one, so "near you for 20 min"
+     * means it really stayed, not that it came back.
+     */
+    var presentSince: Long = seen
+        private set
+
+    /** How long the device has been continuously nearby. */
+    fun presentFor(now: Long): Long = (minOf(now, lastSeen) - presentSince).coerceAtLeast(0)
+
+    /** The Find My status, when the device advertises Offline Finding. */
+    val findMyStatus: FindMyStatus?
+        get() = apple.filterIsInstance<AppleAdvertisement.FindMy>().firstOrNull()?.status
+
+    val advertisesFindMy: Boolean
+        get() = apple.any { it is AppleAdvertisement.FindMy }
     var deviceClass: String? = null
 
     data class Sample(val id: Int, val date: Long, val rssi: Int)
@@ -494,6 +548,7 @@ class BleDevice(
         if (advertisement.txPower != null) txPower = advertisement.txPower
         if (advertisement.isConnectable != null) isConnectable = advertisement.isConnectable
 
+        if (at - lastSeen > PRESENCE_GAP_MS) presentSince = at
         lastSeen = at
         val due = samples.lastOrNull()?.let { at - it.date >= 250 } ?: true
         if (!due || rssi == 127) return
@@ -521,6 +576,7 @@ class BleDevice(
         sampleCounter = samples.size
         packetCount = packets
         this.lastSeen = lastSeen
+        presentSince = lastSeen
         this.deviceClass = deviceClass
         orderRssi = rssi
         smoothedRssi = rssi.toDouble()
@@ -533,6 +589,7 @@ class BleDevice(
 
     companion object {
         const val NEARBY_WINDOW_MS = 20_000L
+        const val PRESENCE_GAP_MS = 90_000L
         /** Quiet for this long while the scan runs and the row leaves the list. */
         const val REMOVAL_WINDOW_MS = 120_000L
     }

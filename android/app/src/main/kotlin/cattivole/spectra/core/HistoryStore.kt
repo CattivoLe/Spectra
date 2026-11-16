@@ -805,7 +805,10 @@ class HistoryStore(context: Context) {
                     profile = newer.profile,
                     firstSeen = minOf(old.firstSeen, new.firstSeen),
                     lastSeen = maxOf(old.lastSeen, new.lastSeen),
-                )
+                ).also {
+                    // Once new in this session, new for the whole session.
+                    it.isNew = old.isNew || new.isNew
+                }
             }
             return byIp.values.sortedWith(
                 compareByDescending<LanDevice> { it.isLocalDevice }

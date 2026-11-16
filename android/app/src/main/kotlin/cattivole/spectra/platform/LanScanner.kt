@@ -62,7 +62,103 @@ data class LanRoute(
  * it does on iOS: a TCP connect that opens or is refused (the host answered),
  * an ARP entry left by that probe, or a service advertisement.
  */
-class LanScanner(context: Context) {
+class LanScanner(
+    context: Context,
+    /** Hosts every network has shown before, to tell a newcomer apart. */
+    val knownHosts: cattivole.spectra.core.KnownHosts = cattivole.spectra.core.KnownHosts(),
+    /** The user's names and verdicts for hosts. */
+    val labels: cattivole.spectra.core.DeviceLabels = cattivole.spectra.core.DeviceLabels(),
+) {
+    /** What the last finished scan learned about new hosts on this network. */
+    var lastVerdict: cattivole.spectra.core.KnownHosts.Verdict? = null
+        private set
+
+    /** Whether this network has a baseline to compare scans against. */
+    val hasBaseline: Boolean get() = networkKey?.let { knownHosts.knows(it) } == true
+
+    /** Drops what is known about the joined network and the New marks with it. */
+    fun forgetKnownHosts() {
+        val key = networkKey ?: return
+        knownHosts.forget(key)
+        devices.forEach { it.isNew = false }
+        lastVerdict = null
+        publish()
+    }
+
+    /** Set while the router is being asked for its port forwardings. */
+    var checkingForwarding: Boolean = false
+        private set
+
+    /** Asks the router for its UPnP port-forwarding table again, by hand. */
+    fun checkPortForwarding() {
+        if (scanning || checkingForwarding) return
+        scope.launch { refreshPortForwarding() }
+    }
+
+    /**
+     * Reads the gateway's forwardings and notes on every host which rules
+     * point at it. Quiet when there is no gateway.
+     */
+    private suspend fun refreshPortForwarding() {
+        val router = devices.firstOrNull { it.isGateway } ?: return
+        checkingForwarding = true
+        publish()
+        try {
+            val now = System.currentTimeMillis()
+            val table = withContext(Dispatchers.IO) { portForwarding(router.ipAddress, now) }
+            router.profile = router.profile.copy(portForwarding = table ?: cattivole.spectra.core.PortForwarding(now, supported = false))
+            val rules = router.profile.portForwarding?.mappings.orEmpty().filter { it.enabled }
+            for (device in devices) {
+                if (device.isGateway) continue
+                val mine = rules.filter { it.internalClient == device.ipAddress }
+                if (device.profile.inbound != mine) device.profile = device.profile.copy(inbound = mine)
+            }
+        } finally {
+            checkingForwarding = false
+            publish()
+        }
+    }
+
+    /** Blocking. Null when the router does not speak UPnP at all. */
+    private fun portForwarding(ip: String, now: Long): cattivole.spectra.core.PortForwarding? {
+        val control = cattivole.spectra.core.GatewayControl
+        val replies = exchangeUdp(ip, 1900, control.ssdpGatewaySearch(ip), 1200) +
+            exchangeUdp(ip, 1900, LanIdentity.ssdpSearch(ip), 800)
+        val locations = replies.mapNotNull { LanIdentity.parseSsdp(it)?.location }
+            .filter { LanIdentity.locationIsOnHost(it, ip) }.distinct()
+        if (locations.isEmpty()) return null
+        for (location in locations) {
+            if (!location.startsWith("http://", ignoreCase = true)) continue
+            val xml = fetchUrl(location) ?: continue
+            for (service in control.services(xml)) {
+                val url = control.resolveControlUrl(service.controlUrl, location, xml) ?: continue
+                if (!LanIdentity.locationIsOnHost(url.toString(), ip)) continue
+                val port = if (url.port > 0) url.port else 80
+                fun call(action: String, arguments: List<Pair<String, String>> = emptyList()) =
+                    exchangeTcp(ip, port, control.soapRequest(url, service.serviceType, action, arguments), 2000, 65_536)
+                        ?.let { control.soapOutcome(it) }
+                // The external address doubles as the check that the service is live.
+                val first = call("GetExternalIPAddress") ?: continue
+                if (first.status != 200 && first.errorCode == null) continue
+                val external = LanIdentity.tag("NewExternalIPAddress", first.body)?.takeIf { it.isNotEmpty() && it != "0.0.0.0" }
+                val mappings = mutableListOf<cattivole.spectra.core.PortMapping>()
+                for (index in 0 until 256) {
+                    val reply = call("GetGenericPortMappingEntry", listOf("NewPortMappingIndex" to index.toString())) ?: break
+                    if (reply.errorCode == control.INDEX_INVALID || reply.status != 200) break
+                    mappings.add(control.parsePortMapping(reply.body) ?: break)
+                }
+                return cattivole.spectra.core.PortForwarding(now, supported = true, externalIp = external, mappings = mappings)
+            }
+        }
+        return cattivole.spectra.core.PortForwarding(now, supported = false)
+    }
+
+    /** Stores the user's label for a host and redraws. */
+    fun setLabel(device: LanDevice, label: cattivole.spectra.core.DeviceLabel) {
+        labels.set(label, device)
+        publish()
+    }
+
     var devices: List<LanDevice> = emptyList()
         private set
     var subnet: SubnetInfo? = null
@@ -171,6 +267,9 @@ class LanScanner(context: Context) {
                     }
                 }
                 apply(info, found)
+                progress = "Asking the router"
+                publish()
+                refreshPortForwarding()
                 progress = "${devices.size} devices"
                 lastScanDate = System.currentTimeMillis()
             } finally {
@@ -191,6 +290,7 @@ class LanScanner(context: Context) {
         stop()
         portJob?.cancel()
         known.clear()
+        lastVerdict = null
         devices = emptyList()
         subnet = null
         lastScanDate = null
@@ -275,12 +375,19 @@ class LanScanner(context: Context) {
                 lastSeen = System.currentTimeMillis(),
             )
             device.preservePinnedName(previous)
+            device.isNew = previous?.isNew == true
+            labels.apply(device)
             next[ip] = device
         }
         known.clear()
         known.putAll(next)
+        devices = next.values.toList()
+        // The gateway's address keys the network, so the list is in place first.
+        lastVerdict = networkKey?.let { knownHosts.classify(next.values, it) }
+        next.values.forEach { labels.apply(it) }
+        // This phone, the gateway, then newcomers, then everything else by address.
         devices = next.values.sortedWith(
-            compareBy<LanDevice> { !it.isLocalDevice }.thenBy { !it.isGateway }.thenBy { ipv4(it.ipAddress) ?: 0L },
+            compareBy<LanDevice> { !it.isLocalDevice }.thenBy { !it.isGateway }.thenBy { !it.isNew }.thenBy { ipv4(it.ipAddress) ?: 0L },
         )
     }
 
@@ -828,7 +935,12 @@ class LanScanner(context: Context) {
         }
         keep(name)
         keep(attribute(resolved, "fn"))
-        val model = attribute(resolved, "model") ?: attribute(resolved, "md")
+        // AirPlay audio keeps the model in "am"; its "md" lists metadata types ("0,1,2").
+        val model = if (resolved.serviceType.contains("raop")) {
+            attribute(resolved, "am")
+        } else {
+            attribute(resolved, "model") ?: attribute(resolved, "md")
+        }
         val shown = name ?: tidy
         val list = services.getOrPut(host) { mutableListOf() }
         if (list.none { it.type == resolved.serviceType && it.name == shown }) {

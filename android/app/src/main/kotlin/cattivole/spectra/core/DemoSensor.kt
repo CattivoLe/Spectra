@@ -166,6 +166,10 @@ class DemoSensor(
                 Spec("", 11, SecondaryChannel.NONE, AuthMode.WPA2_PSK, Capabilities.B or Capabilities.G or Capabilities.N, -81),
                 Spec("iPhone 15", 1, SecondaryChannel.NONE, AuthMode.WPA3_PSK, Capabilities.B or Capabilities.G or Capabilities.N or Capabilities.AX, -83),
                 Spec("Rostelecom_A2", 13, SecondaryChannel.NONE, AuthMode.WEP, Capabilities.B or Capabilities.G, -88),
+                // What an ESP32-C5 adds: the 5 GHz band.
+                Spec("Home-5G", 36, SecondaryChannel.ABOVE, AuthMode.WPA2_WPA3_PSK, Capabilities.N or Capabilities.AX, -55),
+                Spec("Keenetic-4120-5G", 44, SecondaryChannel.NONE, AuthMode.WPA2_PSK, Capabilities.N, -66),
+                Spec("Office_5G", 149, SecondaryChannel.ABOVE, AuthMode.WPA2_PSK, Capabilities.N or Capabilities.AX, -74),
             )
             return specs.mapIndexed { index, spec ->
                 val hotspot = spec.ssid.startsWith("iPhone") || spec.ssid.startsWith("DIRECT")
