@@ -15,17 +15,24 @@ public struct ToolRegistry: Sendable {
     public var runningLabel: @Sendable (_ name: String) -> String
     /// How many calls one answer may make before the model is forced to answer in plain text instead.
     public var maxSteps: Int
+    /// Tools the question itself plainly asks for ("scan Bluetooth", «просканируй блютуз»), run by the app before
+    /// the model starts, so a small model never has to decide on its own — in whatever language — whether to call
+    /// them. Their results reach the model exactly as if it had made the calls itself, and count against `maxSteps`.
+    /// Only argument-free tools: the call sent is `{"tool": "<name>"}`.
+    public var preflight: @MainActor (_ question: String) -> [String]
 
     public init(
         grammar: String,
         callTag: String = "<tool_call>",
         maxSteps: Int = 4,
+        preflight: @escaping @MainActor (_ question: String) -> [String] = { _ in [] },
         runningLabel: @escaping @Sendable (_ name: String) -> String,
         run: @escaping @MainActor (_ name: String, _ argsJSON: String) async -> String
     ) {
         self.grammar = grammar
         self.callTag = callTag
         self.maxSteps = maxSteps
+        self.preflight = preflight
         self.runningLabel = runningLabel
         self.run = run
     }

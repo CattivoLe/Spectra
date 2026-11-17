@@ -1,12 +1,56 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "A version of Llama 3.2 with its built-in refusals removed: it answers what ordinary models decline. About 24 tokens per second on iPhone 16. Russian is not officially supported: it writes it clumsily and slips into English words, so it suits English better." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Версия Llama 3.2 без встроенных отказов: отвечает на то, на что обычные модели не соглашаются. Около 24 токенов в секунду на iPhone 16. Русский официально не поддерживается: пишет неуклюже и вставляет английские слова, лучше подходит для английского."
+          }
+        }
+      }
+    },
+    "Built with Llama. The model's safety limits have been removed: it may give inaccurate, rude or inappropriate answers. Use at your own risk; not for children." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Built with Llama. Из модели убраны защитные ограничения: она может выдавать неточные, грубые или неприемлемые ответы. Используйте на свою ответственность; не для детей."
+          }
+        }
+      }
+    },
     "Capturing traffic…" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Снимаю трафик…"
+          }
+        }
+      }
+    },
+    "Mistral's small model: good at calling checks and fairly fluent in Russian, although Russian is not officially supported. Tends to answer at length. Not yet measured on iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Маленькая модель Mistral: хорошо вызывает проверки и довольно бегло пишет по-русски, хотя официально русский не поддерживает. Склонна отвечать длинно. Скорость на iPhone ещё не замеряли."
+          }
+        }
+      }
+    },
+    "Qwen 3 retrained for Russian by the Vikhr team: writes natural Russian and calls checks reliably. In our tests it sometimes misread numbers (it called a strong signal weak). Not yet measured on iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qwen 3, дообученная командой Vikhr для русского: пишет по-русски естественно и уверенно вызывает проверки. В наших пробах иногда путала цифры (назвала сильный сигнал слабым). Скорость на iPhone ещё не замеряли."
           }
         }
       }
@@ -9358,26 +9402,6 @@
         }
       }
     },
-    "Spectra data and live checks: off" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Данные Spectra и живые проверки: выключено"
-          }
-        }
-      }
-    },
-    "Spectra data and live checks: on" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Данные Spectra и живые проверки: включено"
-          }
-        }
-      }
-    },
     "Spectra did not join it. Join only networks you expected to find here." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9936,12 +9960,12 @@
         }
       }
     },
-    "The assistant reads what Spectra found (networks, devices, history) only on this phone, and only when a question needs it. You can switch this off in each chat." : {
+    "The assistant reads what Spectra found (networks, devices, history) only on this phone, and only when a question needs it. It can also run a scan or check itself — only ones that read or measure, never anything that transmits over the air." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ассистент читает найденное Spectra (сети, устройства, историю) только на этом телефоне и только когда это нужно для вопроса. В каждом диалоге это можно выключить."
+            "value" : "Ассистент читает найденное Spectra (сети, устройства, историю) только на этом телефоне и только когда это нужно для вопроса. Он может и сам запустить скан или проверку — только такие, что читают или измеряют, и никогда ничего не передают в эфир."
           }
         }
       }

@@ -36,8 +36,13 @@ final class AssistantScriptedEngine: InferenceEngine {
         let text = reply(number)
         return AsyncThrowingStream { continuation in
             continuation.yield(.text(text))
-            continuation.yield(.finished(GenerationStats(promptTokens: 1, generatedTokens: 1, timeToFirstTokenSeconds: 0,
-                                                         generationSeconds: 0, stopReason: .endOfTurn)))
+            continuation.yield(.finished(GenerationStats(
+                promptTokens: 1,
+                generatedTokens: 1,
+                timeToFirstTokenSeconds: 0,
+                generationSeconds: 0,
+                stopReason: .endOfTurn
+            )))
             continuation.finish()
         }
     }
@@ -178,15 +183,11 @@ struct AssistantDigestTests {
 
 @MainActor
 struct AssistantSessionTests {
-    private func makeSession(engine: AssistantScriptedEngine, appData: Bool = true, tools: ToolRegistry? = nil) async throws -> ChatSession {
+    private func makeSession(engine: AssistantScriptedEngine, tools: ToolRegistry? = nil) async throws -> ChatSession {
         let store = try ChatStore()
         let controller = EngineController(engine: engine)
         try await controller.load(modelAt: URL(fileURLWithPath: "/tmp/m.gguf"))
-        var chat = try await store.createChat()
-        if !appData {
-            try await store.setAppData(false, for: chat.id)
-            chat.appData = false
-        }
+        let chat = try await store.createChat()
         let session = ChatSession(chat: chat, store: store, controller: controller, systemPrompt: AssistantModel.systemPrompt)
         session.appDataProvider = { question in
             AssistantDigest.attachment(for: question, snapshot: .init(wifiName: "HomeNet", sensorConnected: true))
@@ -215,18 +216,6 @@ struct AssistantSessionTests {
         #expect(session.attachments[userID] != nil)
     }
 
-    @Test func turningTheSwitchOffKeepsDataAway() async throws {
-        let engine = AssistantScriptedEngine()
-        let session = try await makeSession(engine: engine, appData: false)
-
-        session.send("Is my Wi-Fi safe?")
-        await session.waitUntilIdle()
-
-        let question = try #require(engine.received.first?.last)
-        #expect(question.content == "Is my Wi-Fi safe?")
-        #expect(session.attachments.isEmpty)
-    }
-
     @Test func onlyTheLatestQuestionCarriesData() async throws {
         let engine = AssistantScriptedEngine()
         let session = try await makeSession(engine: engine)
@@ -241,15 +230,6 @@ struct AssistantSessionTests {
         #expect(users.count == 2)
         #expect(users[0].content == "Is my Wi-Fi safe?")
         #expect(users[1].content.hasSuffix("Thanks"))
-    }
-
-    @Test func chatsStoreTheAppDataSwitch() async throws {
-        let store = try ChatStore()
-        let chat = try await store.createChat()
-        #expect(chat.appData)
-        try await store.setAppData(false, for: chat.id)
-        let stored = try #require(try await store.chats().first)
-        #expect(stored.appData == false)
     }
 
     // MARK: - Разбор вызова инструмента
@@ -290,9 +270,11 @@ struct AssistantSessionTests {
 
     private func makeRegistry(
         maxSteps: Int = 4,
+        preflight: @escaping @MainActor (String) -> [String] = { _ in [] },
         run: @escaping @MainActor (String, String) async -> String = { _, _ in "ok" }
     ) -> ToolRegistry {
-        ToolRegistry(grammar: "root ::= \"x\"", maxSteps: maxSteps, runningLabel: { name in "Running \(name)…" }, run: run)
+        ToolRegistry(grammar: "root ::= \"x\"", maxSteps: maxSteps, preflight: preflight,
+                     runningLabel: { name in "Running \(name)…" }, run: run)
     }
 
     @Test func toolCallRunsThenTheFollowingAnswerIsWhatIsStored() async throws {
@@ -326,19 +308,69 @@ struct AssistantSessionTests {
         })
     }
 
-    @Test func toolCallsAreIgnoredWhenAppDataIsOff() async throws {
-        var ran = false
-        let registry = makeRegistry { _, _ in ran = true; return "should never run" }
-        let engine = AssistantScriptedEngine { _ in "<tool_call>{\"tool\": \"scan_wifi\"}</tool_call>" }
-        let session = try await makeSession(engine: engine, appData: false, tools: registry)
+    @Test func aPlainRequestRunsItsCheckBeforeTheModelSpeaks() async throws {
+        let questions = Mutex<[String]>([])
+        let calledNames = Mutex<[String]>([])
+        let registry = makeRegistry(
+            preflight: { question in questions.withLock { $0.append(question) }; return ["scan_bluetooth"] },
+            run: { name, _ in calledNames.withLock { $0.append(name) }; return "Bluetooth devices (2, 2 nearby)." }
+        )
+        let engine = AssistantScriptedEngine { _ in "Two Bluetooth devices are nearby." }
+        let session = try await makeSession(engine: engine, tools: registry)
 
-        session.send("Scan my Wi-Fi now")
+        session.send("просканируй блютуз")
         await session.waitUntilIdle()
 
-        #expect(!ran)
-        #expect(session.toolRuns.isEmpty)
+        // The app asked with what the user typed, ran the check once, and the model answered in one round.
+        #expect(questions.withLock { $0 } == ["просканируй блютуз"])
+        #expect(calledNames.withLock { $0 } == ["scan_bluetooth"])
         #expect(engine.received.count == 1)
-        #expect(session.messages.last?.content == String(localized: "I tried to run a check but could not finish it. Could you ask again?"))
+        let round = try #require(engine.received.first)
+        #expect(round.contains { $0.role == .assistant && $0.content == "<tool_call>{\"tool\": \"scan_bluetooth\"}" })
+        #expect(round.last?.role == .user)
+        #expect(round.last?.content.contains("<tool_result name=\"scan_bluetooth\">") == true)
+        // The model may still call something else: the run counts as one of its steps, not all of them.
+        #expect(engine.receivedParams.first?.grammar != nil)
+        #expect(session.messages.last?.content == "Two Bluetooth devices are nearby.")
+        let assistantID = try #require(session.messages.last?.id)
+        #expect(session.toolRuns[assistantID] == ["scan_bluetooth"])
+    }
+
+    @Test func plainRequestsCountAgainstMaxSteps() async throws {
+        let calledNames = Mutex<[String]>([])
+        let registry = makeRegistry(
+            maxSteps: 1,
+            preflight: { _ in ["scan_bluetooth", "scan_wifi"] },
+            run: { name, _ in calledNames.withLock { $0.append(name) }; return "ok" }
+        )
+        let engine = AssistantScriptedEngine { _ in "Done." }
+        let session = try await makeSession(engine: engine, tools: registry)
+
+        session.send("scan bluetooth and wifi")
+        await session.waitUntilIdle()
+
+        #expect(calledNames.withLock { $0 } == ["scan_bluetooth"])
+        #expect(engine.receivedParams.first?.grammar == nil)
+    }
+
+    @Test func stoppingDuringAPlainRequestLeavesNoAnswer() async throws {
+        let started = Mutex(false)
+        let registry = makeRegistry(preflight: { _ in ["scan_lan"] }) { _, _ in
+            started.withLock { $0 = true }
+            try? await Task.sleep(for: .seconds(5))
+            return "late result"
+        }
+        let engine = AssistantScriptedEngine()
+        let session = try await makeSession(engine: engine, tools: registry)
+
+        session.send("просканируй сеть")
+        while !started.withLock({ $0 }) { try await Task.sleep(for: .milliseconds(5)) }
+        session.stop()
+        await session.waitUntilIdle()
+
+        #expect(engine.received.isEmpty)
+        #expect(session.messages.count == 1)
+        #expect(session.messages.first?.role == .user)
     }
 
     @Test func toolLoopStopsAfterMaxStepsAndForcesPlainText() async throws {
@@ -375,6 +407,90 @@ struct AssistantSessionTests {
 
         #expect(session.messages.count == 1)
         #expect(session.messages.first?.role == .user)
+    }
+}
+
+// MARK: - Plain requests
+
+@MainActor
+struct AssistantRequestTests {
+    @Test(arguments: [
+        ("просканируй блютуз", ["scan_bluetooth"]),
+        ("сделай блютуз скан", ["scan_bluetooth"]),
+        ("сделай bluetooth скан", ["scan_bluetooth"]),
+        ("какие блютуз устройства рядом со мной", ["scan_bluetooth"]),
+        ("какие устройства вокруг?", ["scan_bluetooth"]),
+        ("Найди трекеры", ["scan_bluetooth"]),
+        ("Scan Bluetooth", ["scan_bluetooth"]),
+        ("what Bluetooth devices are nearby", ["scan_bluetooth"]),
+        ("просканируй вай-фай", ["scan_wifi"]),
+        ("какие сети рядом", ["scan_wifi"]),
+        ("Rescan wifi networks", ["scan_wifi"]),
+        ("просканируй сеть", ["scan_lan"]),
+        ("проверь, кто в моей сети", ["scan_lan"]),
+        ("scan my LAN", ["scan_lan"]),
+        ("проверь интернет", ["check_connection"]),
+        ("check my connection", ["check_connection"]),
+        ("замерь скорость интернета", ["speed_test"]),
+        ("run a speed test", ["speed_test"]),
+        ("просканируй блютуз и вайфай", ["scan_wifi", "scan_bluetooth"]),
+    ])
+    func plainRequestsAreRecognized(question: String, expected: [String]) {
+        #expect(AssistantActions.requested(in: question).map(\.rawValue) == expected)
+    }
+
+    @Test(arguments: [
+        "Is my Wi-Fi safe?",
+        "Расскажи про мои блютуз устройства",
+        "зачем сканировать блютуз?",
+        "не сканируй блютуз",
+        "how often should I scan Bluetooth?",
+        "кто в моей сети?",          // a question about the network, not a request to sweep it
+        "какая у меня скорость интернета",
+        "проверь мой роутер на уязвимости",
+        "привет",
+    ])
+    func otherQuestionsRunNothing(question: String) {
+        #expect(AssistantActions.requested(in: question).isEmpty)
+    }
+}
+
+// MARK: - Model catalog
+
+@MainActor
+struct AssistantCatalogTests {
+    @Test(arguments: [
+        ("Llama-3.2-3B-Instruct-abliterated.Q4_K_M.gguf", "Llama 3.2 3B abliterated"),
+        ("gemma-4-E2B-it-Q4_K_M.gguf", "gemma 4 E2B"),
+        ("Qwen3.5-4B-Q4_K_M.gguf", "Qwen3.5 4B"),
+        ("Phi-4-mini-instruct-IQ4_XS.gguf", "Phi 4 mini"),
+        ("my_model.f16.gguf", "my model"),
+        ("QVikhr-3-1.7B-Instruction-noreasoning-Q4_K_M.gguf", "QVikhr 3 1.7B Instruction…"),
+    ])
+    func importedFilesGetAShortName(fileName: String, expected: String) {
+        #expect(InstalledModel.readableName(fileName: fileName) == expected)
+    }
+
+    @Test func menuNamesFitOneLine() {
+        let imported = InstalledModel(fileName: "QVikhr-3-1.7B-Instruction-noreasoning-Q4_K_M.gguf", sizeBytes: 0)
+        #expect(imported.menuName == "QVikhr 3 1.7B…")
+        #expect(InstalledModel.readableName(fileName: "Supercalifragilisticexpialidocious.gguf", maxLength: 16) == "Supercalifragil…")
+    }
+
+    @Test func bundledCatalogDecodesWithShortUniqueNames() throws {
+        let url = try #require(Bundle.main.url(forResource: "AssistantModels", withExtension: "json"))
+        let catalog = try ModelCatalog.decode(Data(contentsOf: url))
+        #expect(catalog.count >= 5)
+        #expect(Set(catalog.map(\.id)).count == catalog.count)
+        #expect(Set(catalog.map(\.fileName)).count == catalog.count)
+        for model in catalog {
+            #expect(model.name.count <= 26, "\(model.name) is too long for a catalog row")
+            #expect((model.shortName ?? model.name).count <= InstalledModel.menuNameLength,
+                    "\(model.name) needs a shortName that fits one line of the model menu")
+            #expect(model.sha256.count == 64)
+            #expect(model.url.lastPathComponent == model.fileName)
+        }
+        #expect(catalog.contains { $0.id == "llama-3-2-3b-abliterated" && $0.notice != nil })
     }
 }
 

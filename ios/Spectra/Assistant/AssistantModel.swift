@@ -30,6 +30,11 @@ final class AssistantModel {
         library.installed.first { $0.fileName == selectedModel }?.displayName
     }
 
+    /// The same, short enough for one line under the chat title.
+    var currentModelMenuName: String? {
+        library.installed.first { $0.fileName == selectedModel }?.menuName
+    }
+
     var modelFiles: [String] { library.installed.map(\.fileName) }
     private(set) var loadError: String?
     /// When the database cannot be opened the tab runs on a temporary in-memory one and says so.

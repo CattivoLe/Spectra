@@ -237,6 +237,8 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
         var firstTokenAt: ContinuousClock.Instant?
         var pendingBytes: [UInt8] = []
         var stopReason = StopReason.maxTokens
+        var generatedText = ""
+        let grammarActive = params.grammar != nil && !params.grammarTriggers.isEmpty
 
         while generated < params.maxTokens {
             if cancelled.isSet {
@@ -254,7 +256,20 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
 
             generated += 1
             pendingBytes += piece(for: token, vocab: vocab)
-            if let text = Self.drainValidUTF8(&pendingBytes) { emit(text) }
+            if let text = Self.drainValidUTF8(&pendingBytes) {
+                emit(text)
+                // A lazy grammar sampler crashes (empty-stack trap) if fed tokens after its root rule is fully
+                // matched. Detect that moment here — balanced braces after the trigger — and stop BEFORE the
+                // next llama_sampler_sample call. The consumer-side break in ChatSession is too late: it sets
+                // the cancelled flag asynchronously, after this thread has already called sample again.
+                if grammarActive {
+                    generatedText += text
+                    if Self.grammarOutputComplete(generatedText, triggers: params.grammarTriggers) {
+                        stopReason = .endOfTurn
+                        break
+                    }
+                }
+            }
 
             if tokens.count + generated >= contextLength {
                 stopReason = .contextFull
@@ -304,20 +319,71 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
 
     /// `nil` when there is no grammar to apply, or when it fails to parse (logged, not fatal: the model answers
     /// in plain text instead of a tool call it could never have gotten right anyway).
+    ///
+    /// llama.cpp treats each trigger as a regex and, once it matches, replays the output into the grammar starting
+    /// from the match itself — the trigger text included. The caller's `root` only describes what follows the
+    /// trigger, so it is wrapped in an outer rule that first accepts the trigger literally; without that, the very
+    /// first replayed character (`<` of `<tool_call>`) empties the grammar stack and llama.cpp throws, aborting
+    /// the app.
     private func makeGrammarSampler(_ params: GenerationParams) -> UnsafeMutablePointer<llama_sampler>? {
         guard let grammar = params.grammar, !grammar.isEmpty, !params.grammarTriggers.isEmpty, let vocab else { return nil }
-        let owned: [UnsafeMutablePointer<CChar>?] = params.grammarTriggers.map { strdup($0) }
+        let triggerAlternatives = params.grammarTriggers.map(Self.gbnfLiteral).joined(separator: " | ")
+        let wrapped = grammar + "\n\(Self.triggeredRootRule) ::= ( \(triggerAlternatives) ) root\n"
+        let owned: [UnsafeMutablePointer<CChar>?] = params.grammarTriggers.map { strdup(Self.regexEscaped($0)) }
         defer { for pointer in owned { free(pointer) } }
         var pointers: [UnsafePointer<CChar>?] = owned.map { $0.map { UnsafePointer($0) } }
         let sampler = pointers.withUnsafeMutableBufferPointer { buffer in
-            grammar.withCString { grammarCString in
-                llama_sampler_init_grammar_lazy_patterns(vocab, grammarCString, "root", buffer.baseAddress, buffer.count, nil, 0)
+            wrapped.withCString { grammarCString in
+                llama_sampler_init_grammar_lazy_patterns(vocab, grammarCString, Self.triggeredRootRule,
+                                                         buffer.baseAddress, buffer.count, nil, 0)
             }
         }
         if sampler == nil {
             FileHandle.standardError.write(Data("LlamaEngine: failed to parse tool-call grammar, ignoring it\n".utf8))
         }
         return sampler
+    }
+
+    /// Name of the outer rule `makeGrammarSampler` adds: trigger text, then the caller's `root`.
+    static let triggeredRootRule = "triggered-root"
+
+    /// A GBNF string literal matching `text` exactly.
+    static func gbnfLiteral(_ text: String) -> String {
+        var out = "\""
+        for scalar in text.unicodeScalars {
+            switch scalar {
+            case "\\": out += "\\\\"
+            case "\"": out += "\\\""
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            default: out.unicodeScalars.append(scalar)
+            }
+        }
+        return out + "\""
+    }
+
+    /// `text` as an ECMAScript regex (what llama.cpp's std::regex uses) matching it literally.
+    static func regexEscaped(_ text: String) -> String {
+        let special: Set<Character> = ["\\", "^", "$", ".", "|", "?", "*", "+", "(", ")", "[", "]", "{", "}", "/"]
+        return String(text.flatMap { special.contains($0) ? ["\\", $0] : [$0] })
+    }
+
+    /// True once the generated text, past any grammar trigger, contains a balanced `{…}` — meaning the
+    /// grammar's root rule (which is a JSON object) has been fully produced and the lazy grammar sampler
+    /// should not be asked to accept any further tokens.
+    private static func grammarOutputComplete(_ text: String, triggers: [String]) -> Bool {
+        for trigger in triggers {
+            guard let range = text.range(of: trigger) else { continue }
+            var depth = 0
+            var opened = false
+            for ch in text[range.upperBound...] {
+                if ch == "{" { depth += 1; opened = true }
+                else if ch == "}" { depth -= 1 }
+                if opened && depth == 0 { return true }
+            }
+        }
+        return false
     }
 
     // MARK: - Текст и токены

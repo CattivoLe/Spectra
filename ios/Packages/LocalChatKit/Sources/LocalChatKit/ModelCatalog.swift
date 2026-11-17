@@ -4,6 +4,8 @@ import Foundation
 public struct CatalogModel: Codable, Identifiable, Hashable, Sendable {
     public var id: String
     public var name: String
+    /// A name short enough for one line in a menu (about 16 characters), when `name` is longer than that.
+    public var shortName: String?
     public var summary: String
     public var fileName: String
     public var url: URL

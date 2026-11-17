@@ -39,26 +39,103 @@ struct AssistantActions {
         ws    ::= [ \\t\\n]*
         """
 
-    /// Appended to the system prompt: the exact syntax has to match `grammar` and `ToolRegistry.callTag`.
+    /// Appended to the system prompt: the exact syntax has to match `grammar` and `ToolRegistry.callTag`. Stops
+    /// at the closing brace, with no closing tag: once the grammar's `{...}` is complete it allows nothing but
+    /// whitespace or end of turn, and `LlamaEngine` ends generation right there, so a `</tool_call>` could never
+    /// be written anyway.
     static let instructions = """
         You can also run a live check on this phone instead of only reading what was already found. To run one, \
         write exactly this and nothing else in your reply:
-        <tool_call>{"tool": "NAME"}</tool_call>
+        <tool_call>{"tool": "NAME"}
         where NAME is one of: scan_wifi, scan_lan, scan_bluetooth, check_connection, speed_test. For scan_ports, \
         name a host you have already seen in the LAN hosts list:
-        <tool_call>{"tool": "scan_ports", "host": "192.168.1.1"}</tool_call>
+        <tool_call>{"tool": "scan_ports", "host": "192.168.1.1"}
         For capture_pcap, name a Wi‑Fi access point's BSSID exactly as shown in the Wi‑Fi networks list (not its \
         name, not an IP), to pin the sensor to that network's channel for a few seconds and summarize what crossed it:
-        <tool_call>{"tool": "capture_pcap", "bssid": "AA:BB:CC:00:00:01"}</tool_call>
-        Each one takes a few seconds, and you will be given its result to answer with next. Call one only when \
-        the question needs fresher data than what you already have; otherwise just answer. Never claim a check \
-        ran, or report a number from one, unless you actually called it and got the result back.
+        <tool_call>{"tool": "capture_pcap", "bssid": "AA:BB:CC:00:00:01"}
+        Stop right after the closing brace — no closing tag, nothing else on the line. Each one takes a few \
+        seconds, and you will be given its result to answer with next.
+        Which one: scan_bluetooth for Bluetooth devices and trackers nearby, scan_wifi for Wi‑Fi networks around, \
+        scan_lan for devices on the user's own network, check_connection for the internet connection, speed_test \
+        for its speed. When the user asks you to scan, check, test or measure something, in any language \
+        («просканируй блютуз», «проверь интернет», «замерь скорость»), call the matching one even if older data \
+        is already attached. Otherwise call one only when the question needs fresher data than what you have. \
+        When a <tool_result> for the question is already there, answer from it rather than calling the same \
+        tool again. Never claim a check ran, or report a number from one, unless you got its result back.
         """
 
     var registry: ToolRegistry {
-        ToolRegistry(grammar: Self.grammar, maxSteps: 4, runningLabel: Self.runningLabel) { [sources] name, argsJSON in
+        ToolRegistry(
+            grammar: Self.grammar,
+            maxSteps: 4,
+            preflight: { question in Self.requested(in: question).map(\.rawValue) },
+            runningLabel: Self.runningLabel
+        ) { [sources] name, argsJSON in
             await Self.run(name, argsJSON: argsJSON, sources: sources)
         }
+    }
+
+    // MARK: - Plain requests, recognized by the app
+
+    /// Checks the question itself plainly asks to run, recognized here rather than left to the model: a small model
+    /// often answers «просканируй блютуз» from the attached snapshot instead of calling the tool, and «какие блютуз
+    /// устройства рядом» deserves a fresh look either way. Only argument-free checks; ports and captures stay the
+    /// model's call. Stems are compared the way `AssistantDigest.matches(_:in:)` does: word starts, short Latin
+    /// ones as whole words, anything with a space or punctuation as plain text.
+    static func requested(in question: String) -> [Name] {
+        let text = question.lowercased()
+        func has(_ stems: [String]) -> Bool { AssistantDigest.matches(stems, in: text) }
+
+        if has(RequestStems.aboutChecks) { return [] }
+        let run = has(RequestStems.run)
+        let nearby = has(RequestStems.nearby)
+        guard run || nearby else { return [] }
+
+        var found: Set<Name> = []
+        // Bluetooth and Wi‑Fi are what is "nearby": asking what is around already asks for a fresh look at them.
+        if has(RequestStems.bluetooth) { found.insert(.scanBluetooth) }
+        if has(RequestStems.wifi) { found.insert(.scanWifi) }
+        // The rest takes a while (a LAN sweep, a speed test), so only an outright request runs it.
+        if run {
+            if has(RequestStems.lan) { found.insert(.scanLAN) }
+            if has(RequestStems.speed) { found.insert(.speedTest) }
+            else if has(RequestStems.connection) { found.insert(.checkConnection) }
+        }
+        // Devices or networks with nothing more specific named: what is near the phone is Bluetooth (devices) or
+        // Wi‑Fi (networks); asked to scan without "nearby", it is the user's own network.
+        if found.isEmpty {
+            if has(RequestStems.devices) { found.insert(nearby ? .scanBluetooth : .scanLAN) }
+            else if has(RequestStems.networks) { found.insert(nearby ? .scanWifi : .scanLAN) }
+        }
+        return Name.allCases.filter(found.contains)
+    }
+
+    private enum RequestStems {
+        /// Asking to run something, not just to read.
+        static let run = [
+            "scan", "rescan", "check", "test", "measure", "run", "refresh", "look for",
+            "скан", "сканир", "просканир", "отсканир", "пересканир", "провер", "замер", "измер", "тест", "протестир",
+            "обнов", "запуст", "найд", "поищ", "ищ",
+        ]
+        /// Asking what is around right now.
+        static let nearby = ["nearby", "around", "near me", "close by", "рядом", "вокруг", "поблизости", "неподалёку", "неподалеку"]
+        /// A question about checks rather than a request for one: «зачем сканировать блютуз?», «не сканируй».
+        static let aboutChecks = [
+            "why", "how often", "how does", "don't scan", "don't check", "do not scan", "do not check",
+            "зачем", "почему", "как часто", "как работает", "что такое", "что значит",
+            "не скан", "не провер", "не надо скан", "не нужно скан", "не надо провер", "не нужно провер",
+        ]
+        static let bluetooth = [
+            "bluetooth", "ble", "bt", "tracker", "airtag", "headphone", "earbud", "beacon",
+            "блютуз", "блютус", "трекер", "метк", "наушник", "маяк",
+        ]
+        static let wifi = ["wi-fi", "wi‑fi", "wifi", "wlan", "ssid", "wireless", "access point", "вайфай", "вай", "точк", "беспровод"]
+        static let lan = ["lan", "host", "who is on", "локальн", "хост", "кто в"]
+        static let speed = ["speed", "speedtest", "скорост", "спидтест"]
+        static let connection = ["internet", "connection", "ping", "dns", "vpn", "интернет", "соединен", "подключени", "пинг", "днс", "впн"]
+        /// Devices or networks in general: see the fallback in `requested(in:)`.
+        static let devices = ["device", "устройств", "девайс"]
+        static let networks = ["network", "сет"]
     }
 
     static func runningLabel(for name: String) -> String {

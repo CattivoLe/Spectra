@@ -136,7 +136,7 @@ struct AssistantChatView: View {
                         Button {
                             Task { await model.select(item.fileName) }
                         } label: {
-                            if item.fileName == model.selectedModel { Label(item.displayName, systemImage: "checkmark") } else { Text(item.displayName) }
+                            if item.fileName == model.selectedModel { Label(item.menuName, systemImage: "checkmark") } else { Text(item.menuName) }
                         }
                     }
                 }
@@ -155,7 +155,7 @@ struct AssistantChatView: View {
     private var modelLabel: String {
         switch model.controller.state {
         case .loading: String(localized: "loading…")
-        default: model.currentModelName ?? String(localized: "no model")
+        default: model.currentModelMenuName ?? String(localized: "no model")
         }
     }
 
@@ -169,13 +169,6 @@ struct AssistantChatView: View {
                 }
             }
             HStack(alignment: .bottom, spacing: 8) {
-                toggleButton(
-                    symbol: "sparkle.magnifyingglass",
-                    isOn: session.chat.appData,
-                    label: session.chat.appData ? "Spectra data and live checks: on" : "Spectra data and live checks: off"
-                ) {
-                    Task { await session.setAppData(!session.chat.appData) }
-                }
                 if model.web.isEnabled {
                     toggleButton(
                         symbol: "globe",

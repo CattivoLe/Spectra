@@ -158,13 +158,6 @@ public final class ChatSession {
         if isSearching || toolStatus != nil { task?.cancel() }
     }
 
-    /// Lets the assistant read (or not) what the app has found, for this chat.
-    public func setAppData(_ enabled: Bool) async {
-        chat.appData = enabled
-        if !enabled { attachments = [:] }
-        try? await store.setAppData(enabled, for: chat.id)
-    }
-
     /// Включает или выключает поиск в интернете для этого диалога.
     public func setWebSearch(_ enabled: Bool) async {
         chat.webSearch = enabled
@@ -268,9 +261,9 @@ public final class ChatSession {
         }
     }
 
-    /// Puts the app's own facts in front of the last question, when the chat allows it and the app has any that fit.
+    /// Puts the app's own facts in front of the last question, when the app has any that fit.
     private func attachAppData() async {
-        guard chat.appData, let provider = appDataProvider,
+        guard let provider = appDataProvider,
               let last = messages.last, last.role == .user else { return }
         attachments[last.id] = await provider(last.content)
     }
@@ -293,7 +286,25 @@ public final class ChatSession {
         var finalStopReason: StopReason?
         var stepsLeft = tools?.maxSteps ?? 0
 
-        toolLoop: while true {
+        // What the question itself plainly asks to run goes first, without leaving it to the model: the results
+        // then reach it as if it had made those calls itself, and it only has to answer from them.
+        if let tools, let question = messages.dropLast().last, question.role == .user {
+            for name in tools.preflight(question.content).prefix(stepsLeft) {
+                let args = "{\"tool\": \"\(name)\"}"
+                stepsLeft -= 1
+                toolsUsed.append(name)
+                toolStatus = tools.runningLabel(name)
+                messages[index].content = toolStatus ?? ""
+                history.append(ChatMessage(.assistant, tools.callTag + args))
+                let result = await tools.run(name, args)
+                toolStatus = nil
+                if Task.isCancelled { break }
+                history.append(ChatMessage(.user, Self.toolResultPrompt(name: name, result: result)))
+            }
+        }
+
+        // Stopped while a check was still running: no answer at all rather than one built on half the results.
+        toolLoop: while !Task.isCancelled {
             var text = ""
             var stopReason: StopReason?
 
@@ -301,9 +312,10 @@ public final class ChatSession {
                 // Каждый раз новое зерно: иначе «Ещё раз» дословно повторял бы прежний ответ.
                 var attempt = params
                 attempt.seed = .random(in: .min ... .max)
-                if let tools, chat.appData, stepsLeft > 0 {
-                    attempt.grammar = tools.grammar
-                    attempt.grammarTriggers = [tools.callTag]
+                let activeTools: ToolRegistry? = stepsLeft > 0 ? tools : nil
+                if let activeTools {
+                    attempt.grammar = activeTools.grammar
+                    attempt.grammarTriggers = [activeTools.callTag]
                 }
                 for try await event in controller.send(messages: history, params: attempt) {
                     switch event {
@@ -325,7 +337,7 @@ public final class ChatSession {
                 break toolLoop
             }
 
-            if let tools, chat.appData, stepsLeft > 0, let call = Self.parseToolCall(text, tag: tools.callTag) {
+            if let tools, stepsLeft > 0, let call = Self.parseToolCall(text, tag: tools.callTag) {
                 stepsLeft -= 1
                 toolsUsed.append(call.name)
                 toolStatus = tools.runningLabel(call.name)
@@ -338,7 +350,7 @@ public final class ChatSession {
                 continue toolLoop
             }
 
-            // Any stray tag — the toggle was off, or the JSON after it never closed — is noise, not an answer.
+            // Any stray tag — written after the steps ran out, or with JSON that never closed — is noise, not an answer.
             if let tools, let tagRange = text.range(of: tools.callTag) {
                 let stripped = text[..<tagRange.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
                 text = stripped.isEmpty

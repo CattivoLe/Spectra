@@ -94,7 +94,7 @@ struct AssistantView: View {
                     Button {
                         Task { await model.select(item.fileName) }
                     } label: {
-                        if item.fileName == model.selectedModel { Label(item.displayName, systemImage: "checkmark") } else { Text(item.displayName) }
+                        if item.fileName == model.selectedModel { Label(item.menuName, systemImage: "checkmark") } else { Text(item.menuName) }
                     }
                 }
                 if model.modelFiles.isEmpty { Text("No models") }

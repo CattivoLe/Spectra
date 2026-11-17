@@ -8,7 +8,40 @@ public struct InstalledModel: Identifiable, Hashable, Sendable {
     public var catalog: CatalogModel?
 
     public var id: String { fileName }
-    public var displayName: String { catalog?.name ?? fileName }
+    /// The catalog's name, or one read off the file name. For lists, where a row has room for it.
+    public var displayName: String { catalog?.name ?? Self.readableName(fileName: fileName) }
+    /// What fits on one line of a menu, which wraps anything much past 16 characters.
+    public var menuName: String {
+        catalog?.shortName ?? catalog.map(\.name) ?? Self.readableName(fileName: fileName, maxLength: Self.menuNameLength)
+    }
+
+    public static let menuNameLength = 16
+
+    /// "Llama-3.2-3B-Instruct-abliterated.Q4_K_M.gguf" → "Llama 3.2 3B abliterated": no extension, no
+    /// quantization, no "instruct"/"it"/"chat"/"GGUF" tags, words split on dashes and underscores (dots stay:
+    /// "3.2", "Qwen3.5"), and at most `maxLength` characters, cut between words with an ellipsis.
+    public static func readableName(fileName: String, maxLength: Int = 26) -> String {
+        var stem = fileName
+        if stem.lowercased().hasSuffix(".gguf") { stem.removeLast(5) }
+        let quantization = /(?i)[._-](i?q\d\w*|f16|bf16|f32|fp16)$/
+        while let match = stem.firstMatch(of: quantization) { stem.removeSubrange(match.range) }
+        let dropped: Set<String> = ["instruct", "it", "chat", "gguf"]
+        let words = stem.split(whereSeparator: { $0 == "-" || $0 == "_" || $0 == " " })
+            .map(String.init)
+            .filter { !dropped.contains($0.lowercased()) }
+        let name = words.joined(separator: " ")
+        guard !name.isEmpty else { return fileName }
+        guard name.count > maxLength else { return name }
+        var kept = ""
+        for word in words {
+            let next = kept.isEmpty ? word : kept + " " + word
+            if next.count + 1 > maxLength { break }
+            kept = next
+        }
+        // A first word too long on its own is cut mid-word rather than dropped.
+        if kept.isEmpty { kept = String(name.prefix(maxLength - 1)) }
+        return kept + "…"
+    }
 }
 
 public enum DownloadState: Equatable, Sendable {

@@ -14,8 +14,6 @@ public struct Chat: Codable, Identifiable, Hashable, Sendable, FetchableRecord, 
     public var modelName: String?
     /// Whether to search the web before answering. Only works when access is allowed in settings.
     public var webSearch: Bool = false
-    /// Whether the assistant may read what Spectra has found (networks, devices, history) to answer.
-    public var appData: Bool = true
 }
 
 /// One message of a conversation.

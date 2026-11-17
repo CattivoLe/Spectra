@@ -118,6 +118,7 @@ public final class ChatStore: Sendable {
                 table.column("updatedAt", .datetime).notNull()
                 table.column("modelName", .text)
                 table.column("webSearch", .boolean).notNull().defaults(to: false)
+                // No longer read: app data and live checks are always on. Kept so existing databases need no migration.
                 table.column("appData", .boolean).notNull().defaults(to: true)
             }
             try db.create(table: "message") { table in
@@ -147,7 +148,7 @@ public final class ChatStore: Sendable {
 
     public func createChat() async throws -> Chat {
         let now = Date()
-        let chat = Chat(id: UUID(), title: "", createdAt: now, updatedAt: now, modelName: nil, webSearch: false, appData: true)
+        let chat = Chat(id: UUID(), title: "", createdAt: now, updatedAt: now, modelName: nil, webSearch: false)
         try await database.write { try chat.insert($0) }
         return chat
     }
@@ -207,12 +208,6 @@ public final class ChatStore: Sendable {
     public func rename(_ chatID: UUID, to title: String) async throws {
         try await database.write { db in
             try db.execute(sql: "UPDATE chat SET title = ? WHERE id = ?", arguments: [title, chatID])
-        }
-    }
-
-    public func setAppData(_ enabled: Bool, for chatID: UUID) async throws {
-        try await database.write { db in
-            try db.execute(sql: "UPDATE chat SET appData = ? WHERE id = ?", arguments: [enabled, chatID])
         }
     }
 

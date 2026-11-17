@@ -111,27 +111,52 @@ private struct AssistantCatalogRow: View {
         ModelCatalog.fit(fileSizeBytes: item.sizeBytes, physicalMemoryBytes: DeviceMetrics.physicalMemoryBytes)
     }
 
+    /// Collapsed: one line with the name, size and download state. Tapping the row opens the rest — what the model
+    /// is good at, whether it fits this phone, its warning and license — and only then offers to download it.
+    @State private var expanded = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(item.name).font(.headline)
-                if item.recommended { Text("recommended").font(.caption2).padding(.horizontal, 6).padding(.vertical, 2).background(.tint.opacity(0.2), in: Capsule()) }
-                Spacer()
-                Text(AssistantModelsView.size(item.sizeBytes)).font(.footnote).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.snappy) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(item.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                    if item.recommended {
+                        Text("recommended").font(.caption2).foregroundStyle(.primary)
+                            .padding(.horizontal, 6).padding(.vertical, 2).background(.tint.opacity(0.2), in: Capsule())
+                    }
+                    if item.notice != nil || fit != .comfortable {
+                        Image(systemName: fit == .tooBig ? "xmark.octagon" : "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(fit == .tooBig ? .red : .orange)
+                    }
+                    Spacer(minLength: 4)
+                    Text(AssistantModelsView.size(item.sizeBytes)).font(.footnote).foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                }
+                .contentShape(Rectangle())
             }
-            Text(LocalizedStringKey(item.summary)).font(.footnote).foregroundStyle(.secondary)
-            switch fit {
-            case .comfortable: EmptyView()
-            case .tight: Label("This phone will be tight on memory: crashes are possible", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
-            case .tooBig: Label("Will not fit in this phone's memory", systemImage: "xmark.octagon").font(.caption).foregroundStyle(.red)
+            .buttonStyle(.plain)
+            .accessibilityHint(expanded ? "Hides the details" : "Shows the details")
+
+            if expanded {
+                Text(LocalizedStringKey(item.summary)).font(.footnote).foregroundStyle(.secondary)
+                switch fit {
+                case .comfortable: EmptyView()
+                case .tight: Label("This phone will be tight on memory: crashes are possible", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+                case .tooBig: Label("Will not fit in this phone's memory", systemImage: "xmark.octagon").font(.caption).foregroundStyle(.red)
+                }
+                if let notice = item.notice {
+                    Label(LocalizedStringKey(notice), systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+                }
+                Text("License: \(item.licenseName)").font(.caption).foregroundStyle(.tertiary)
             }
-            if let notice = item.notice {
-                Label(LocalizedStringKey(notice), systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
-            }
-            Text("License: \(item.licenseName)").font(.caption).foregroundStyle(.tertiary)
-            action
+            // A download in progress always shows; the button to start one only once the details are open.
+            if state != nil || expanded { action }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder
