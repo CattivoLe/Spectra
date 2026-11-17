@@ -19,16 +19,24 @@ struct AssistantActions {
         case checkConnection = "check_connection"
         case speedTest = "speed_test"
         case scanPorts = "scan_ports"
+        case capturePcap = "capture_pcap"
     }
 
-    /// GBNF grammar: `{"tool": "<name>"}`, with an optional `"host"` field `scan_ports` needs. Any tool may carry
-    /// a host field; the executor below simply ignores it where it is not needed.
+    /// How long one on-demand traffic capture listens before it is analyzed. Short on purpose: it pins the sensor
+    /// to one channel the whole time, so it cannot also keep up with any other scan. A `var`, not a `let`, so
+    /// tests can shorten it instead of actually waiting out the real duration.
+    static var captureDuration: Duration = .seconds(6)
+
+    /// GBNF grammar: `{"tool": "<name>"}`, with an optional field after it — `"host"` (an IP, for scan_ports) or
+    /// `"bssid"` (a Wi‑Fi access point's address, for capture_pcap). Both take the same shape of value; the
+    /// executor below reads whichever key is present and ignores the field entirely where a tool needs neither.
     static let grammar = """
-        root ::= ws "{" ws "\\"tool\\"" ws ":" ws tool tail ws "}" ws
-        tool ::= "\\"scan_wifi\\"" | "\\"scan_lan\\"" | "\\"scan_bluetooth\\"" | "\\"check_connection\\"" | "\\"speed_test\\"" | "\\"scan_ports\\""
-        tail ::= ( ws "," ws "\\"host\\"" ws ":" ws host )?
-        host ::= "\\"" [a-zA-Z0-9._:-]+ "\\""
-        ws   ::= [ \\t\\n]*
+        root  ::= ws "{" ws "\\"tool\\"" ws ":" ws tool tail ws "}" ws
+        tool  ::= "\\"scan_wifi\\"" | "\\"scan_lan\\"" | "\\"scan_bluetooth\\"" | "\\"check_connection\\"" | "\\"speed_test\\"" | "\\"scan_ports\\"" | "\\"capture_pcap\\""
+        tail  ::= ( ws "," ws field )?
+        field ::= ( "\\"host\\"" | "\\"bssid\\"" ) ws ":" ws value
+        value ::= "\\"" [a-zA-Z0-9._:-]+ "\\""
+        ws    ::= [ \\t\\n]*
         """
 
     /// Appended to the system prompt: the exact syntax has to match `grammar` and `ToolRegistry.callTag`.
@@ -39,6 +47,9 @@ struct AssistantActions {
         where NAME is one of: scan_wifi, scan_lan, scan_bluetooth, check_connection, speed_test. For scan_ports, \
         name a host you have already seen in the LAN hosts list:
         <tool_call>{"tool": "scan_ports", "host": "192.168.1.1"}</tool_call>
+        For capture_pcap, name a Wi‑Fi access point's BSSID exactly as shown in the Wi‑Fi networks list (not its \
+        name, not an IP), to pin the sensor to that network's channel for a few seconds and summarize what crossed it:
+        <tool_call>{"tool": "capture_pcap", "bssid": "AA:BB:CC:00:00:01"}</tool_call>
         Each one takes a few seconds, and you will be given its result to answer with next. Call one only when \
         the question needs fresher data than what you already have; otherwise just answer. Never claim a check \
         ran, or report a number from one, unless you actually called it and got the result back.
@@ -58,6 +69,7 @@ struct AssistantActions {
         case .checkConnection: String(localized: "Checking the connection…")
         case .speedTest: String(localized: "Measuring speed…")
         case .scanPorts: String(localized: "Scanning ports…")
+        case .capturePcap: String(localized: "Capturing traffic…")
         case nil: String(localized: "Running \(name)…")
         }
     }
@@ -98,7 +110,7 @@ struct AssistantActions {
             return section(.link, sources: sources)
 
         case .scanPorts:
-            guard let host = decodeHost(argsJSON) else {
+            guard let host = decodeArg(argsJSON, keys: ["host", "bssid"]) else {
                 return "Missing or invalid \"host\". Name an IP address already seen in the LAN hosts list."
             }
             guard sources.lan.devices[host] != nil else {
@@ -108,13 +120,57 @@ struct AssistantActions {
             try? await Task.sleep(for: .milliseconds(400))
             await waitWhile(timeout: 20) { sources.lan.devices[host]?.portScanFraction != nil }
             return section(.lan, sources: sources)
+
+        case .capturePcap:
+            guard sources.link.isConnected else {
+                return "No sensor connected, so a traffic capture is not possible right now."
+            }
+            guard let bssidString = decodeArg(argsJSON, keys: ["bssid", "host"]) else {
+                return "Missing or invalid \"bssid\". Name a Wi‑Fi access point's BSSID exactly as shown in the Wi‑Fi networks list, not its name and not an IP."
+            }
+            guard let bssid = BSSID(string: bssidString), let network = sources.store.networks[bssid] else {
+                return "\"\(bssidString)\" is not a BSSID this phone has seen. Use one from the Wi‑Fi networks list, or call scan_wifi first."
+            }
+            guard !sources.link.rawCapturing else {
+                return "A capture is already running on this sensor. Wait for it to finish before starting another."
+            }
+            sources.link.startRawCapture(channel: network.latest.channel, network: bssid)
+            try? await Task.sleep(for: captureDuration)
+            sources.link.stopRawCapture()
+            await waitWhile(timeout: 5) { sources.link.rawCapturing }
+            guard let analysis = try? PcapAnalyzer.analyze(sources.link.rawCapturePcap()), analysis.summary.packetCount > 0 else {
+                return "No frames captured in \(Int(captureDuration.components.seconds)) seconds. The network may be quiet, out of range, or the sensor lost its Bluetooth link."
+            }
+            return captureSummary(analysis, ssid: network.revealedSSID ?? network.latest.ssid, bssid: bssidString)
         }
     }
 
-    private static func decodeHost(_ argsJSON: String) -> String? {
+    private static func decodeArg(_ argsJSON: String, keys: [String]) -> String? {
         guard let data = argsJSON.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return object["host"] as? String
+        for key in keys {
+            if let value = object[key] as? String { return value }
+        }
+        return nil
+    }
+
+    /// A short-sample traffic capture (see `SensorLink.startRawCapture`): a few seconds pinned to one channel,
+    /// not a full capture. Summarized the same way `.pcap` files opened by hand are, on the Pcap screen.
+    private static func captureSummary(_ analysis: CaptureAnalysis, ssid: String?, bssid: String) -> String {
+        let summary = analysis.summary
+        let name = ssid.map { "\"\(AssistantDigest.clean($0))\" (\(bssid))" } ?? bssid
+        let seconds = summary.duration.map { String(format: "%.1f", $0) } ?? "a few"
+        var lines = ["Traffic capture on \(name): \(summary.packetCount) frames, \(summary.capturedBytes) bytes, over \(seconds)s."]
+        if !summary.protocols.isEmpty {
+            let top = summary.protocols.sorted { $0.count > $1.count }.prefix(6)
+            lines.append("Protocols: " + top.map { "\($0.name) (\($0.count))" }.joined(separator: ", ") + ".")
+        }
+        if !summary.talkers.isEmpty {
+            let top = summary.talkers.sorted { $0.bytes > $1.bytes }.prefix(5)
+            lines.append("Busiest devices: " + top.map { "\($0.endpoint) (\($0.bytes) B, \($0.packets) pkt)" }.joined(separator: "; ") + ".")
+        }
+        if analysis.rowsTruncated { lines.append("(this only summarizes part of the capture; more frames were seen than are counted here)") }
+        return lines.joined(separator: "\n")
     }
 
     private static func section(_ topic: AssistantTopic, sources: AssistantSources) -> String {

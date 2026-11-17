@@ -266,6 +266,12 @@ struct AssistantSessionTests {
         #expect(call?.argsJSON.contains("192.168.1.1") == true)
     }
 
+    @Test func parsesACapturePcapCallWithABSSID() {
+        let call = ChatSession.parseToolCall("<tool_call>{\"tool\": \"capture_pcap\", \"bssid\": \"50:C7:BF:1E:00:A0\"}</tool_call>", tag: "<tool_call>")
+        #expect(call?.name == "capture_pcap")
+        #expect(call?.argsJSON.contains("50:C7:BF:1E:00:A0") == true)
+    }
+
     @Test func plainTextIsNotACall() {
         #expect(ChatSession.parseToolCall("Your Wi-Fi looks fine.", tag: "<tool_call>") == nil)
     }
@@ -369,5 +375,78 @@ struct AssistantSessionTests {
 
         #expect(session.messages.count == 1)
         #expect(session.messages.first?.role == .user)
+    }
+}
+
+// MARK: - capture_pcap
+
+@MainActor
+struct AssistantActionsTests {
+    /// The demo sensor's first network: fixed, always present, never flaky (see `DemoSensor.makeNetworks`).
+    private static let demoHomeBSSID = "50:C7:BF:1E:00:A0"
+
+    private func makeSources() -> (AssistantSources, SensorLink) {
+        let store = NetworkStore()
+        let history = HistoryStore()
+        let link = SensorLink(store: store, history: history)
+        let sources = AssistantSources(
+            store: store, lan: LANScanner(), ble: BLEScanner(), history: history,
+            link: link, probe: LinkProbe(), joiner: WiFiJoiner(), speed: SpeedTester()
+        )
+        return (sources, link)
+    }
+
+    @Test func needsAConnectedSensor() async throws {
+        let (sources, _) = makeSources()
+        let result = await AssistantActions(sources: sources).registry.run(
+            "capture_pcap", "{\"tool\": \"capture_pcap\", \"bssid\": \"\(Self.demoHomeBSSID)\"}"
+        )
+        #expect(result.contains("No sensor connected"))
+    }
+
+    @Test func needsTheBSSIDField() async throws {
+        let (sources, link) = makeSources()
+        link.setDemo(true)
+        let result = await AssistantActions(sources: sources).registry.run("capture_pcap", "{\"tool\": \"capture_pcap\"}")
+        #expect(result.contains("Missing or invalid"))
+    }
+
+    @Test func rejectsABSSIDThePhoneHasNotSeen() async throws {
+        let (sources, link) = makeSources()
+        link.setDemo(true)
+        let result = await AssistantActions(sources: sources).registry.run(
+            "capture_pcap", "{\"tool\": \"capture_pcap\", \"bssid\": \"AA:BB:CC:DD:EE:FF\"}"
+        )
+        #expect(result.contains("not a BSSID"))
+    }
+
+    @Test func refusesToOverlapARunningCapture() async throws {
+        let (sources, link) = makeSources()
+        link.setDemo(true)
+        link.startRawCapture(channel: 6, network: BSSID(string: Self.demoHomeBSSID))
+        defer { link.stopRawCapture() }
+
+        let result = await AssistantActions(sources: sources).registry.run(
+            "capture_pcap", "{\"tool\": \"capture_pcap\", \"bssid\": \"\(Self.demoHomeBSSID)\"}"
+        )
+        #expect(result.contains("already running"))
+    }
+
+    @Test func summarizesTheDemoNetworksTraffic() async throws {
+        let original = AssistantActions.captureDuration
+        AssistantActions.captureDuration = .milliseconds(500)
+        defer { AssistantActions.captureDuration = original }
+
+        let (sources, link) = makeSources()
+        link.setDemo(true)   // this already runs one scan, synchronously populating store.networks
+
+        let result = await AssistantActions(sources: sources).registry.run(
+            "capture_pcap", "{\"tool\": \"capture_pcap\", \"bssid\": \"\(Self.demoHomeBSSID)\"}"
+        )
+
+        #expect(result.contains("Home"))
+        #expect(result.contains("frames"))
+        #expect(!link.rawCapturing)
+        #expect(!result.contains("No frames captured"))
     }
 }
