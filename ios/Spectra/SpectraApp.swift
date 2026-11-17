@@ -60,12 +60,14 @@ struct SpectraApp: App {
                         location?.coordinate.map { ($0.latitude, $0.longitude) }
                     }
                     location.start()
-                    // The assistant reads what the scanners have found; it cannot start scans or change anything.
                     let sources = AssistantSources(
                         store: store, lan: lanScanner, ble: bleScanner, history: history,
                         link: link, probe: linkProbe, joiner: joiner, speed: speedTester
                     )
                     assistant.dataSource = { question in sources.attachment(for: question) }
+                    // The assistant can trigger a fresh scan or check itself; see AssistantActions for what it
+                    // cannot do (deauth, LoRa, firmware — anything that transmits stays behind the app's own buttons).
+                    assistant.actions = AssistantActions(sources: sources)
                 }
         }
     }

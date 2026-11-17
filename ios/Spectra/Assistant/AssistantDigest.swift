@@ -222,6 +222,20 @@ nonisolated enum AssistantDigest {
         return AppDataAttachment(topics: used.map(\.label), text: block)
     }
 
+    /// One topic's section rendered from a fresh snapshot, for a tool call's result rather than a question's
+    /// attachment: no header, no topic routing, just that one part of the picture, as current as the snapshot.
+    static func section(_ topic: AssistantTopic, snapshot: AssistantSnapshot, now: Date = Date()) -> String {
+        let lines: [String] = switch topic {
+        case .wifi: wifiSection(snapshot, overview: false)
+        case .threats: threatSection(snapshot, keepEmpty: true)
+        case .lan: lanSection(snapshot, overview: false)
+        case .bluetooth: bluetoothSection(snapshot, overview: false)
+        case .history: historySection(snapshot, now: now)
+        case .link: linkSection(snapshot, now: now)
+        }
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: - Sections
 
     private static func header(_ s: AssistantSnapshot, now: Date) -> String {

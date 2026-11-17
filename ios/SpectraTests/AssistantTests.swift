@@ -2,13 +2,22 @@ import Foundation
 import Synchronization
 import Testing
 import LocalChatEngine
-import LocalChatKit
+@testable import LocalChatKit
 @testable import Spectra
 
-/// An engine that answers with a canned text and remembers what it was sent.
+/// An engine that answers with scripted text, one call at a time, and remembers what it was sent.
+/// The reply for call number N (1-based) comes from `reply(N)`; by default every call gets the same text.
 final class AssistantScriptedEngine: InferenceEngine {
     private let sent = Mutex<[[ChatMessage]]>([])
     var received: [[ChatMessage]] { sent.withLock { $0 } }
+    private let paramsSent = Mutex<[GenerationParams]>([])
+    var receivedParams: [GenerationParams] { paramsSent.withLock { $0 } }
+
+    let reply: @Sendable (Int) -> String
+
+    init(reply: @escaping @Sendable (Int) -> String = { _ in "Your router is fine." }) {
+        self.reply = reply
+    }
 
     func load(modelAt url: URL, config: EngineConfig) async throws -> ModelInfo {
         ModelInfo(description: "mock", parameterCount: 0, fileSizeBytes: 0, trainedContextLength: 0,
@@ -22,9 +31,11 @@ final class AssistantScriptedEngine: InferenceEngine {
     }
 
     func generate(messages: [ChatMessage], params: GenerationParams) -> AsyncThrowingStream<GenerationEvent, Error> {
-        sent.withLock { $0.append(messages) }
+        let number = sent.withLock { $0.append(messages); return $0.count }
+        paramsSent.withLock { $0.append(params) }
+        let text = reply(number)
         return AsyncThrowingStream { continuation in
-            continuation.yield(.text("Your router is fine."))
+            continuation.yield(.text(text))
             continuation.yield(.finished(GenerationStats(promptTokens: 1, generatedTokens: 1, timeToFirstTokenSeconds: 0,
                                                          generationSeconds: 0, stopReason: .endOfTurn)))
             continuation.finish()
@@ -167,7 +178,7 @@ struct AssistantDigestTests {
 
 @MainActor
 struct AssistantSessionTests {
-    private func makeSession(engine: AssistantScriptedEngine, appData: Bool = true) async throws -> ChatSession {
+    private func makeSession(engine: AssistantScriptedEngine, appData: Bool = true, tools: ToolRegistry? = nil) async throws -> ChatSession {
         let store = try ChatStore()
         let controller = EngineController(engine: engine)
         try await controller.load(modelAt: URL(fileURLWithPath: "/tmp/m.gguf"))
@@ -180,6 +191,7 @@ struct AssistantSessionTests {
         session.appDataProvider = { question in
             AssistantDigest.attachment(for: question, snapshot: .init(wifiName: "HomeNet", sensorConnected: true))
         }
+        session.tools = tools
         return session
     }
 
@@ -238,5 +250,124 @@ struct AssistantSessionTests {
         try await store.setAppData(false, for: chat.id)
         let stored = try #require(try await store.chats().first)
         #expect(stored.appData == false)
+    }
+
+    // MARK: - Разбор вызова инструмента
+
+    @Test func parsesAWellFormedCall() {
+        let call = ChatSession.parseToolCall("sure, <tool_call>{\"tool\": \"scan_wifi\"}</tool_call> there you go", tag: "<tool_call>")
+        #expect(call?.name == "scan_wifi")
+        #expect(call?.argsJSON == "{\"tool\": \"scan_wifi\"}")
+    }
+
+    @Test func parsesACallWithExtraFields() {
+        let call = ChatSession.parseToolCall("<tool_call>{\"tool\": \"scan_ports\", \"host\": \"192.168.1.1\"}</tool_call>", tag: "<tool_call>")
+        #expect(call?.name == "scan_ports")
+        #expect(call?.argsJSON.contains("192.168.1.1") == true)
+    }
+
+    @Test func plainTextIsNotACall() {
+        #expect(ChatSession.parseToolCall("Your Wi-Fi looks fine.", tag: "<tool_call>") == nil)
+    }
+
+    @Test func aMentionOfTheTagWithNoJSONIsNotACall() {
+        #expect(ChatSession.parseToolCall("I could write <tool_call> but I won't.", tag: "<tool_call>") == nil)
+    }
+
+    @Test func malformedJSONAfterTheTagIsNotACall() {
+        #expect(ChatSession.parseToolCall("<tool_call>{\"tool\": }</tool_call>", tag: "<tool_call>") == nil)
+        #expect(ChatSession.parseToolCall("<tool_call>{\"nope\": \"scan_wifi\"}</tool_call>", tag: "<tool_call>") == nil)
+        #expect(ChatSession.parseToolCall("<tool_call>{\"tool\": \"scan_wifi\"", tag: "<tool_call>") == nil)
+    }
+
+    // MARK: - Вызов инструментов в сессии
+
+    private func makeRegistry(
+        maxSteps: Int = 4,
+        run: @escaping @MainActor (String, String) async -> String = { _, _ in "ok" }
+    ) -> ToolRegistry {
+        ToolRegistry(grammar: "root ::= \"x\"", maxSteps: maxSteps, runningLabel: { name in "Running \(name)…" }, run: run)
+    }
+
+    @Test func toolCallRunsThenTheFollowingAnswerIsWhatIsStored() async throws {
+        let calledNames = Mutex<[String]>([])
+        let calledArgs = Mutex<[String]>([])
+        let registry = makeRegistry { name, args in
+            calledNames.withLock { $0.append(name) }
+            calledArgs.withLock { $0.append(args) }
+            return "Wi‑Fi: HomeNet, -48 dBm."
+        }
+        let engine = AssistantScriptedEngine { call in
+            call == 1 ? "<tool_call>{\"tool\": \"scan_wifi\"}</tool_call>" : "Your Wi‑Fi (HomeNet) looks fine."
+        }
+        let session = try await makeSession(engine: engine, tools: registry)
+
+        session.send("Scan my Wi-Fi now")
+        await session.waitUntilIdle()
+
+        #expect(calledNames.withLock { $0 } == ["scan_wifi"])
+        #expect(calledArgs.withLock { $0 }.first == "{\"tool\": \"scan_wifi\"}")
+        #expect(session.messages.last?.content == "Your Wi‑Fi (HomeNet) looks fine.")
+        #expect(session.messages.last?.interrupted == false)
+        let assistantID = try #require(session.messages.last?.id)
+        #expect(session.toolRuns[assistantID] == ["scan_wifi"])
+
+        // The model's own call and the tool's result both reach the next round as context, marked as data.
+        let secondRound = try #require(engine.received.last)
+        #expect(secondRound.contains { $0.role == .assistant && $0.content.contains("scan_wifi") })
+        #expect(secondRound.contains {
+            $0.role == .user && $0.content.contains("<tool_result name=\"scan_wifi\">") && $0.content.contains("HomeNet")
+        })
+    }
+
+    @Test func toolCallsAreIgnoredWhenAppDataIsOff() async throws {
+        var ran = false
+        let registry = makeRegistry { _, _ in ran = true; return "should never run" }
+        let engine = AssistantScriptedEngine { _ in "<tool_call>{\"tool\": \"scan_wifi\"}</tool_call>" }
+        let session = try await makeSession(engine: engine, appData: false, tools: registry)
+
+        session.send("Scan my Wi-Fi now")
+        await session.waitUntilIdle()
+
+        #expect(!ran)
+        #expect(session.toolRuns.isEmpty)
+        #expect(engine.received.count == 1)
+        #expect(session.messages.last?.content == String(localized: "I tried to run a check but could not finish it. Could you ask again?"))
+    }
+
+    @Test func toolLoopStopsAfterMaxStepsAndForcesPlainText() async throws {
+        let registry = makeRegistry(maxSteps: 2) { _, _ in "ok" }
+        let engine = AssistantScriptedEngine { _ in "<tool_call>{\"tool\": \"scan_wifi\"}</tool_call>" }
+        let session = try await makeSession(engine: engine, tools: registry)
+
+        session.send("Keep scanning")
+        await session.waitUntilIdle()
+
+        #expect(engine.received.count == 3)   // two armed rounds, then one forced plain-text round
+        #expect(engine.receivedParams[0].grammar != nil)
+        #expect(engine.receivedParams[1].grammar != nil)
+        #expect(engine.receivedParams[2].grammar == nil)
+        let assistantID = try #require(session.messages.last?.id)
+        #expect(session.toolRuns[assistantID] == ["scan_wifi", "scan_wifi"])
+        #expect(session.messages.last?.content == String(localized: "I tried to run a check but could not finish it. Could you ask again?"))
+    }
+
+    @Test func stoppingDuringAToolLeavesNoHalfAnswer() async throws {
+        let started = Mutex(false)
+        let registry = makeRegistry { _, _ in
+            started.withLock { $0 = true }
+            try? await Task.sleep(for: .seconds(5))
+            return "late result"
+        }
+        let engine = AssistantScriptedEngine { _ in "<tool_call>{\"tool\": \"scan_wifi\"}</tool_call>" }
+        let session = try await makeSession(engine: engine, tools: registry)
+
+        session.send("Scan now")
+        while !started.withLock({ $0 }) { try await Task.sleep(for: .milliseconds(5)) }
+        session.stop()
+        await session.waitUntilIdle()
+
+        #expect(session.messages.count == 1)
+        #expect(session.messages.first?.role == .user)
     }
 }

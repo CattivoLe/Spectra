@@ -40,8 +40,16 @@ public struct GenerationParams: Sendable, Codable, Equatable {
     public var seed: UInt32 = 42
     /// Разрешить модели «думать вслух» перед ответом, если она это умеет.
     public var thinking: Bool = false
+    /// A GBNF grammar that the output must switch to once one of `grammarTriggers` appears in the stream.
+    /// `nil` (or empty triggers) generates exactly as before: the grammar costs nothing unless it fires.
+    public var grammar: String?
+    /// Literal substrings that arm `grammar`, scanned for from the start of this generation's own output.
+    public var grammarTriggers: [String] = []
 
-    public init(maxTokens: Int = 512, temperature: Float = 0.7, topP: Float = 0.9, topK: Int32 = 40, seed: UInt32 = 42, thinking: Bool = false) {
+    public init(maxTokens: Int = 512, temperature: Float = 0.7, topP: Float = 0.9, topK: Int32 = 40, seed: UInt32 = 42,
+                thinking: Bool = false, grammar: String? = nil, grammarTriggers: [String] = []) {
+        self.grammar = grammar
+        self.grammarTriggers = grammarTriggers
         self.maxTokens = maxTokens
         self.temperature = temperature
         self.topP = topP

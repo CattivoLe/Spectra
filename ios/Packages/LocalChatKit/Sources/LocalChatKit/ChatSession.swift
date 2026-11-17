@@ -28,6 +28,8 @@ public final class ChatSession {
     public private(set) var isSearching = false
     /// Сообщение о том, что поиск не состоялся: ответ при этом всё равно даётся, но без интернета.
     public private(set) var searchNotice: String?
+    /// A tool call is awaiting its result, e.g. "Scanning Wi‑Fi…". `nil` the rest of the time.
+    public private(set) var toolStatus: String?
 
     public var params: GenerationParams
 
@@ -41,6 +43,11 @@ public final class ChatSession {
     public var appDataProvider: (@MainActor (_ question: String) async -> AppDataAttachment?)?
     /// What was attached to each question of this session, by message id. Kept in memory only: it is recomputed on "Regenerate".
     public private(set) var attachments: [UUID: AppDataAttachment] = [:]
+
+    /// Live actions the model may call mid-answer. `nil` means it can only read the conversation, nothing else.
+    public var tools: ToolRegistry?
+    /// Which tools ran for each assistant answer, by that message's id. In memory only, like `attachments`.
+    public private(set) var toolRuns: [UUID: [String]] = [:]
 
     private let store: ChatStore
     private let controller: EngineController
@@ -148,7 +155,7 @@ public final class ChatSession {
 
     public func stop() {
         controller.stop()
-        if isSearching { task?.cancel() }
+        if isSearching || toolStatus != nil { task?.cancel() }
     }
 
     /// Lets the assistant read (or not) what the app has found, for this chat.
@@ -278,45 +285,84 @@ public final class ChatSession {
         chat.modelName = modelName ?? chat.modelName
         let index = messages.count - 1
 
-        let history = await buildHistory(for: Array(messages.dropLast()))
-
-        var text = ""
-        var stopReason: StopReason?
+        var history = await buildHistory(for: Array(messages.dropLast()))
+        var toolsUsed: [String] = []
         var lastSave = ContinuousClock.now
         var failure: Error?
+        var finalText = ""
+        var finalStopReason: StopReason?
+        var stepsLeft = tools?.maxSteps ?? 0
 
-        do {
-            // Каждый раз новое зерно: иначе «Ещё раз» дословно повторял бы прежний ответ.
-            var attempt = params
-            attempt.seed = .random(in: .min ... .max)
-            for try await event in controller.send(messages: history, params: attempt) {
-                switch event {
-                case .text(let piece):
-                    text += piece
-                    messages[index].content = text
-                    // Раз в секунду сбрасываем написанное на диск: если приложение убьют, ответ не пропадёт целиком.
-                    if ContinuousClock.now - lastSave > .seconds(1) {
-                        try? await store.update(assistant.id, content: text, interrupted: true)
-                        lastSave = .now
-                    }
-                case .finished(let stats):
-                    stopReason = stats.stopReason
-                    lastDropped = stats.droppedMessages
+        toolLoop: while true {
+            var text = ""
+            var stopReason: StopReason?
+
+            do {
+                // Каждый раз новое зерно: иначе «Ещё раз» дословно повторял бы прежний ответ.
+                var attempt = params
+                attempt.seed = .random(in: .min ... .max)
+                if let tools, chat.appData, stepsLeft > 0 {
+                    attempt.grammar = tools.grammar
+                    attempt.grammarTriggers = [tools.callTag]
                 }
+                for try await event in controller.send(messages: history, params: attempt) {
+                    switch event {
+                    case .text(let piece):
+                        text += piece
+                        messages[index].content = text
+                        // Раз в секунду сбрасываем написанное на диск: если приложение убьют, ответ не пропадёт целиком.
+                        if ContinuousClock.now - lastSave > .seconds(1) {
+                            try? await store.update(assistant.id, content: text, interrupted: true)
+                            lastSave = .now
+                        }
+                    case .finished(let stats):
+                        stopReason = stats.stopReason
+                        lastDropped = stats.droppedMessages
+                    }
+                }
+            } catch {
+                failure = error
+                break toolLoop
             }
-        } catch {
-            failure = error
+
+            if let tools, chat.appData, stepsLeft > 0, let call = Self.parseToolCall(text, tag: tools.callTag) {
+                stepsLeft -= 1
+                toolsUsed.append(call.name)
+                toolStatus = tools.runningLabel(call.name)
+                messages[index].content = toolStatus ?? text
+                history.append(ChatMessage(.assistant, text))
+                let result = await tools.run(call.name, call.argsJSON)
+                toolStatus = nil
+                if Task.isCancelled { break toolLoop }
+                history.append(ChatMessage(.user, Self.toolResultPrompt(name: call.name, result: result)))
+                continue toolLoop
+            }
+
+            // Any stray tag — the toggle was off, or the JSON after it never closed — is noise, not an answer.
+            if let tools, let tagRange = text.range(of: tools.callTag) {
+                let stripped = text[..<tagRange.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+                text = stripped.isEmpty
+                    ? String(localized: "I tried to run a check but could not finish it. Could you ask again?")
+                    : stripped
+            }
+
+            // `text` may have just been edited above (the stray-tag strip); the bubble must match what is kept.
+            messages[index].content = text
+            finalText = text
+            finalStopReason = stopReason
+            break toolLoop
         }
 
-        if text.isEmpty {
+        if finalText.isEmpty {
             // Ничего не получено: пустое сообщение не оставляем.
             try? await store.deleteMessages(in: chat.id, fromSeq: assistant.seq)
             messages.removeLast()
         } else {
-            assistant.content = text
-            let complete = stopReason == .endOfTurn
+            assistant.content = finalText
+            let complete = finalStopReason == .endOfTurn
             messages[index].interrupted = !complete
-            try await store.update(assistant.id, content: text, interrupted: !complete)
+            if !toolsUsed.isEmpty { toolRuns[assistant.id] = toolsUsed }
+            try await store.update(assistant.id, content: finalText, interrupted: !complete)
         }
         if let failure { throw failure }
     }

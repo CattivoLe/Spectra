@@ -45,6 +45,7 @@ struct AssistantPrivacyView: View {
 
                 Section("How it works") {
                     fact("sparkle.magnifyingglass", "The assistant reads what Spectra found (networks, devices, history) only on this phone, and only when a question needs it. You can switch this off in each chat.")
+                    fact("bolt.horizontal", "With that same switch, it can also run a fresh scan or check itself — the same ones you can run by hand on the other tabs. It never does anything that sends to the air, such as deauthenticating a device or flashing the sensor.")
                     fact("lock.doc.fill", "Chats are encrypted (AES-256). The key is in this phone's keychain and is never copied anywhere.")
                     fact("icloud.slash", "Chats are not included in iCloud or computer backups.")
                     if model.web.isEnabled {

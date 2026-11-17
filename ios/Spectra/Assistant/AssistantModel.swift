@@ -17,6 +17,8 @@ final class AssistantModel {
     var pendingSearch: PendingSearch?
     /// Reads what the rest of Spectra has found. Set once by the app; `nil` means the assistant sees no app data.
     var dataSource: (@MainActor (_ question: String) -> AppDataAttachment?)?
+    /// Lets the assistant trigger a fresh scan or check itself. Set once by the app; `nil` means it can only read.
+    var actions: AssistantActions?
     private let keyProvider = KeychainKeyProvider()
 
     static weak var shared: AssistantModel?
@@ -61,6 +63,8 @@ final class AssistantModel {
         - Spectra is for inspecting the user's own networks and devices. Do not help break into other people's \
         networks, devices or accounts.
         - If you do not know, say so.
+
+        \(AssistantActions.instructions)
         """
 
     init() {
@@ -111,6 +115,7 @@ final class AssistantModel {
     func session(for chat: Chat) -> ChatSession {
         let session = ChatSession(chat: chat, store: store, controller: controller, systemPrompt: Self.systemPrompt, web: web)
         session.appDataProvider = { [weak self] question in self?.dataSource?(question) }
+        session.tools = actions?.registry
         return session
     }
 

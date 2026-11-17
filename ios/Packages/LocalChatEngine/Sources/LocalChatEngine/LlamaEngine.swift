@@ -286,6 +286,11 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
 
     private func makeSampler(_ params: GenerationParams) -> UnsafeMutablePointer<llama_sampler> {
         let chain = llama_sampler_chain_init(llama_sampler_chain_default_params())!
+        // The grammar goes first in the chain: it masks every token the structure forbids before the samplers
+        // below pick among what is left. It does nothing until one of the trigger strings shows up in the output.
+        if let grammarSampler = makeGrammarSampler(params) {
+            llama_sampler_chain_add(chain, grammarSampler)
+        }
         if params.temperature <= 0 {
             llama_sampler_chain_add(chain, llama_sampler_init_greedy())
         } else {
@@ -295,6 +300,24 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
             llama_sampler_chain_add(chain, llama_sampler_init_dist(params.seed))
         }
         return chain
+    }
+
+    /// `nil` when there is no grammar to apply, or when it fails to parse (logged, not fatal: the model answers
+    /// in plain text instead of a tool call it could never have gotten right anyway).
+    private func makeGrammarSampler(_ params: GenerationParams) -> UnsafeMutablePointer<llama_sampler>? {
+        guard let grammar = params.grammar, !grammar.isEmpty, !params.grammarTriggers.isEmpty, let vocab else { return nil }
+        let owned: [UnsafeMutablePointer<CChar>?] = params.grammarTriggers.map { strdup($0) }
+        defer { for pointer in owned { free(pointer) } }
+        var pointers: [UnsafePointer<CChar>?] = owned.map { $0.map { UnsafePointer($0) } }
+        let sampler = pointers.withUnsafeMutableBufferPointer { buffer in
+            grammar.withCString { grammarCString in
+                llama_sampler_init_grammar_lazy_patterns(vocab, grammarCString, "root", buffer.baseAddress, buffer.count, nil, 0)
+            }
+        }
+        if sampler == nil {
+            FileHandle.standardError.write(Data("LlamaEngine: failed to parse tool-call grammar, ignoring it\n".utf8))
+        }
+        return sampler
     }
 
     // MARK: - Текст и токены

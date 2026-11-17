@@ -45,6 +45,7 @@ struct AssistantChatView: View {
                         message: message,
                         sources: question.flatMap { message.role == .assistant ? $0.search : nil },
                         appData: question.flatMap { message.role == .assistant ? session.attachments[$0.id] : nil },
+                        toolsUsed: message.role == .assistant ? session.toolRuns[message.id] : nil,
                         showModel: modelsInChat > 1,
                         isLast: message.id == session.messages.last?.id,
                         isGenerating: session.isGenerating,
@@ -54,6 +55,9 @@ struct AssistantChatView: View {
                 }
                 if session.isSearching {
                     Label("Searching the web…", systemImage: "globe").font(.footnote).foregroundStyle(.secondary)
+                }
+                if let status = session.toolStatus {
+                    Label(status, systemImage: "bolt.horizontal").font(.footnote).foregroundStyle(.secondary)
                 }
                 if let notice = session.searchNotice {
                     Label(notice, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
@@ -168,7 +172,7 @@ struct AssistantChatView: View {
                 toggleButton(
                     symbol: "sparkle.magnifyingglass",
                     isOn: session.chat.appData,
-                    label: session.chat.appData ? "Reading Spectra data: on" : "Reading Spectra data: off"
+                    label: session.chat.appData ? "Spectra data and live checks: on" : "Spectra data and live checks: off"
                 ) {
                     Task { await session.setAppData(!session.chat.appData) }
                 }
@@ -237,6 +241,8 @@ private struct AssistantMessageRow: View {
     let sources: SearchPayload?
     /// What Spectra data was read for the question this answers.
     let appData: AppDataAttachment?
+    /// Live checks the model ran itself before this answer, in the order they ran.
+    let toolsUsed: [String]?
     let showModel: Bool
     let isLast: Bool
     let isGenerating: Bool
@@ -267,6 +273,10 @@ private struct AssistantMessageRow: View {
                 }
                 if let appData, !appData.topics.isEmpty, !message.content.isEmpty {
                     Label("Read from Spectra: \(appData.topics.joined(separator: ", "))", systemImage: "sparkle.magnifyingglass")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if let toolsUsed, !toolsUsed.isEmpty, !message.content.isEmpty {
+                    Label("Ran: \(toolsUsed.joined(separator: ", "))", systemImage: "bolt.horizontal")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if let sources, !message.content.isEmpty {
