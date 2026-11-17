@@ -86,7 +86,7 @@ struct AssistantDigestTests {
 
     @Test func shortStemsNeedWholeWords() {
         // «lan» in "plan", «ble» in "possible", «tag» in "stage" and «port» in "important" must not route anywhere.
-        #expect(AssistantDigest.topics(for: "Is it possible to plan a stage?").count == AssistantTopic.allCases.count)
+        #expect(AssistantDigest.topics(for: "Is it possible to plan a stage?").count == AssistantTopic.surroundings.count)
         #expect(AssistantDigest.matches(AssistantTopic.lan.stems, in: "my lan is slow"))
         #expect(!AssistantDigest.matches(AssistantTopic.lan.stems, in: "my plan is slow"))
         #expect(AssistantDigest.matches(AssistantTopic.wifi.stems, in: "что с сетью?"))
@@ -102,9 +102,9 @@ struct AssistantDigestTests {
     }
 
     @Test func overviewAndUnclearQuestionsGetEverything() {
-        #expect(AssistantDigest.topics(for: "Analyze everything around me").count == AssistantTopic.allCases.count)
-        #expect(AssistantDigest.topics(for: "Проанализируй").count == AssistantTopic.allCases.count)
-        #expect(AssistantDigest.topics(for: "hmm").count == AssistantTopic.allCases.count)
+        #expect(AssistantDigest.topics(for: "Analyze everything around me").count == AssistantTopic.surroundings.count)
+        #expect(AssistantDigest.topics(for: "Проанализируй").count == AssistantTopic.surroundings.count)
+        #expect(AssistantDigest.topics(for: "hmm").count == AssistantTopic.surroundings.count)
     }
 
     // MARK: Attachment
@@ -434,6 +434,13 @@ struct AssistantRequestTests {
         ("замерь скорость интернета", ["speed_test"]),
         ("run a speed test", ["speed_test"]),
         ("просканируй блютуз и вайфай", ["scan_wifi", "scan_bluetooth"]),
+        // Naming one device says nothing on its own: sweep Bluetooth so the model has a list to name it from.
+        ("подключись к momentum 3 прочитай данные", ["scan_bluetooth"]),
+        ("connect to Momentum 3 and read the data", ["scan_bluetooth"]),
+        ("какие устройства подключены к моей сети", ["scan_lan"]),
+        ("проверь проброс портов на роутере", ["check_port_forwarding"]),
+        ("check port forwarding on my router", ["check_port_forwarding"]),
+        ("проверь, что открыто наружу через UPnP", ["check_port_forwarding"]),
     ])
     func plainRequestsAreRecognized(question: String, expected: [String]) {
         #expect(AssistantActions.requested(in: question).map(\.rawValue) == expected)
@@ -449,9 +456,66 @@ struct AssistantRequestTests {
         "какая у меня скорость интернета",
         "проверь мой роутер на уязвимости",
         "привет",
+        "не подключайся к наушникам",
     ])
     func otherQuestionsRunNothing(question: String) {
         #expect(AssistantActions.requested(in: question).isEmpty)
+    }
+}
+
+// MARK: - Opening questions
+
+@MainActor
+struct AssistantStarterTests {
+    /// The whole point of the starters' wording: every one that offers a check must actually run it, in both
+    /// languages, rather than leave it to the model and answer from an empty snapshot.
+    @Test(arguments: [
+        ("Scan my local network and show me what these devices are", ["scan_lan"], [AssistantTopic.lan]),
+        ("Просканируй локальную сеть и покажи, что это за устройства", ["scan_lan"], [.wifi, .lan]),
+        ("Scan Bluetooth nearby: is there someone else's tracker?", ["scan_bluetooth"], [.bluetooth]),
+        ("Просканируй Bluetooth рядом: нет ли чужого трекера?", ["scan_bluetooth"], [.bluetooth]),
+        ("Scan the Wi‑Fi around me: which channel is freer?", ["scan_wifi"], [.wifi]),
+        ("Просканируй Wi‑Fi вокруг: какой канал свободнее?", ["scan_wifi"], [.wifi]),
+        ("Check my internet connection: DNS, latency, provider", ["check_connection"], [.link]),
+        ("Проверь интернет-соединение: DNS, задержки, провайдер", ["check_connection"], [.link]),
+        ("Measure my internet speed", ["speed_test"], [.link]),
+        ("Замерь скорость интернета", ["speed_test"], [.link]),
+    ])
+    func checkStartersRunTheirCheck(question: String, tools: [String], topics: [AssistantTopic]) {
+        #expect(AssistantActions.requested(in: question).map(\.rawValue) == tools)
+        #expect(AssistantDigest.topics(for: question) == topics)
+    }
+
+    /// The two that read what is already there must not kick off a scan instead.
+    @Test(arguments: [
+        ("Decode the last traffic capture", [AssistantTopic.capture]),
+        ("Расшифруй последний захват трафика", [.capture]),
+        ("Give me a security summary: network, internet, and what to fix", [.wifi, .threats, .lan, .bluetooth, .link]),
+        ("Дай сводку по безопасности: сеть, интернет и что стоит исправить", [.wifi, .threats, .lan, .bluetooth, .link]),
+    ])
+    func readingStartersRunNothing(question: String, topics: [AssistantTopic]) {
+        #expect(AssistantActions.requested(in: question).isEmpty)
+        #expect(AssistantDigest.topics(for: question) == topics)
+    }
+
+    @Test func offersOnlyWhatThePhoneCanDoRightNow() {
+        // The device running the tests may be in any language, so compare against localized text, never literals.
+        let wifiScan = String(localized: "Scan the Wi‑Fi around me: which channel is freer?")
+        let summary = String(localized: "Give me a security summary: network, internet, and what to fix")
+        let capture = String(localized: "Decode the last traffic capture")
+
+        // Nothing scanned and no sensor: every offer must be a check the phone can run on its own.
+        let fresh = AssistantStarters.questions(for: .init())
+        #expect(fresh.allSatisfy { !AssistantActions.requested(in: $0).isEmpty })
+        #expect(!fresh.contains(wifiScan))
+        #expect(!fresh.contains(summary))
+        #expect(!fresh.contains(capture))
+
+        let busy = AssistantStarters.questions(for: .init(sensorConnected: true, hasHosts: true, hasCapture: true))
+        #expect(busy.count == 5)
+        #expect(busy.first == capture)
+        #expect(busy.contains(summary))
+        #expect(busy.contains(wifiScan))
     }
 }
 
@@ -491,6 +555,8 @@ struct AssistantCatalogTests {
             #expect(model.url.lastPathComponent == model.fileName)
         }
         #expect(catalog.contains { $0.id == "llama-3-2-3b-abliterated" && $0.notice != nil })
+        // The search-by-meaning helper is catalogued but never offered as a model to chat with.
+        #expect(catalog.filter(\.isEmbedding).map(\.id) == ["embeddinggemma-300m"])
     }
 }
 
@@ -507,30 +573,76 @@ struct AssistantActionsTests {
         let link = SensorLink(store: store, history: history)
         let sources = AssistantSources(
             store: store, lan: LANScanner(), ble: BLEScanner(), history: history,
-            link: link, probe: LinkProbe(), joiner: WiFiJoiner(), speed: SpeedTester()
+            link: link, probe: LinkProbe(), joiner: WiFiJoiner(), speed: SpeedTester(), captures: CaptureShelf(),
+            memory: AssistantMemory()
         )
         return (sources, link)
     }
 
     @Test func needsAConnectedSensor() async throws {
         let (sources, _) = makeSources()
-        let result = await AssistantActions(sources: sources).registry.run(
+        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).registry.run(
             "capture_pcap", "{\"tool\": \"capture_pcap\", \"bssid\": \"\(Self.demoHomeBSSID)\"}"
         )
         #expect(result.contains("No sensor connected"))
     }
 
+    @Test func connectBluetoothNeedsADeviceName() async throws {
+        let (sources, _) = makeSources()
+        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).registry.run(
+            "connect_bluetooth", "{\"tool\": \"connect_bluetooth\"}"
+        )
+        #expect(result.contains("Missing"))
+    }
+
+    /// Nothing has been heard, so there is no device to open a link to: the model is sent to scan first rather
+    /// than left to invent what the headphones said.
+    @Test func connectBluetoothRejectsADeviceThePhoneHasNotHeard() async throws {
+        let (sources, _) = makeSources()
+        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).registry.run(
+            "connect_bluetooth", "{\"tool\": \"connect_bluetooth\", \"text\": \"Momentum 3\"}"
+        )
+        #expect(result.contains("Momentum 3"))
+        #expect(result.contains("scan_bluetooth"))
+    }
+
+    /// No LAN scan has run, so there is no router to ask.
+    @Test func portForwardingNeedsTheRouterFirst() async throws {
+        let (sources, _) = makeSources()
+        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).registry.run(
+            "check_port_forwarding", "{\"tool\": \"check_port_forwarding\"}"
+        )
+        #expect(result.contains("scan_lan"))
+    }
+
+    /// A full sweep costs minutes, so only an explicit ask for one turns it on.
+    @Test func everyPortIsOptedIntoByWord() {
+        #expect(AssistantActions.asksForEveryPort("all"))
+        #expect(AssistantActions.asksForEveryPort("все порты"))
+        #expect(AssistantActions.asksForEveryPort("full range"))
+        #expect(!AssistantActions.asksForEveryPort("common"))
+        #expect(!AssistantActions.asksForEveryPort("обычные"))
+    }
+
+    @Test func connectBluetoothIsInTheGrammarAndHasALabel() {
+        #expect(AssistantActions.grammar.contains("connect_bluetooth"))
+        #expect(AssistantActions.instructions.contains("connect_bluetooth"))
+        #expect(AssistantActions.grammar.contains("check_port_forwarding"))
+        #expect(AssistantActions.instructions.contains("check_port_forwarding"))
+        #expect(!AssistantActions.runningLabel(for: "connect_bluetooth").contains("connect_bluetooth"))
+    }
+
     @Test func needsTheBSSIDField() async throws {
         let (sources, link) = makeSources()
         link.setDemo(true)
-        let result = await AssistantActions(sources: sources).registry.run("capture_pcap", "{\"tool\": \"capture_pcap\"}")
+        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).registry.run("capture_pcap", "{\"tool\": \"capture_pcap\"}")
         #expect(result.contains("Missing or invalid"))
     }
 
     @Test func rejectsABSSIDThePhoneHasNotSeen() async throws {
         let (sources, link) = makeSources()
         link.setDemo(true)
-        let result = await AssistantActions(sources: sources).registry.run(
+        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).registry.run(
             "capture_pcap", "{\"tool\": \"capture_pcap\", \"bssid\": \"AA:BB:CC:DD:EE:FF\"}"
         )
         #expect(result.contains("not a BSSID"))
@@ -542,7 +654,7 @@ struct AssistantActionsTests {
         link.startRawCapture(channel: 6, network: BSSID(string: Self.demoHomeBSSID))
         defer { link.stopRawCapture() }
 
-        let result = await AssistantActions(sources: sources).registry.run(
+        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).registry.run(
             "capture_pcap", "{\"tool\": \"capture_pcap\", \"bssid\": \"\(Self.demoHomeBSSID)\"}"
         )
         #expect(result.contains("already running"))
@@ -556,13 +668,16 @@ struct AssistantActionsTests {
         let (sources, link) = makeSources()
         link.setDemo(true)   // this already runs one scan, synchronously populating store.networks
 
-        let result = await AssistantActions(sources: sources).registry.run(
+        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).registry.run(
             "capture_pcap", "{\"tool\": \"capture_pcap\", \"bssid\": \"\(Self.demoHomeBSSID)\"}"
         )
 
         #expect(result.contains("Home"))
-        #expect(result.contains("frames"))
+        #expect(result.contains("Traffic capture"))
         #expect(!link.rawCapturing)
         #expect(!result.contains("No frames captured"))
+        // A later "what was in that capture?" reads the same capture.
+        #expect(sources.captures.latest?.name.contains("Home") == true)
+        #expect(sources.snapshot().capture?.contains("Home") == true)
     }
 }

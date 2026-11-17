@@ -192,6 +192,14 @@ struct SensorProtocolTests {
         #expect(info.isCharging == false)
     }
 
+    /// The C5 says it has an LED and no speaker, so the phone offers just the LED; older firmware says nothing.
+    @Test func infoDecodesAlertOutputs() throws {
+        let c5 = #"{"proto":9,"fw":"0.10.1","name":"ESP32-C5","chip":"ESP32-C5","bands":["2.4","5"],"interval":30,"alerts":3,"outputs":2,"watch":0}"#
+        #expect(try JSONDecoder().decode(SensorInfo.self, from: Data(c5.utf8)).outputs == 2)
+        let old = #"{"proto":9,"fw":"0.10.0","chip":"ESP32-S3","bands":["2.4"],"interval":30,"alerts":3,"watch":0}"#
+        #expect(try JSONDecoder().decode(SensorInfo.self, from: Data(old.utf8)).outputs == nil)
+    }
+
     @Test func trafficRoundTrips() throws {
         let bssid = BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x00, 0xA0])
         let message = SensorProtocol.Message.traffic(scanID: 10, bssid: bssid, bytes: 185_000, packets: 312)

@@ -269,6 +269,32 @@ final class SensorLink: NSObject {
         }
     }
 
+    /// Whether the connected sensor can capture on `channel`.
+    enum CaptureSupport: Equatable {
+        case ok
+        /// A 5 GHz channel on a sensor that hears 2.4 GHz only (Cardputer, WROOM-32).
+        case bandNotHeard
+        /// A 5 GHz channel on a sensor whose firmware ignores captures above channel 14.
+        case firmwareTooOld(version: String)
+    }
+
+    /// The firmware that first tunes a raw capture to 5 GHz channels.
+    static let fiveGHzCaptureFirmware = "0.10.1"
+
+    func captureSupport(channel: Int) -> CaptureSupport {
+        guard demo == nil, let info else { return .ok }
+        return Self.captureSupport(channel: channel, bands: info.bands, firmware: info.fw)
+    }
+
+    static func captureSupport(channel: Int, bands: [String], firmware: String) -> CaptureSupport {
+        guard channel > 14 else { return .ok }
+        guard bands.contains("5") else { return .bandNotHeard }
+        if firmware.compare(fiveGHzCaptureFirmware, options: .numeric) == .orderedAscending {
+            return .firmwareTooOld(version: firmware)
+        }
+        return .ok
+    }
+
     /// Begin a raw-frame capture on `channel`. `bssid` is an optional filter;
     /// left nil, the sensor sends every frame on the channel. `network` is the
     /// card the capture was started from, which alone shows its frames.

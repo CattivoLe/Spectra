@@ -5,6 +5,7 @@ import SwiftUI
 struct VpnToggle: View {
     @Binding var viaVpn: Bool
 
+    @Environment(WiFiJoiner.self) private var joiner
     @AppStorage(ProbeRoute.cellularKey) private var cellular = false
 
     static let onText: LocalizedStringKey = "Speed, external address and countries are measured through the VPN tunnel."
@@ -25,6 +26,8 @@ struct VpnToggle: View {
         )
     }
 
+    @State private var autoSwitchedToCellular = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Picker("Check through", selection: route) {
@@ -38,6 +41,19 @@ struct VpnToggle: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+        .onAppear { syncWithWifi() }
+        .onChange(of: joiner.currentSSID) { syncWithWifi() }
+    }
+
+    private func syncWithWifi() {
+        let hasWifi = joiner.currentSSID != nil
+        if !hasWifi && !viaVpn && !cellular {
+            cellular = true
+            autoSwitchedToCellular = true
+        } else if hasWifi && autoSwitchedToCellular && cellular {
+            cellular = false
+            autoSwitchedToCellular = false
+        }
     }
 }
 

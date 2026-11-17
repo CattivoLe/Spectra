@@ -12,8 +12,6 @@ public struct Chat: Codable, Identifiable, Hashable, Sendable, FetchableRecord, 
     public var updatedAt: Date
     /// The model the chat was last held with.
     public var modelName: String?
-    /// Whether to search the web before answering. Only works when access is allowed in settings.
-    public var webSearch: Bool = false
 }
 
 /// One message of a conversation.

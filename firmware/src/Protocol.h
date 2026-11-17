@@ -30,9 +30,17 @@ inline constexpr uint8_t kCmdAckKnown = 0x08;
 // The phone is about to send its whole list. Drop the previous copy.
 inline constexpr uint8_t kCmdResetKnown = 0x09;
 // Start streaming raw Wi-Fi frames from a single channel (v8). Payload:
-// channel (1–13, 0 = keep current), flags (bit0 = filter to the BSSID below),
-// BSSID (6 bytes, zeros when the filter is off).
+// channel (1–14, or a 5 GHz channel on a 5 GHz board; 0 = keep current),
+// flags (bit0 = filter to the BSSID below), BSSID (6 bytes, zeros when the filter is off).
 inline constexpr uint8_t kCmdStartRawCapture = 0x0A;
+
+// Whether a raw capture may pin the radio to `channel`: 0 (keep the current
+// one), 2.4 GHz 1–14, and on a board that hears 5 GHz the 5 GHz channel numbers
+// 32–177. Firmware 0.10.0 and older accepted 1–14 only, so a capture asked for on
+// a 5 GHz network was silently ignored.
+inline constexpr bool rawCaptureChannelAllowed(uint8_t channel, bool has5GHz) {
+  return channel <= 14 || (has5GHz && channel >= 32 && channel <= 177);
+}
 // Stop the raw-frame stream (v8). No payload.
 inline constexpr uint8_t kCmdStopRawCapture = 0x0B;
 // How the sensor announces findings on its own (v9). Payload: flags, see

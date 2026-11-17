@@ -5,6 +5,7 @@
 
 #include "Bytes.h"
 #include "Crc32.h"
+#include "Protocol.h"
 
 void setUp() {}
 void tearDown() {}
@@ -40,10 +41,25 @@ static void test_bytes_little_endian() {
   TEST_ASSERT_EQUAL_HEX32(0xDEADBEEFu, getU32(buf));
 }
 
+// A capture on a 5 GHz network must reach a 5 GHz board; a 2.4 GHz-only board
+// keeps ignoring channels it cannot tune to.
+static void test_raw_capture_channels() {
+  TEST_ASSERT_TRUE(rawCaptureChannelAllowed(0, false));
+  TEST_ASSERT_TRUE(rawCaptureChannelAllowed(6, false));
+  TEST_ASSERT_TRUE(rawCaptureChannelAllowed(14, false));
+  TEST_ASSERT_FALSE(rawCaptureChannelAllowed(36, false));
+  TEST_ASSERT_TRUE(rawCaptureChannelAllowed(36, true));
+  TEST_ASSERT_TRUE(rawCaptureChannelAllowed(149, true));
+  TEST_ASSERT_TRUE(rawCaptureChannelAllowed(177, true));
+  TEST_ASSERT_FALSE(rawCaptureChannelAllowed(20, true));
+  TEST_ASSERT_FALSE(rawCaptureChannelAllowed(200, true));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_crc_known_vector);
   RUN_TEST(test_crc_incremental);
   RUN_TEST(test_bytes_little_endian);
+  RUN_TEST(test_raw_capture_channels);
   return UNITY_END();
 }

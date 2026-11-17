@@ -17,6 +17,10 @@ public struct CatalogModel: Codable, Identifiable, Hashable, Sendable {
     public var recommended: Bool
     /// Важное предупреждение, которое показывается перед загрузкой (например, про отключённые ограничения).
     public var notice: String?
+    /// "embedding": a helper model for search by meaning that never takes part in a conversation. Empty: a chat model.
+    public var kind: String?
+
+    public var isEmbedding: Bool { kind == "embedding" }
 }
 
 /// Насколько модель подходит устройству.

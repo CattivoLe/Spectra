@@ -41,7 +41,59 @@ struct AssistantMarkdownView: View {
     /// Bold, italic, `code` and links inside a line. If the markup is broken, the text is shown as is.
     private func inline(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        var result = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        Self.highlightNetworkData(&result)
+        return result
+    }
+
+    // MARK: - Network data highlighting
+
+    private static let dataPatterns: [(NSRegularExpression, Color)] = {
+        let specs: [(String, Color)] = [
+            (#"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d{1,5})?(?:/\d{1,2})?\b"#, .blue),
+            (#"\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b"#, .orange),
+            (#"\b\d{1,5}/(?:tcp|udp)\b"#, .purple),
+            (#"\b(?:HTTPS?|SSH|RTSP|RTMP|SFTP|FTP|DNS|DHCP|SNMP|NTP|SMB|AFP|MQTT|WPA[23]?|WEP|WPS|ARP|ICMP|TCP|UDP|TLS|SSL|mDNS|UPnP|SSDP)\b"#, .teal),
+        ]
+        return specs.compactMap { pattern, color in
+            (try? NSRegularExpression(pattern: pattern)).map { ($0, color) }
+        }
+    }()
+
+    private static let signalRegex = try? NSRegularExpression(pattern: #"-(\d{2,3})\s*(?:dBm|дБм)"#)
+
+    private static func highlightNetworkData(_ attributed: inout AttributedString) {
+        let plain = String(attributed.characters)
+        guard !plain.isEmpty else { return }
+        let fullRange = NSRange(plain.startIndex..., in: plain)
+
+        for (regex, color) in dataPatterns {
+            for match in regex.matches(in: plain, range: fullRange) {
+                guard let range = Range(match.range, in: plain) else { continue }
+                let lo = plain.distance(from: plain.startIndex, to: range.lowerBound)
+                let hi = plain.distance(from: plain.startIndex, to: range.upperBound)
+                let start = attributed.characters.index(attributed.startIndex, offsetBy: lo)
+                let end = attributed.characters.index(attributed.startIndex, offsetBy: hi)
+                attributed[start..<end].foregroundColor = color
+            }
+        }
+
+        if let signalRegex {
+            for match in signalRegex.matches(in: plain, range: fullRange) {
+                guard let range = Range(match.range, in: plain),
+                      let valRange = Range(match.range(at: 1), in: plain),
+                      let dBm = Int(plain[valRange]) else { continue }
+                let lo = plain.distance(from: plain.startIndex, to: range.lowerBound)
+                let hi = plain.distance(from: plain.startIndex, to: range.upperBound)
+                let start = attributed.characters.index(attributed.startIndex, offsetBy: lo)
+                let end = attributed.characters.index(attributed.startIndex, offsetBy: hi)
+                attributed[start..<end].foregroundColor = switch dBm {
+                case 0..<50: Color.green
+                case 50..<70: Color.orange
+                default: Color.red
+                }
+            }
+        }
     }
 }
 

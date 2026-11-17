@@ -12,7 +12,8 @@ public enum ChatStoreError: LocalizedError {
 
 /// Хранилище диалогов на SQLite. Всё лежит на устройстве, в облако ничего не уходит.
 public final class ChatStore: Sendable {
-    private let database: DatabaseQueue
+    /// Internal rather than private so `ChatRecall` can query across chats from its own file.
+    let database: DatabaseQueue
 
     /// `url == nil` — база в памяти (для тестов). Если задан `keyProvider`, файл базы шифруется (SQLCipher, AES-256);
     /// старая незашифрованная база при этом переносится в зашифрованную автоматически.
@@ -117,6 +118,7 @@ public final class ChatStore: Sendable {
                 table.column("createdAt", .datetime).notNull()
                 table.column("updatedAt", .datetime).notNull()
                 table.column("modelName", .text)
+                // No longer read: search follows the one switch in the web settings. Kept so existing databases need no migration.
                 table.column("webSearch", .boolean).notNull().defaults(to: false)
                 // No longer read: app data and live checks are always on. Kept so existing databases need no migration.
                 table.column("appData", .boolean).notNull().defaults(to: true)
@@ -148,18 +150,12 @@ public final class ChatStore: Sendable {
 
     public func createChat() async throws -> Chat {
         let now = Date()
-        let chat = Chat(id: UUID(), title: "", createdAt: now, updatedAt: now, modelName: nil, webSearch: false)
+        let chat = Chat(id: UUID(), title: "", createdAt: now, updatedAt: now, modelName: nil)
         try await database.write { try chat.insert($0) }
         return chat
     }
 
     // MARK: - Поиск в интернете
-
-    public func setWebSearch(_ enabled: Bool, for chatID: UUID) async throws {
-        try await database.write { db in
-            try db.execute(sql: "UPDATE chat SET webSearch = ? WHERE id = ?", arguments: [enabled, chatID])
-        }
-    }
 
     public func setSearch(_ payload: SearchPayload?, for messageID: UUID) async throws {
         try await database.write { db in

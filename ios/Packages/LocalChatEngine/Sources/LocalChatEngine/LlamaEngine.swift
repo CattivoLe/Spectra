@@ -12,6 +12,11 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
     // Состояние ниже читается и меняется только на `queue`.
     private var model: OpaquePointer?
     private var context: OpaquePointer?
+    /// A second context on the same model for short side jobs (writing a search query, checking what was found).
+    /// The weights are shared but the KV cache is its own, so the conversation is not recomputed afterwards.
+    private var utilityContext: OpaquePointer?
+    private var threadCount: Int32 = 4
+    private static let utilityContextLength: UInt32 = 3072
     private var vocab: OpaquePointer?
     private var template: String?
     private var chatTemplate: ChatTemplate?
@@ -38,7 +43,11 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
 
     public init() {}
 
+    /// Initializes llama.cpp once per process; the embedding engine needs it too.
+    static func ensureBackend() { _ = backend }
+
     deinit {
+        if let utilityContext { llama_free(utilityContext) }
         if let context { llama_free(context) }
         if let model { llama_model_free(model) }
     }
@@ -94,6 +103,59 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
         }
     }
 
+    public func complete(messages: [ChatMessage], maxTokens: Int) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                continuation.resume(with: Result { try self.completeSync(messages: messages, maxTokens: maxTokens) })
+            }
+        }
+    }
+
+    private func completeSync(messages: [ChatMessage], maxTokens: Int) throws -> String {
+        guard let model, let vocab else { throw EngineError.noModelLoaded }
+        if utilityContext == nil {
+            var parameters = llama_context_default_params()
+            parameters.n_ctx = Self.utilityContextLength
+            parameters.n_batch = UInt32(Self.batchSize)
+            parameters.n_threads = threadCount
+            parameters.n_threads_batch = threadCount
+            guard let created = llama_init_from_model(model, parameters) else { throw EngineError.contextCreationFailed }
+            utilityContext = created
+        }
+        let context = utilityContext!
+        llama_memory_clear(llama_get_memory(context), true)
+
+        let tokens = try tokenize(try render(messages, thinking: false), vocab: vocab)
+        guard tokens.count + maxTokens < Int(Self.utilityContextLength) else {
+            throw EngineError.promptTooLong(tokens: tokens.count, context: Int(Self.utilityContextLength))
+        }
+
+        var offset = 0
+        while offset < tokens.count {
+            let count = min(Int(Self.batchSize), tokens.count - offset)
+            let code = tokens.withUnsafeBufferPointer { buffer in
+                llama_decode(context, llama_batch_get_one(UnsafeMutablePointer(mutating: buffer.baseAddress! + offset), Int32(count)))
+            }
+            guard code == 0 else { throw EngineError.decodeFailed(code: code) }
+            offset += count
+        }
+
+        // A side job must be predictable: always the most likely token.
+        let sampler = llama_sampler_chain_init(llama_sampler_chain_default_params())!
+        llama_sampler_chain_add(sampler, llama_sampler_init_greedy())
+        defer { llama_sampler_free(sampler) }
+
+        var bytes: [UInt8] = []
+        for _ in 0..<maxTokens {
+            var token = llama_sampler_sample(sampler, context, -1)
+            if llama_vocab_is_eog(vocab, token) { break }
+            bytes += piece(for: token, vocab: vocab)
+            let code = llama_decode(context, llama_batch_get_one(&token, 1))
+            guard code == 0 else { throw EngineError.decodeFailed(code: code) }
+        }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
     /// Шаблон чата из метаданных загруженной модели — для диагностики.
     public func chatTemplateSource() async -> String? {
         await withCheckedContinuation { continuation in
@@ -131,6 +193,7 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
 
         self.model = model
         self.context = context
+        self.threadCount = threads
         self.vocab = llama_model_get_vocab(model)
         self.template = llama_model_chat_template(model, nil).map { String(cString: $0) }
 
@@ -169,6 +232,8 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
     }
 
     private func unloadSync() {
+        if let utilityContext { llama_free(utilityContext) }
+        utilityContext = nil
         if let context { llama_free(context) }
         if let model { llama_model_free(model) }
         context = nil

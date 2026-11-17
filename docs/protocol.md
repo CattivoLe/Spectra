@@ -53,6 +53,10 @@ latest GGA sentence. All three are omitted when the cap is not fitted.
 
 Version 9 adds `alerts`, the alert mode flags set with control `0x0C`, and
 `watch`, the number of addresses on the sensor's watch list (`0x0D`).
+Firmware 0.10.1 adds `outputs`, what the board can alert with, in the same
+bits as `alerts` (bit0 sound, bit1 LED): `3` on the Cardputer, `2` on the
+ESP32-C5 (its RGB LED), `0` on the WROOM-32. When it is absent the phone
+offers every mode, as before.
 
 ## Control (write)
 
@@ -69,7 +73,7 @@ First byte is the command.
 | `0x07` | Set central name | UTF-8 device name, the rest of the write, at most 31 bytes |
 | `0x08` | Ack known | — |
 | `0x09` | Reset known list | — |
-| `0x0A` | Start raw capture | `u8` channel (1–14, 0 = keep current), `u8` flags (bit0 = filter to the BSSID), `6` BSSID |
+| `0x0A` | Start raw capture | `u8` channel (1–14, or 32–177 on a sensor that reports band `5` and runs firmware 0.10.1+; 0 = keep current), `u8` flags (bit0 = filter to the BSSID), `6` BSSID |
 | `0x0B` | Stop raw capture | — |
 | `0x0C` | Set alerts (v9) | `u8` flags: bit0 = sound, bit1 = LED. 0 is silent |
 | `0x0D` | Set watch list (v9) | `u8` count (0–32), then count × `6` address bytes, first octet first |

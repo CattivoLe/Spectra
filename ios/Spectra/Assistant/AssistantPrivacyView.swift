@@ -49,7 +49,7 @@ struct AssistantPrivacyView: View {
                     fact("lock.doc.fill", "Chats are encrypted (AES-256). The key is in this phone's keychain and is never copied anywhere.")
                     fact("icloud.slash", "Chats are not included in iCloud or computer backups.")
                     if model.web.isEnabled {
-                        fact("globe", "Web search is allowed: only the query text goes out, and you can see it in the log. Besides this, the internet is used to download models.")
+                        fact("globe", "Web search is allowed: the query text goes out, and you can see it in the log. With page reading on, the phone also opens the pages found, as a browser does. Besides this, the internet is used to download models.")
                     } else {
                         fact("antenna.radiowaves.left.and.right.slash", "The internet is used only to download models, and only when you tap Download.")
                     }

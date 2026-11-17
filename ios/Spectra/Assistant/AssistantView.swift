@@ -10,8 +10,8 @@ struct AssistantView: View {
     @State private var showModels = false
     @State private var showPrivacy = false
     @State private var showWeb = false
+    @State private var showDossier = false
     @State private var errorText: String?
-    @State private var started = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -70,12 +70,13 @@ struct AssistantView: View {
             .sheet(isPresented: $showModels) { AssistantModelsView().environment(model) }
             .sheet(isPresented: $showPrivacy) { AssistantPrivacyView().environment(model) }
             .sheet(isPresented: $showWeb) { AssistantWebSheet().environment(model) }
+            .sheet(isPresented: $showDossier) {
+                if let memory = model.memory { DossierView(memory: memory) }
+            }
             .refreshable { model.refreshModels() }
             .task {
                 // The model is loaded when the tab is first opened, not at launch: it takes gigabytes of memory.
-                guard !started else { return }
-                started = true
-                await model.start()
+                await model.ensureStarted()
             }
             .task {
                 do {
@@ -90,16 +91,18 @@ struct AssistantView: View {
     private var modelMenu: some View {
         Menu {
             Section("Model") {
-                ForEach(model.library.installed) { item in
-                    Button {
-                        Task { await model.select(item.fileName) }
-                    } label: {
-                        if item.fileName == model.selectedModel { Label(item.menuName, systemImage: "checkmark") } else { Text(item.menuName) }
+                Picker("Model", selection: Binding(
+                    get: { model.selectedModel ?? "" },
+                    set: { file in Task { await model.select(file) } }
+                )) {
+                    ForEach(model.library.chatModels) { item in
+                        Text(item.menuName).tag(item.fileName)
                     }
                 }
                 if model.modelFiles.isEmpty { Text("No models") }
             }
             Button("Manage models…", systemImage: "square.and.arrow.down") { showModels = true }
+            Button("Dossier…", systemImage: "doc.text.magnifyingglass") { showDossier = true }
             Button("Internet…", systemImage: "globe") { showWeb = true }
             Button("Privacy…", systemImage: "hand.raised") { showPrivacy = true }
         } label: {

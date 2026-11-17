@@ -772,11 +772,13 @@ nonisolated struct SensorInfo: Equatable {
     var alerts: Int?
     /// How many addresses the sensor watches for. Absent before v9.
     var watchCount: Int?
+    /// What the board can alert with, in the bits of `alerts` (bit0 sound, bit1 LED). Absent before firmware 0.10.1.
+    var outputs: Int?
 
     init(proto: Int, fw: String, chip: String, bands: [String], interval: Int, ota: Bool = false,
          batteryLevel: Int? = nil, isCharging: Bool? = nil, lora: Bool = false,
          latitude: Double? = nil, longitude: Double? = nil, satellites: Int? = nil,
-         name: String? = nil, known: [String] = [], alerts: Int? = nil, watchCount: Int? = nil) {
+         name: String? = nil, known: [String] = [], alerts: Int? = nil, watchCount: Int? = nil, outputs: Int? = nil) {
         self.proto = proto
         self.fw = fw
         self.chip = chip
@@ -793,12 +795,13 @@ nonisolated struct SensorInfo: Equatable {
         self.known = known
         self.alerts = alerts
         self.watchCount = watchCount
+        self.outputs = outputs
     }
 }
 
 extension SensorInfo: Decodable {
     private enum CodingKeys: String, CodingKey {
-        case proto, fw, chip, bands, interval, ota, bat, chg, lora, lat, lon, sats, name, known, alerts, watch
+        case proto, fw, chip, bands, interval, ota, bat, chg, lora, lat, lon, sats, name, known, alerts, watch, outputs
     }
 
     init(from decoder: Decoder) throws {
@@ -825,5 +828,6 @@ extension SensorInfo: Decodable {
         known = try container.decodeIfPresent([String].self, forKey: .known) ?? []
         alerts = try container.decodeIfPresent(Int.self, forKey: .alerts)
         watchCount = try container.decodeIfPresent(Int.self, forKey: .watch)
+        outputs = try container.decodeIfPresent(Int.self, forKey: .outputs)
     }
 }

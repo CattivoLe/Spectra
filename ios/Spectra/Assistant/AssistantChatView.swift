@@ -4,9 +4,11 @@ import LocalChatKit
 
 struct AssistantChatView: View {
     @Environment(AssistantModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
     @State private var session: ChatSession
     @State private var draft = ""
     @State private var editing: StoredMessage?
+    @State private var wasGeneratingBeforeBackground = false
     @FocusState private var composerFocused: Bool
 
     init(session: ChatSession) {
@@ -19,19 +21,13 @@ struct AssistantChatView: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.controller.state != .loading
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && model.controller.state != .loading
+        && model.controller.state != .empty
     }
 
-    /// Questions to start from, for an empty chat. They name the app's data so the assistant reads it.
-    private var starters: [String] {
-        [
-            String(localized: "What is around me right now? Give me an overview."),
-            String(localized: "Is my Wi‑Fi safe? What should I fix first?"),
-            String(localized: "Which devices on my network look risky?"),
-            String(localized: "Is there a Bluetooth tracker following me?"),
-            String(localized: "Why might my internet be slow?"),
-        ]
-    }
+    /// Questions to start from, for an empty chat. Chosen from what the app already has — see `AssistantStarters`.
+    @State private var starters: [String] = []
 
     var body: some View {
         ScrollView {
@@ -50,11 +46,16 @@ struct AssistantChatView: View {
                         isLast: message.id == session.messages.last?.id,
                         isGenerating: session.isGenerating,
                         onEdit: { beginEditing(message) },
-                        onRegenerate: { session.regenerate() }
+                        onRegenerate: { session.regenerate() },
+                        onContinue: { session.continueGenerating() }
                     )
                 }
                 if session.isSearching {
-                    Label("Searching the web…", systemImage: "globe").font(.footnote).foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text(session.searchStage?.title ?? String(localized: "Searching the web…"))
+                    }
+                    .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let status = session.toolStatus {
                     Label(status, systemImage: "bolt.horizontal").font(.footnote).foregroundStyle(.secondary)
@@ -79,12 +80,15 @@ struct AssistantChatView: View {
         }
         .task {
             session.modelName = model.currentModelName
+            starters = AssistantStarters.questions(for: model.actions?.sources.readiness() ?? .init())
             await session.load()
+            if let question = model.takeQueuedQuestion(for: session.chat.id) { await ask(question) }
         }
         // Model switched or loaded: label the answers with the new model and recount the memory in use.
         .onChange(of: model.selectedModel) { session.modelName = model.currentModelName }
         .onChange(of: model.controller.state) { _, new in
             if new == .ready { Task { await session.refreshContext() } }
+            if new == .empty, model.loadError == nil { Task { await model.loadSelectedModel() } }
         }
         .toolbar {
             ToolbarItem(placement: .principal) { titleMenu }
@@ -98,11 +102,18 @@ struct AssistantChatView: View {
         }
         // Generating for a screen nobody sees would hold the only model.
         .onDisappear { session.stop() }
+        .onChange(of: scenePhase) { _, new in
+            if new != .active { wasGeneratingBeforeBackground = session.isGenerating }
+            if new == .active && wasGeneratingBeforeBackground {
+                wasGeneratingBeforeBackground = false
+                session.continueGenerating()
+            }
+        }
     }
 
     private var startersList: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Ask about what Spectra found", systemImage: "sparkle.magnifyingglass")
+            Label("Ask a question, or start a check", systemImage: "sparkle.magnifyingglass")
                 .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(starters, id: \.self) { text in
                 Button {
@@ -132,11 +143,12 @@ struct AssistantChatView: View {
                 .font(.headline).lineLimit(1)
             Menu {
                 Section("Model") {
-                    ForEach(model.library.installed) { item in
-                        Button {
-                            Task { await model.select(item.fileName) }
-                        } label: {
-                            if item.fileName == model.selectedModel { Label(item.menuName, systemImage: "checkmark") } else { Text(item.menuName) }
+                    Picker("Model", selection: Binding(
+                        get: { model.selectedModel ?? "" },
+                        set: { file in Task { await model.select(file) } }
+                    )) {
+                        ForEach(model.library.chatModels) { item in
+                            Text(item.menuName).tag(item.fileName)
                         }
                     }
                 }
@@ -169,15 +181,6 @@ struct AssistantChatView: View {
                 }
             }
             HStack(alignment: .bottom, spacing: 8) {
-                if model.web.isEnabled {
-                    toggleButton(
-                        symbol: "globe",
-                        isOn: session.chat.webSearch,
-                        label: session.chat.webSearch ? "Web search: on" : "Web search: off"
-                    ) {
-                        Task { await session.setWebSearch(!session.chat.webSearch) }
-                    }
-                }
                 TextField("Message", text: $draft, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($composerFocused)
@@ -198,16 +201,19 @@ struct AssistantChatView: View {
         .background(.bar)
     }
 
-    private func toggleButton(symbol: String, isOn: Bool, label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 20))
-                .foregroundStyle(isOn ? Color.white : Color.secondary)
-                .frame(width: 36, height: 36)
-                .background(isOn ? Color.accentColor : Color.clear, in: Circle())
+    /// Puts a question another screen prepared (e.g. "decode this capture") to the model once it is loaded.
+    /// With no model installed it waits in the message field instead.
+    private func ask(_ question: String) async {
+        await model.ensureStarted()
+        while model.controller.state == .loading, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(200))
         }
-        .accessibilityLabel(label)
-        .disabled(session.isGenerating)
+        session.modelName = model.currentModelName
+        if model.controller.state == .empty {
+            draft = question
+        } else {
+            session.send(question)
+        }
     }
 
     private func submit() {
@@ -241,6 +247,7 @@ private struct AssistantMessageRow: View {
     let isGenerating: Bool
     let onEdit: () -> Void
     let onRegenerate: () -> Void
+    let onContinue: () -> Void
 
     var body: some View {
         switch message.role {
@@ -273,13 +280,7 @@ private struct AssistantMessageRow: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if let sources, !message.content.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Label("Searched: “\(sources.query)” · \(sources.provider)", systemImage: "globe").font(.caption2).foregroundStyle(.secondary)
-                        ForEach(Array(sources.results.enumerated()), id: \.offset) { index, result in
-                            Link("[\(index + 1)] \(result.title) — \(result.url.host() ?? "")", destination: result.url)
-                                .font(.caption2).lineLimit(1)
-                        }
-                    }
+                    AssistantSourcesView(payload: sources)
                 }
                 if showModel, let name = message.modelName {
                     Label(name, systemImage: "cpu").font(.caption2).foregroundStyle(.tertiary)
@@ -291,6 +292,9 @@ private struct AssistantMessageRow: View {
                 if isLast && !isGenerating && !message.content.isEmpty {
                     HStack(spacing: 16) {
                         Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.content }
+                        if message.interrupted {
+                            Button("Continue", systemImage: "arrow.forward", action: onContinue)
+                        }
                         Button("Regenerate", systemImage: "arrow.clockwise", action: onRegenerate)
                     }
                     .labelStyle(.iconOnly).font(.subheadline).foregroundStyle(.secondary)
@@ -303,6 +307,56 @@ private struct AssistantMessageRow: View {
 
         case .system:
             EmptyView()
+        }
+    }
+}
+
+/// Sources under an answer: first the ones something was taken from. "What the model read" shows the excerpts
+/// themselves, so one can see what the answer rests on.
+private struct AssistantSourcesView: View {
+    let payload: SearchPayload
+    @State private var showPassages = false
+
+    private var ordered: [Int] {
+        let used = payload.usedSourceIndices
+        return used + payload.results.indices.filter { !used.contains($0) }
+    }
+
+    private var header: String {
+        let queries = payload.allQueries.map { "“\($0)”" }.joined(separator: String(localized: ", then "))
+        var text = String(localized: "Searched: \(queries) · \(payload.provider)")
+        if let read = payload.pagesRead, read > 0 { text += " · " + String(localized: "pages read: \(read)") }
+        return text
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label(header, systemImage: "globe").font(.caption2).foregroundStyle(.secondary)
+
+            ForEach(ordered, id: \.self) { index in
+                let result = payload.results[index]
+                let used = payload.usedSourceIndices.contains(index)
+                Link(destination: result.url) {
+                    Text("[\(index + 1)] \(result.title) — \(result.url.host() ?? "")")
+                        .foregroundStyle(used ? Color.accentColor : Color.secondary)
+                }
+                .font(.caption2).lineLimit(1)
+            }
+
+            if let evidence = payload.evidence, !evidence.isEmpty {
+                Button(showPassages ? String(localized: "Hide what was read") : String(localized: "What the model read (\(evidence.count))")) {
+                    showPassages.toggle()
+                }
+                .font(.caption2)
+                if showPassages {
+                    ForEach(Array(evidence.enumerated()), id: \.offset) { _, passage in
+                        Text("[\(passage.sourceIndex + 1)] \(passage.text)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .padding(6).background(.quinary, in: RoundedRectangle(cornerRadius: 6))
+                            .textSelection(.enabled)
+                    }
+                }
+            }
         }
     }
 }

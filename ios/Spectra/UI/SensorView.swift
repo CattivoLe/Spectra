@@ -70,14 +70,28 @@ struct SensorView: View {
                         InfoRow("Scans this session", value: "\(store.scanCount)")
                     }
 
-                    Section {
-                        Picker("Alerts on sensor", selection: $link.alertMode) {
-                            ForEach(SensorLink.AlertMode.allCases) { mode in
-                                Text(mode.label).tag(mode)
+                    // Older firmware does not say what the board has: every mode is offered, as before.
+                    let outputs = link.info?.outputs ?? 0b11
+                    if outputs != 0 {
+                        Section {
+                            switch outputs {
+                            case 0b10:
+                                // The ESP32-C5 board: an RGB LED and no speaker.
+                                Toggle("Blink the LED on findings", isOn: alertBit(SensorLink.AlertMode.lightOnly.rawValue))
+                            case 0b01:
+                                Toggle("Beep on findings", isOn: alertBit(SensorLink.AlertMode.soundOnly.rawValue))
+                            default:
+                                Picker("Alerts on sensor", selection: $link.alertMode) {
+                                    ForEach(SensorLink.AlertMode.allCases) { mode in
+                                        Text(mode.label).tag(mode)
+                                    }
+                                }
+                            }
+                        } footer: {
+                            if outputs & 0b10 != 0 {
+                                Text("The LED blinks red for a threat, yellow for a warning, orange for a tracker that keeps showing up, green for an open network, blue for a watched Bluetooth device and purple for a watched network.")
                             }
                         }
-                    } footer: {
-                        Text("The LED blinks red for a threat, yellow for a warning, orange for a tracker that keeps showing up, green for an open network, blue for a watched Bluetooth device and purple for a watched network.")
                     }
 
                     if let info = link.info {
@@ -104,10 +118,11 @@ struct SensorView: View {
                                     .symbolRenderingMode(.multicolor)
                             }
                             if case .connected = link.state, info.ota, link.firmwareUpdate?.isRunning != true {
-                                if let bundled = BundledFirmware.current {
+                                // The app carries an image per board; only the one for this sensor's chip is offered.
+                                if let bundled = BundledFirmware.matching(chip: info.chip) {
                                     if let version = bundled.version, version == info.fw {
                                         Button("Reinstall \(version)", systemImage: "arrow.clockwise") {
-                                            offer(PendingFirmware(name: "firmware.bin", data: bundled.data, version: version))
+                                            offer(PendingFirmware(name: bundled.fileName, data: bundled.data, version: version))
                                         }
                                     } else {
                                         Button(
@@ -115,7 +130,7 @@ struct SensorView: View {
                                                 ?? String(localized: "Install included firmware"),
                                             systemImage: "arrow.down.circle"
                                         ) {
-                                            offer(PendingFirmware(name: "firmware.bin", data: bundled.data, version: bundled.version))
+                                            offer(PendingFirmware(name: bundled.fileName, data: bundled.data, version: bundled.version))
                                         }
                                     }
                                 } else {
@@ -130,7 +145,9 @@ struct SensorView: View {
                         } footer: {
                             if case .connected = link.state, !info.ota {
                                 Text("This firmware cannot take updates from the app. Flash 0.6.0 or newer once over USB or the launcher; after that, updates install from here.")
-                            } else if case .connected = link.state, info.ota, BundledFirmware.current != nil {
+                            } else if case .connected = link.state, info.ota, !BundledFirmware.all.isEmpty, BundledFirmware.matching(chip: info.chip) == nil {
+                                Text("The firmware inside the app is for \(BundledFirmware.all.compactMap(\.chip).formatted(.list(type: .and))), and this sensor is \(info.chip). Pick its own firmware.bin from Files, or flash it over USB.")
+                            } else if case .connected = link.state, info.ota, BundledFirmware.matching(chip: info.chip) != nil {
                                 Text("The app carries the firmware.bin from its last build. Rebuild the iOS app after pio run and the new version shows up here.")
                             } else if case .connected = link.state, info.ota {
                                 Text("This build of the app has no firmware inside. Run pio run before building the app, or pick firmware.bin from Files.")
@@ -237,6 +254,18 @@ struct SensorView: View {
         }
     }
 
+    /// One alert output on or off, keeping the other: a board without a speaker should not wipe the sound
+    /// setting the Cardputer will use.
+    private func alertBit(_ bit: Int) -> Binding<Bool> {
+        Binding(
+            get: { link.alertMode.rawValue & bit != 0 },
+            set: { on in
+                let raw = on ? link.alertMode.rawValue | bit : link.alertMode.rawValue & ~bit
+                link.alertMode = SensorLink.AlertMode(rawValue: raw) ?? link.alertMode
+            }
+        )
+    }
+
     private func offer(_ firmware: PendingFirmware) {
         pendingFirmware = firmware
     }
@@ -246,23 +275,36 @@ struct SensorView: View {
         guard case .connected = link.state,
               let info = link.info, info.ota,
               link.firmwareUpdate?.isRunning != true,
-              let version = BundledFirmware.current?.version
+              let version = BundledFirmware.matching(chip: info.chip)?.version
         else { return false }
         return version == info.fw
     }
 
     private struct BundledFirmware {
+        var fileName: String
         var data: Data
         var version: String?
+        var chip: String?
 
-        /// Copied into the app by the Xcode build, from pio's firmware.bin.
-        static let current: BundledFirmware? = {
-            guard let url = Bundle.main.url(forResource: "firmware", withExtension: "bin"),
-                  let data = try? Data(contentsOf: url),
-                  (try? FirmwareUpdate.validate(data)) != nil
-            else { return nil }
-            return BundledFirmware(data: data, version: FirmwareUpdate.taggedVersion(data))
+        /// Copied into the app by the Xcode build from each board's pio build: firmware.bin (Cardputer),
+        /// firmware-esp32-c5.bin, firmware-esp32.bin. Whatever was built before the app is there.
+        static let all: [BundledFirmware] = {
+            let urls = Bundle.main.urls(forResourcesWithExtension: "bin", subdirectory: nil) ?? []
+            return urls
+                .filter { $0.lastPathComponent.hasPrefix("firmware") }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+                .compactMap { url in
+                    guard let data = try? Data(contentsOf: url), (try? FirmwareUpdate.validate(data)) != nil else { return nil }
+                    return BundledFirmware(fileName: url.lastPathComponent, data: data,
+                                           version: FirmwareUpdate.taggedVersion(data), chip: FirmwareUpdate.chipName(data))
+                }
         }()
+
+        /// The image built for `chip`. An image whose header names no known chip only goes to a sensor no other
+        /// image fits, as the one image older app builds carried did.
+        static func matching(chip: String) -> BundledFirmware? {
+            all.first { $0.chip == chip } ?? (all.contains { $0.chip != nil } ? nil : all.first)
+        }
     }
 
     private var firmwareFileTypes: [UTType] {

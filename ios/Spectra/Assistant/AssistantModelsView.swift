@@ -26,12 +26,16 @@ struct AssistantModelsView: View {
                     if library.installed.isEmpty { Text("Nothing yet").foregroundStyle(.secondary) }
                     ForEach(library.installed) { item in
                         Button {
-                            Task { await model.select(item.fileName) }
+                            // The embedding model only helps the web search: there is nothing to chat with.
+                            if !item.isEmbedding { Task { await model.select(item.fileName) } }
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(item.displayName).foregroundStyle(.primary)
-                                    Text(Self.size(item.sizeBytes)).font(.footnote).foregroundStyle(.secondary)
+                                    Text(item.isEmbedding
+                                         ? String(localized: "\(Self.size(item.sizeBytes)) · for search by meaning")
+                                         : Self.size(item.sizeBytes))
+                                        .font(.footnote).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 if item.fileName == model.selectedModel { Image(systemName: "checkmark").foregroundStyle(.tint) }

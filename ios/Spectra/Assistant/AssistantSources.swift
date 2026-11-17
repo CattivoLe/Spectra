@@ -13,9 +13,65 @@ struct AssistantSources {
     let probe: LinkProbe
     let joiner: WiFiJoiner
     let speed: SpeedTester
+    let captures: CaptureShelf
+    let memory: AssistantMemory
 
     func attachment(for question: String) -> AppDataAttachment? {
-        AssistantDigest.attachment(for: question, snapshot: snapshot())
+        var current = snapshot()
+        // The dossier is assembled per question: only what is in front of the user, or named in the question,
+        // travels with it. See `AssistantMemory.digest(subjects:)`.
+        current.memory = memory.digest(subjects: AssistantDigest.subjects(in: question, snapshot: current))
+        return AssistantDigest.attachment(for: question, snapshot: current)
+    }
+
+    /// Folds what is on screen into the long-term baselines. Called on the app's own save tick, so it skips the
+    /// expensive parts of a snapshot: no capture is decoded and no threat assessment runs.
+    func recordBaselines(now: Date = Date()) {
+        memory.observe(sightings(), now: now)
+    }
+
+    private func sightings() -> [AssistantMemory.Sighting] {
+        var found: [AssistantMemory.Sighting] = []
+        for device in lan.sortedDevices where !device.isLocalDevice {
+            found.append(AssistantMemory.Sighting(
+                subject: device.macAddress?.description ?? device.ipAddress,
+                label: device.displayName,
+                kind: .host,
+                rssi: nil,
+                ports: device.openPorts.map(\.number),
+                portsKnown: device.portsScanned
+            ))
+        }
+        for network in store.networks.values where network.isInRange {
+            let reading = network.latest
+            found.append(AssistantMemory.Sighting(
+                subject: reading.bssid.description,
+                label: network.revealedSSID ?? reading.ssid ?? reading.bssid.description,
+                kind: .wifi,
+                rssi: reading.rssi
+            ))
+        }
+        for device in ble.devices.values where device.isNearby(at: Date()) {
+            found.append(AssistantMemory.Sighting(
+                subject: device.id.uuidString,
+                label: device.displayName,
+                kind: .bluetooth,
+                rssi: device.rssi
+            ))
+        }
+        return found
+    }
+
+    /// Just enough to choose the opening questions of an empty chat, without building a whole snapshot.
+    func readiness() -> AssistantStarters.Readiness {
+        AssistantStarters.Readiness(
+            sensorConnected: link.isConnected,
+            hasHosts: !lan.devices.isEmpty,
+            hasBluetooth: !ble.devices.isEmpty,
+            hasWifi: !store.networks.isEmpty,
+            hasLinkReport: probe.report?.status != nil,
+            hasCapture: captures.latest != nil || (!link.rawCapturing && link.rawFrameCount > 0)
+        )
     }
 
     func snapshot(now: Date = Date()) -> AssistantSnapshot {
@@ -56,6 +112,7 @@ struct AssistantSources {
             let risks = PortRisk.findings(for: device).filter { $0.level >= .medium }
             return AssistantSnapshot.Host(
                 ip: device.ipAddress,
+                mac: device.macAddress?.description,
                 name: device.displayName,
                 maker: device.identity.manufacturer ?? device.manufacturer,
                 system: device.identity.operatingSystem,
@@ -110,6 +167,41 @@ struct AssistantSources {
             info.access = report.access?.verdict.rawValue
             snapshot.link = info
         }
+        snapshot.capture = captureText()
         return snapshot
+    }
+
+    /// The capture last decoded on the Decode pcap screen, or else the one the sensor still holds from its last run.
+    private func captureText() -> String? {
+        if let entry = captures.latest {
+            return CaptureDigest.text(entry.analysis, name: entry.name, origin: entry.origin, describe: describe)
+        }
+        guard !link.rawCapturing, link.rawFrameCount > 0,
+              let analysis = try? PcapAnalyzer.analyze(link.rawCapturePcap()) else { return nil }
+        var name = "the sensor's last capture"
+        if let bssid = link.rawCaptureNetwork, let network = store.networks[bssid] {
+            name = network.revealedSSID ?? network.latest.ssid ?? bssid.description
+        }
+        return CaptureDigest.text(analysis, name: name, origin: "taken by the Spectra sensor, not opened yet", describe: describe)
+    }
+
+    /// A name for an address seen in a capture: the Wi‑Fi network it belongs to, a LAN device, or the maker.
+    func describe(_ address: String) -> String? {
+        if let bssid = BSSID(string: address) {
+            if let network = store.networks[bssid] {
+                let name = network.revealedSSID ?? network.latest.ssid
+                return name.map { "access point of \"\($0)\"" } ?? "hidden access point"
+            }
+            if bssid.isLocallyAdministered { return "random MAC" }
+            return OUIDatabase.lookup(bytes: bssid.bytes)
+        }
+        if let device = lan.sortedDevices.first(where: { $0.ipAddress == address }) {
+            return device.displayName
+        }
+        if let mac = MACAddress(string: address),
+           let device = lan.sortedDevices.first(where: { $0.macAddress == mac }) {
+            return "\(device.displayName) (\(device.ipAddress))"
+        }
+        return nil
     }
 }

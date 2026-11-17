@@ -334,14 +334,18 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/../firmware/.pio/build/m5stack-cardputer-adv/firmware.bin",
+				"$(SRCROOT)/../firmware/.pio/build/esp32-c5-n4/firmware.bin",
+				"$(SRCROOT)/../firmware/.pio/build/esp32-wroom32-ch340/firmware.bin",
 			);
 			name = "Embed firmware";
 			outputPaths = (
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/firmware.bin",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/firmware-esp32-c5.bin",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/firmware-esp32.bin",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "BIN=\"${SRCROOT}/../firmware/.pio/build/m5stack-cardputer-adv/firmware.bin\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nif [ -f \"$BIN\" ]; then\n  mkdir -p \"$DEST\"\n  cp \"$BIN\" \"$DEST/firmware.bin\"\nfi\n";
+			shellScript = "# Each board's pio build, under the name the app looks for. The app picks the one\n# whose chip matches the connected sensor (FirmwareUpdate.chipName).\nBUILD=\"${SRCROOT}/../firmware/.pio/build\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nmkdir -p \"$DEST\"\nembed() {\n  if [ -f \"$BUILD/$1/firmware.bin\" ]; then\n    cp \"$BUILD/$1/firmware.bin\" \"$DEST/$2\"\n  else\n    rm -f \"$DEST/$2\"\n  fi\n}\nembed m5stack-cardputer-adv firmware.bin\nembed esp32-c5-n4 firmware-esp32-c5.bin\nembed esp32-wroom32-ch340 firmware-esp32.bin\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -506,7 +510,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -548,7 +552,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;

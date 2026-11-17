@@ -27,6 +27,7 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
 
     struct Host: Equatable, Sendable {
         var ip: String
+        var mac: String?
         var name: String
         var maker: String?
         var system: String?
@@ -95,11 +96,18 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
     var bluetooth: [Bluetooth] = []
     var sessions: [Session] = []
     var link: Link?
+    /// The traffic capture last taken or opened, already written up (see `CaptureDigest`). `nil` when there is none.
+    var capture: String?
+    /// Persistent dossier notes saved by the assistant across chats.
+    var memory: String?
 }
 
 /// The parts of the app's data a question may need.
 nonisolated enum AssistantTopic: String, CaseIterable, Sendable {
-    case wifi, threats, lan, bluetooth, history, link
+    case wifi, threats, lan, bluetooth, history, link, capture
+
+    /// What an overview covers: everything around the user. A traffic capture is read only when asked about.
+    static let surroundings: [AssistantTopic] = allCases.filter { $0 != .capture }
 
     /// Short label shown under the answer.
     var label: String {
@@ -110,6 +118,7 @@ nonisolated enum AssistantTopic: String, CaseIterable, Sendable {
         case .bluetooth: String(localized: "Bluetooth")
         case .history: String(localized: "History")
         case .link: String(localized: "Connection")
+        case .capture: String(localized: "Traffic capture")
         }
     }
 
@@ -125,8 +134,8 @@ nonisolated enum AssistantTopic: String, CaseIterable, Sendable {
              "угроз", "атак", "опасн", "безопас", "риск", "уязвим", "взлом", "подозр", "шпион", "камер", "слежк", "следит", "вторжен"]
         case .lan:
             ["lan", "host", "port", "printer", "gateway", "camera", "tv", "nas", "smart", "ip address", "subnet", "who is on", "connected to my",
-             "on my network", "on the network", "in my network",
-             "хост", "порт", "принтер", "шлюз", "камер", "телевизор", "умн", "подключен", "в моей сети", "в сети"]
+             "on my network", "on the network", "in my network", "local network",
+             "хост", "порт", "принтер", "шлюз", "камер", "телевизор", "умн", "подключен", "в моей сети", "в сети", "локальн"]
         case .bluetooth:
             ["bluetooth", "ble", "tracker", "airtag", "tag", "headphone", "earbud", "beacon",
              "блютуз", "блютус", "bluetooth", "трекер", "метк", "наушник", "маяк"]
@@ -136,7 +145,49 @@ nonisolated enum AssistantTopic: String, CaseIterable, Sendable {
         case .link:
             ["internet", "speed", "ping", "latency", "dns", "vpn", "connection", "slow", "lag", "laggy", "captive", "isp", "provider", "upload", "download", "bandwidth",
              "скорост", "интернет", "пинг", "задержк", "днс", "впн", "соединен", "подключени", "медленн", "тормоз", "провайдер", "загрузк"]
+        case .capture:
+            ["pcap", "capture", "captured", "traffic", "packet", "frames", "dump", "wireshark", "sniff", "decode", "recorded",
+             "пкап", "захват", "перехват", "трафик", "пакет", "кадр", "дамп", "расшифр", "записанн", "записал", "сниф"]
         }
+    }
+}
+
+/// The opening questions offered in an empty chat.
+nonisolated enum AssistantStarters {
+    /// What the assistant has to work with right now. Cheap to read — deliberately not a whole `AssistantSnapshot`,
+    /// which reassesses every device and decodes the last capture.
+    struct Readiness: Equatable, Sendable {
+        var sensorConnected = false
+        var hasHosts = false
+        var hasBluetooth = false
+        var hasWifi = false
+        var hasLinkReport = false
+        var hasCapture = false
+
+        var hasAnything: Bool { hasHosts || hasBluetooth || hasWifi || hasLinkReport }
+    }
+
+    /// Up to five questions to start from. Each is worded so that `AssistantActions.requested(in:)` runs the check
+    /// it needs before the model answers: a question that merely invites a tool call gets one only if the model
+    /// feels like it, and a small model usually answers from the snapshot instead — which, on a phone where
+    /// nothing has been scanned yet, is empty. Offers to read something — the summary, the last capture — appear
+    /// only once there is something to read.
+    static func questions(for state: Readiness) -> [String] {
+        var list: [String] = []
+        if state.hasCapture {
+            list.append(String(localized: "Decode the last traffic capture"))
+        }
+        if state.hasAnything {
+            list.append(String(localized: "Give me a security summary: network, internet, and what to fix"))
+        }
+        list.append(String(localized: "Scan my local network and show me what these devices are"))
+        list.append(String(localized: "Scan Bluetooth nearby: is there someone else's tracker?"))
+        if state.sensorConnected {
+            list.append(String(localized: "Scan the Wi‑Fi around me: which channel is freer?"))
+        }
+        list.append(String(localized: "Check my internet connection: DNS, latency, provider"))
+        list.append(String(localized: "Measure my internet speed"))
+        return Array(list.prefix(5))
     }
 }
 
@@ -176,9 +227,40 @@ nonisolated enum AssistantDigest {
         if found.contains(.threats) {
             for topic in [AssistantTopic.wifi, .lan, .bluetooth] where !found.contains(topic) { found.append(topic) }
         }
-        let asksOverview = matches(overviewStems, in: text)
-        if found.isEmpty || (asksOverview && found.count < 2) { return AssistantTopic.allCases }
+        // A question that names a topic gets that topic, even when it also reads like a request for a broad look:
+        // «просканируй Wi‑Fi вокруг» is about Wi‑Fi, and widening it to everything buries the answer in the rest
+        // of the snapshot. Only a question that names nothing gets the whole picture.
+        if found.isEmpty { return AssistantTopic.surroundings }
         return AssistantTopic.allCases.filter(found.contains)
+    }
+
+    /// Everything the question or the snapshot could be about: addresses, BSSIDs and names in front of the user
+    /// now, plus the words of the question itself, so a note about a device that is out of range still comes back
+    /// when the user asks about it by name.
+    static func subjects(in question: String, snapshot: AssistantSnapshot) -> Set<String> {
+        var found: Set<String> = []
+        func add(_ value: String?) {
+            guard let value = AssistantMemory.normalize(value) else { return }
+            found.insert(value)
+        }
+        for host in snapshot.hosts {
+            add(host.ip)
+            add(host.mac)
+            add(host.name)
+        }
+        for network in snapshot.wifi where network.inRange {
+            add(network.bssid)
+            add(network.name)
+        }
+        for device in snapshot.bluetooth where device.nearby {
+            add(device.name)
+        }
+        // Addresses survive the split: dots, colons and dashes are part of a word here, unlike in `matches`.
+        for word in question.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber && !".:-".contains($0) })
+        where word.count >= 3 {
+            found.insert(String(word))
+        }
+        return found
     }
 
     /// The attachment for a question. A question about the app's data gets the matching sections; a question that
@@ -204,11 +286,14 @@ nonisolated enum AssistantDigest {
             case .bluetooth: bluetoothSection(snapshot, overview: overview)
             case .history: historySection(snapshot, now: now)
             case .link: linkSection(snapshot, now: now)
+            case .capture: captureSection(snapshot)
             }
             guard !section.isEmpty else { continue }
             parts.append(section.joined(separator: "\n"))
             used.append(topic)
         }
+
+        if let memory = snapshot.memory { parts.append(memory) }
 
         var body = parts.joined(separator: "\n\n")
         if body.count > budget { body = String(body.prefix(budget)) + "\n…(cut: the snapshot is longer than fits)" }
@@ -232,6 +317,7 @@ nonisolated enum AssistantDigest {
         case .bluetooth: bluetoothSection(snapshot, overview: false)
         case .history: historySection(snapshot, now: now)
         case .link: linkSection(snapshot, now: now)
+        case .capture: captureSection(snapshot)
         }
         return lines.joined(separator: "\n")
     }
@@ -312,7 +398,9 @@ nonisolated enum AssistantDigest {
         let limit = overview ? 8 : 16
         var lines = ["Hosts on \(clean(s.networkLabel ?? "the local network")) (\(s.hosts.count)\(s.lanScanning ? ", scan still running" : "")):"]
         for host in ranked.prefix(limit) {
-            var parts = [host.ip, clean(host.name)]
+            var parts = [host.ip]
+            if let mac = host.mac { parts.append(mac) }
+            parts.append(clean(host.name))
             if let maker = host.maker, !host.name.contains(maker) { parts.append(clean(maker)) }
             if let system = host.system { parts.append(clean(system)) }
             if host.isGateway { parts.append("GATEWAY") }
@@ -359,6 +447,14 @@ nonisolated enum AssistantDigest {
             lines.append("- \(clock(session.date)) · \(session.kind) · \(session.count) items · from \(clean(session.source, limit: 30))\(place)")
         }
         return lines
+    }
+
+    private static func captureSection(_ s: AssistantSnapshot) -> [String] {
+        guard let capture = s.capture else {
+            return ["Traffic capture: none yet. The user can take one from a Wi‑Fi network's card (Capture traffic) or open a .pcap "
+                    + "under History → Decode pcap; you can also take a short one yourself with capture_pcap."]
+        }
+        return [capture]
     }
 
     private static func linkSection(_ s: AssistantSnapshot, now: Date) -> [String] {

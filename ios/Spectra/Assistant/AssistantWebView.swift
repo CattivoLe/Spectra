@@ -20,7 +20,7 @@ struct AssistantWebView: View {
                 ))
             } footer: {
                 Text(web.isEnabled
-                     ? "Search is switched on per chat with the globe button next to the message field."
+                     ? "Search works in every chat. To stop it, turn this switch off."
                      : "Right now nothing leaves the phone except model downloads you start yourself.")
             }
 
@@ -30,14 +30,14 @@ struct AssistantWebView: View {
                         ForEach(WebAccess.ProviderKind.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     switch web.provider {
-                    case .wikipedia:
-                        Picker("Language", selection: $web.wikipediaLanguage) {
-                            Text("Русский").tag("ru")
-                            Text("English").tag("en")
-                        }
                     case .searxng:
                         TextField("https://search.example.org", text: $web.searxngAddress)
                             .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Picker("Language", selection: $web.searchLanguage) {
+                            Text("Русский").tag("ru")
+                            Text("English").tag("en")
+                            Text("Automatic").tag("auto")
+                        }
                     case .brave:
                         SecureField("API key", text: $web.braveKey)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -49,9 +49,28 @@ struct AssistantWebView: View {
                     Text(web.provider.explanation)
                 }
 
-                Section("How to search") {
+                Section {
                     Toggle("Show the query before sending", isOn: $web.confirmEachSearch)
-                    Stepper("Pages in the answer: \(web.resultCount)", value: $web.resultCount, in: 1...5)
+                    Toggle("Query from the conversation", isOn: $web.smartQuery)
+                    Toggle("Read pages in full", isOn: $web.readPages)
+                    if web.readPages {
+                        Toggle("Search again if the answer is missing", isOn: $web.retryIfMissing)
+                        if model.library.embeddingModel != nil {
+                            Toggle("Pick by meaning", isOn: $web.useMeaning)
+                        } else {
+                            Label("To pick by meaning, download \u{201c}EmbeddingGemma\u{201d} under Models (330 MB)", systemImage: "sparkle.magnifyingglass")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Stepper("Pages to read: \(web.pagesToRead)", value: $web.pagesToRead, in: 1...5)
+                    } else {
+                        Stepper("Result snippets: \(web.resultCount)", value: $web.resultCount, in: 1...5)
+                    }
+                } header: {
+                    Text("How to search")
+                } footer: {
+                    Text(web.readPages
+                         ? "The phone downloads the top pages, takes their main text and gives the model only the parts that fit the question. That finds exact numbers and dates, but the answer starts a few seconds later, and the sites see the phone's address, as when you open a page."
+                         : "The model gets only the short snippets from the results: faster, but they often lack exact numbers.")
                 }
 
                 Section {
@@ -97,7 +116,7 @@ struct AssistantWebView: View {
                 let results = try await provider.search("Wi-Fi", limit: 1)
                 testResult = results.isEmpty
                     ? String(localized: "The server answers, but found nothing.")
-                    : String(localized: "Works: found “\(results[0].title)”.")
+                    : String(localized: "Works: found \u{201c}\(results[0].title)\u{201d}.")
             } catch {
                 testResult = error.localizedDescription
             }
@@ -171,7 +190,7 @@ struct AssistantSearchApprovalSheet: View {
                 Section {
                     TextField("Query", text: $query, axis: .vertical).lineLimit(1...4)
                 } header: {
-                    Text("Will be sent to “\(provider)”")
+                    Text("Will be sent to \u{201c}\(provider)\u{201d}")
                 } footer: {
                     Text("Only this text goes out. Edit it if it contains anything extra, such as names or addresses.")
                 }

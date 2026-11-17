@@ -35,7 +35,7 @@
 
 // The phone app finds this tag in a firmware.bin to show which version it
 // carries. The version below points into it, so the linker keeps the tag.
-static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.10.0";
+static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.10.1";
 static constexpr const char* kFirmwareVersion = kFirmwareTag + 11;
 
 // Wire protocol constants (UUIDs, command/message/update bytes) live in
@@ -839,8 +839,8 @@ static void updateInfo() {
   snprintf(json, sizeof(json),
            "{\"proto\":%u,\"fw\":\"%s\",\"name\":\"%s\",\"chip\":\"" SPECTRA_CHIP_NAME
            "\",\"bands\":[" SPECTRA_BANDS_JSON "],\"interval\":%u,"
-           "\"alerts\":%u,\"watch\":%u%s%s%s%s}",
-           kProtocolVersion, kFirmwareVersion, kSensorName, scanIntervalSec, alertFlags, watchCount,
+           "\"alerts\":%u,\"outputs\":%u,\"watch\":%u%s%s%s%s}",
+           kProtocolVersion, kFirmwareVersion, kSensorName, scanIntervalSec, alertFlags, SPECTRA_ALERT_OUTPUTS, watchCount,
            otaUpdatable ? ",\"ota\":true" : "", batJson, capJson, knownJson);
   infoChar->setValue(json);
 }
@@ -995,7 +995,7 @@ class ControlCallbacks : public NimBLECharacteristicCallbacks {
         }
         const uint8_t *bytes = value.data();
         const uint8_t ch = bytes[1];
-        if (ch > 14) {
+        if (!rawCaptureChannelAllowed(ch, SPECTRA_WIFI_5G != 0)) {
           break;
         }
         taskENTER_CRITICAL(&radioMux);
@@ -1570,6 +1570,13 @@ static void ledSet(uint8_t r, uint8_t g, uint8_t b) {
     return;
   }
   M5.Led.setAllColor(r, g, b);
+  ledLit = (r | g | b) != 0;
+#elif defined(SPECTRA_RGB_LED_PIN)
+  // Alerts should be seen across a room, like the Cardputer's at full
+  // brightness, but this WS2812 sits bare on the board with no diffuser: half
+  // power is still bright and does not glare up close.
+  constexpr uint16_t kLevel = 128;
+  rgbLedWrite(SPECTRA_RGB_LED_PIN, r * kLevel / 255, g * kLevel / 255, b * kLevel / 255);
   ledLit = (r | g | b) != 0;
 #else
   (void)r;
@@ -2957,9 +2964,9 @@ static void startRawCapture() {
   esp_wifi_set_promiscuous_filter(&filt);
   esp_wifi_set_promiscuous_rx_cb(promiscuousCallback);
   esp_wifi_set_promiscuous(true);
-  if (rawChannel >= 1 && rawChannel <= 14) {
-    esp_wifi_set_channel(rawChannel, WIFI_SECOND_CHAN_NONE);
-  } else {
+  // A 5 GHz channel the country rules reject leaves the radio where it was:
+  // report the channel it is really on, so the phone's .pcap says the truth.
+  if (rawChannel == 0 || esp_wifi_set_channel(rawChannel, WIFI_SECOND_CHAN_NONE) != ESP_OK) {
     uint8_t ch = 0;
     esp_wifi_get_channel(&ch, nullptr);
     rawChannel = ch;

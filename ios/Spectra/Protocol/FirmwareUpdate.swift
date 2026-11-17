@@ -146,6 +146,19 @@ nonisolated enum FirmwareUpdate {
         guard image[image.startIndex] == magic else { throw ImageError.notAnAppImage }
     }
 
+    /// The chip an ESP-IDF app image is built for, from the `chip_id` field of its header (bytes 12–13, little-endian),
+    /// named the way the sensor reports `chip`. `nil` for an unknown chip or a damaged header.
+    static func chipName(_ image: Data) -> String? {
+        let bytes = [UInt8](image.prefix(14))
+        guard bytes.count == 14, bytes[0] == magic else { return nil }
+        switch UInt16(bytes[12]) | UInt16(bytes[13]) << 8 {
+        case 0x0000: return "ESP32"
+        case 0x0009: return "ESP32-S3"
+        case 0x0017: return "ESP32-C5"
+        default: return nil
+        }
+    }
+
     /// The version a Spectra image carries in its "SPECTRA-FW:x.y.z" tag.
     /// Images built before the tag existed have none.
     static func taggedVersion(_ image: Data) -> String? {

@@ -16,6 +16,7 @@ struct HistoryView: View {
     @AppStorage("autosaveHistory") private var autosave = true
     @State private var confirmClear = false
     @State private var showSettings = false
+    @State private var kindFilter: HistoryEntry.Kind?
     /// Expanded group keys. Today starts open; every other group stays folded until tapped.
     @State private var expanded: Set<String> = [Self.dateGroupID(Calendar.current.startOfDay(for: .now))]
     @State private var path = NavigationPath()
@@ -23,8 +24,6 @@ struct HistoryView: View {
     @State private var showUnlocated = false
     @State private var camera: MapCameraPosition = .automatic
     @State private var shareItem: ShareItem?
-    @State private var pickingPcap = false
-    @State private var pcapURL: URL?
     /// Shows the sessions imported from another phone instead of this iPhone's own.
     @State private var importedShelf = false
     @State private var importing = false
@@ -36,7 +35,18 @@ struct HistoryView: View {
 
     private var shown: [HistoryEntry] {
         let imported = importedShelf && hasImported
-        return history.entries.filter { ($0.importedFrom != nil) == imported }
+        let shelf = history.entries.filter { ($0.importedFrom != nil) == imported }
+        guard let kind = kindFilter else { return shelf }
+        return shelf.filter { $0.kind == kind }
+    }
+
+    private var availableKinds: [HistoryEntry.Kind] {
+        var seen: Set<HistoryEntry.Kind> = []
+        let imported = importedShelf && hasImported
+        for entry in history.entries where (entry.importedFrom != nil) == imported {
+            seen.insert(entry.kind)
+        }
+        return HistoryEntry.Kind.allCases.filter(seen.contains)
     }
 
     /// One collapsible group of sessions: a day, or a place.
@@ -124,16 +134,6 @@ struct HistoryView: View {
             .navigationDestination(for: UUID.self) { id in
                 HistoryDetailView(id: id)
             }
-            .navigationDestination(item: $pcapURL) { url in
-                PcapView(fileURL: url)
-            }
-            .fileImporter(
-                isPresented: $pickingPcap,
-                allowedContentTypes: PcapView.captureFileTypes,
-                allowsMultipleSelection: false
-            ) { result in
-                if case .success(let urls) = result, let url = urls.first { pcapURL = url }
-            }
             .confirmationDialog("Clear history?", isPresented: $confirmClear, titleVisibility: .visible) {
                 Button("Clear history", role: .destructive) {
                     history.clear(imported: importedShelf && hasImported)
@@ -165,16 +165,6 @@ struct HistoryView: View {
 
     @ToolbarContentBuilder
     private var historyToolbar: some ToolbarContent {
-        // Live map is hidden for now.
-        // ToolbarItem(placement: .topBarLeading) {
-        //     Button("Live map", systemImage: "location.circle") { showLive = true }
-        // }
-        ToolbarItem(placement: .topBarLeading) {
-            Button("Decode pcap", systemImage: "doc.text.magnifyingglass") { pickingPcap = true }
-        }
-        ToolbarItem(placement: .topBarLeading) {
-            Button("Import", systemImage: "square.and.arrow.down") { importing = true }
-        }
         if !shown.isEmpty {
             ToolbarItem(placement: .topBarTrailing) {
                 groupingButton(.date)
@@ -186,19 +176,22 @@ struct HistoryView: View {
                 ToolbarSpacer(.fixed, placement: .topBarTrailing)
             }
         }
-        if !shown.isEmpty {
-            ToolbarItem(placement: .topBarTrailing) {
-                exportMenu(entries: shown)
-            }
-        }
         ToolbarItem(placement: .topBarTrailing) {
-            Button("Settings", systemImage: "gearshape") { showSettings = true }
-        }
-        if !shown.isEmpty {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Clear", systemImage: "trash", role: .destructive) {
-                    confirmClear = true
+            Menu {
+                Button("Import…", systemImage: "square.and.arrow.down") { importing = true }
+                if !shown.isEmpty {
+                    HistoryExportMenu(entries: shown, shareItem: $shareItem)
                 }
+                Divider()
+                Button("Settings…", systemImage: "gearshape") { showSettings = true }
+                if !shown.isEmpty {
+                    Divider()
+                    Button("Clear history", systemImage: "trash", role: .destructive) {
+                        confirmClear = true
+                    }
+                }
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
             }
         }
     }
@@ -234,8 +227,30 @@ struct HistoryView: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
+    private var kindFilterChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(availableKinds, id: \.self) { kind in
+                    FilterChip(title: LocalizedStringKey(kind.title), systemImage: kind.systemImage, isOn: kindFilter == kind) {
+                        kindFilter = kindFilter == kind ? nil : kind
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 2)
+        }
+    }
+
     private var sessionList: some View {
         List {
+            if availableKinds.count > 1 {
+                Section {
+                    kindFilterChips
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
+                .listSectionSpacing(.compact)
+            }
             ForEach(groups) { group in
                 let isExpanded = expanded.contains(group.id)
                 Section {

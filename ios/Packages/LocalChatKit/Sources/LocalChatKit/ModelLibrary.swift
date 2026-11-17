@@ -16,6 +16,8 @@ public struct InstalledModel: Identifiable, Hashable, Sendable {
     }
 
     public static let menuNameLength = 16
+    /// An embedding model: it must not appear among the models one can chat with.
+    public var isEmbedding: Bool { catalog?.isEmbedding ?? fileName.lowercased().contains("embedding") }
 
     /// "Llama-3.2-3B-Instruct-abliterated.Q4_K_M.gguf" → "Llama 3.2 3B abliterated": no extension, no
     /// quantization, no "instruct"/"it"/"chat"/"GGUF" tags, words split on dashes and underscores (dots stay:
@@ -117,10 +119,17 @@ public final class ModelLibrary {
     public func refreshInstalled() {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         installed = names.filter { $0.lowercased().hasSuffix(".gguf") }.sorted().map { name in
+            // Models put in the folder past the app (through Files or from a computer) must not go to iCloud either.
+            ModelFiles.excludeFromBackup(directory.appending(path: name))
             let size = (try? FileManager.default.attributesOfItem(atPath: directory.appending(path: name).path)[.size] as? Int64) ?? 0
             return InstalledModel(fileName: name, sizeBytes: size ?? 0, catalog: catalog.first { $0.fileName == name })
         }
     }
+
+    /// Models one can chat with.
+    public var chatModels: [InstalledModel] { installed.filter { !$0.isEmbedding } }
+    /// The installed model for search by meaning, if any.
+    public var embeddingModel: InstalledModel? { installed.first { $0.isEmbedding } }
 
     public func isInstalled(_ model: CatalogModel) -> Bool {
         installed.contains { $0.fileName == model.fileName }

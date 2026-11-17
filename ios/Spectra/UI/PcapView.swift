@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import LocalChatKit
 
 /// Imports a `.pcap`/`.pcapng` file and shows an approximate decode: a summary,
 /// a protocol and application breakdown, the busiest endpoints and
@@ -20,6 +21,10 @@ struct PcapView: View {
     @State private var phase: Phase = .idle
     @State private var shareItem: ShareItem?
     @State private var filter = PacketFilter()
+    @State private var askChat: Chat?
+    @State private var askError: String?
+    @Environment(CaptureShelf.self) private var captures
+    @Environment(AssistantModel.self) private var assistant
 
     private func save(_ capture: Capture) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(capture.name)
@@ -69,6 +74,12 @@ struct PcapView: View {
         .navigationTitle("Decode pcap")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if case .loaded(let name, let analysis) = phase {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Ask the assistant", systemImage: "sparkles") { ask(name: name, analysis: analysis) }
+                        .accessibilityHint("Opens a chat with the on-device assistant about this capture")
+                }
+            }
             if let capture {
                 // A capture handed over in memory is saved from here; there is no file to swap.
                 ToolbarItem(placement: .topBarTrailing) {
@@ -81,6 +92,18 @@ struct PcapView: View {
             }
         }
         .shareSheet(item: $shareItem)
+        .navigationDestination(item: $askChat) { chat in
+            AssistantChatView(session: assistant.session(for: chat))
+        }
+        .alert("Error", isPresented: Binding(get: { askError != nil }, set: { if !$0 { askError = nil } })) {
+            Button("OK") { askError = nil }
+        } message: { Text(askError ?? "") }
+        .onChange(of: loadedName) {
+            // Whatever was decoded last is what the assistant talks about when asked about "the capture".
+            if case .loaded(let name, let analysis) = phase {
+                captures.keep(name: name, analysis: analysis, fromSensor: capture != nil)
+            }
+        }
         .fileImporter(
             isPresented: $picking,
             allowedContentTypes: Self.captureFileTypes,
@@ -99,6 +122,26 @@ struct PcapView: View {
         .task(id: fileURL) {
             guard capture == nil, let fileURL, case .idle = phase else { return }
             beginLoading(fileURL)
+        }
+    }
+
+    /// Changes once per decoded capture, to notice a new one.
+    private var loadedName: String? {
+        if case .loaded(let name, _) = phase { return name }
+        return nil
+    }
+
+    /// Opens a new assistant chat right here, with this capture as the one it reads, and asks about it.
+    private func ask(name: String, analysis: CaptureAnalysis) {
+        captures.keep(name: name, analysis: analysis, fromSensor: capture != nil)
+        Task {
+            do {
+                let chat = try await assistant.store.createChat()
+                assistant.queue(String(localized: "Decode this traffic capture: what is in it, and is anything unusual?"), for: chat.id)
+                askChat = chat
+            } catch {
+                askError = error.localizedDescription
+            }
         }
     }
 

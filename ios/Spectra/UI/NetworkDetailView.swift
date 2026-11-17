@@ -291,6 +291,7 @@ struct NetworkDetailView: View {
         let channel = network.latest.channel
         // A capture started from another network's card is not this one's to show.
         let mine = link.rawCaptureNetwork == network.id
+        let support = link.captureSupport(channel: channel)
         Section {
             if mine, link.rawCapturing {
                 HStack(spacing: 10) {
@@ -327,12 +328,20 @@ struct NetworkDetailView: View {
                 } label: {
                     Label("Capture traffic → save .pcap", systemImage: "dot.radiowaves.left.and.right")
                 }
+                .disabled(support != .ok)
             }
         } header: {
             Text("Traffic capture")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Pins the sensor to channel \(channel) and streams the frames it hears into a .pcap for Wireshark. Bluetooth is narrow, so this is a short, thinned sample — not a full capture — and it stops on its own near \(SensorLink.rawFrameCap) frames.")
+                switch support {
+                case .ok:
+                    Text("Pins the sensor to channel \(channel) and streams the frames it hears into a .pcap for Wireshark. Bluetooth is narrow, so this is a short, thinned sample — not a full capture — and it stops on its own near \(SensorLink.rawFrameCap) frames.")
+                case .bandNotHeard:
+                    Text("This network is on 5 GHz (channel \(channel)), and this sensor hears only 2.4 GHz. Capturing it needs the ESP32-C5 sensor.")
+                case .firmwareTooOld(let version):
+                    Text("This network is on 5 GHz (channel \(channel)). The sensor's firmware \(version) captures on 2.4 GHz only: update the sensor to firmware \(SensorLink.fiveGHzCaptureFirmware) or newer.")
+                }
                 if mine, link.rawDropped {
                     Text("Some frames were dropped on the way over Bluetooth, so there are gaps.")
                 }

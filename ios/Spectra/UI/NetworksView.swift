@@ -11,6 +11,8 @@ struct NetworksView: View {
     @State private var search = ""
     @State private var showChannels = false
     @State private var expandedThreats: Set<String> = []
+    @State private var pickingPcap = false
+    @State private var pcapURL: URL?
     @AppStorage("networkSort") private var sort: Sort = .signal
     @AppStorage("showOutOfRange") private var showOutOfRange = false
     @AppStorage("wifiOpenOnly") private var openOnly = false
@@ -104,7 +106,7 @@ struct NetworksView: View {
                 }
                 FilterChip(title: "Out of range", systemImage: nil, isOn: showOutOfRange) { showOutOfRange.toggle() }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
             .padding(.vertical, 2)
         }
     }
@@ -263,7 +265,7 @@ struct NetworksView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button("Sensor…", systemImage: "antenna.radiowaves.left.and.right", action: openSensor)
+                        Button("Decode pcap…", systemImage: "doc.text.magnifyingglass") { pickingPcap = true }
                         Divider()
                         Picker("Sort by", selection: $sort) {
                             ForEach(Sort.allCases) { Text($0.label).tag($0) }
@@ -277,6 +279,16 @@ struct NetworksView: View {
                         Label("Options", systemImage: "line.3.horizontal.decrease")
                     }
                 }
+            }
+            .fileImporter(
+                isPresented: $pickingPcap,
+                allowedContentTypes: PcapView.captureFileTypes,
+                allowsMultipleSelection: false
+            ) { result in
+                if case .success(let urls) = result, let url = urls.first { pcapURL = url }
+            }
+            .navigationDestination(item: $pcapURL) { url in
+                PcapView(fileURL: url)
             }
         }
     }
@@ -323,7 +335,7 @@ struct SensorBar: View {
         .sensoryFeedback(.impact(weight: .light), trigger: taps)
         .accessibilityLabel(title)
         .accessibilityValue(spokenDetail)
-        .accessibilityHint(link.isConnected ? Text("Scans now") : Text("Opens the Sensor screen"))
+        .accessibilityHint(Text("Opens the Sensor screen"))
         .onChange(of: store.isScanning, initial: true) { _, scanning in
             scanStarted = scanning ? .now : nil
         }
@@ -331,11 +343,7 @@ struct SensorBar: View {
 
     private func tap() {
         taps += 1
-        if link.isConnected {
-            link.scanNow()
-        } else {
-            openSensor()
-        }
+        openSensor()
     }
 
     private var symbol: String {
@@ -499,7 +507,7 @@ struct NetworkRow: View {
                             .padding(.vertical, 1)
                             .background(.green, in: .capsule)
                             .lineLimit(1)
-                            .fixedSize()
+                            .truncationMode(.middle)
                     }
                 }
                 Group {

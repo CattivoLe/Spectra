@@ -20,6 +20,8 @@ struct DeviceDetailView: View {
     @Environment(\.openURL) private var openURL
     /// A stream address no app on this iPhone would open.
     @State private var unopenedStream: String?
+    /// Editable stream URL shown before opening.
+    @State private var editableStreamURL: String?
 
     var body: some View {
         if let device = snapshot ?? lookup.flatMap({ scanner.devices[$0] }) {
@@ -175,12 +177,9 @@ struct DeviceDetailView: View {
                                 Link(destination: url) { portRow(port, web: true) }
                                     .buttonStyle(.plain)
                                     .accessibilityHint(Text("Opens \(url.absoluteString) in the browser"))
-                            } else if let stream = device.streamAddress(port.number), let url = URL(string: stream) {
+                            } else if let stream = device.streamAddress(port.number) {
                                 Button {
-                                    // iOS has no player for rtsp:// or rtmp:// of its own.
-                                    openURL(url) { accepted in
-                                        if !accepted { unopenedStream = stream }
-                                    }
+                                    editableStreamURL = stream
                                 } label: {
                                     portRow(port, web: false, stream: true)
                                 }
@@ -261,6 +260,28 @@ struct DeviceDetailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("No app on this iPhone opens \(unopenedStream ?? ""). Install a player such as VLC, then tap the port again.")
+        }
+        .alert(
+            "Stream address",
+            isPresented: Binding(get: { editableStreamURL != nil }, set: { if !$0 { editableStreamURL = nil } })
+        ) {
+            TextField("rtsp://…", text: Binding(
+                get: { editableStreamURL ?? "" },
+                set: { editableStreamURL = $0 }
+            ))
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+            .keyboardType(.URL)
+            Button("Open") {
+                guard let string = editableStreamURL, let url = URL(string: string) else { return }
+                openURL(url) { accepted in
+                    if !accepted { unopenedStream = string }
+                }
+            }
+            Button("Copy", role: .destructive) { UIPasteboard.general.string = editableStreamURL }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Edit the path if the camera needs one (e.g. /cam, /live).")
         }
         .sheet(isPresented: $editingLabel) {
             DeviceLabelEditor(device: device)

@@ -159,8 +159,19 @@ public protocol InferenceEngine: Sendable {
     /// Сколько токенов займёт этот диалог в контексте модели, без обрезки старого. `nil`, если модель не загружена
     /// или движок не умеет считать. По нему рисуется «градусник» заполнения контекста.
     func countTokens(messages: [ChatMessage], thinking: Bool) async -> Int?
+    /// A short side answer in one piece (no stream), always the most likely continuation.
+    /// The engine may run it in a separate context so the conversation's cache stays intact.
+    func complete(messages: [ChatMessage], maxTokens: Int) async throws -> String
 }
 
 extension InferenceEngine {
     public func countTokens(messages: [ChatMessage], thinking: Bool) async -> Int? { nil }
+
+    public func complete(messages: [ChatMessage], maxTokens: Int) async throws -> String {
+        var text = ""
+        for try await event in generate(messages: messages, params: GenerationParams(maxTokens: maxTokens, temperature: 0, thinking: false)) {
+            if case .text(let piece) = event { text += piece }
+        }
+        return text
+    }
 }

@@ -18,6 +18,9 @@ struct SpectraApp: App {
     @State private var resourceWatch = ResourceWatch()
     @State private var routeTracer = RouteTracer()
     @State private var assistant = AssistantModel()
+    /// The capture last decoded, for the assistant to talk about.
+    @State private var captures = CaptureShelf()
+    @State private var assistantMemory = AssistantMemory()
 
     init() {
         let store = NetworkStore()
@@ -33,6 +36,7 @@ struct SpectraApp: App {
             RootView()
                 .assistantLock(assistant)
                 .environment(assistant)
+                .environment(captures)
                 .environment(store)
                 .environment(history)
                 .environment(link)
@@ -62,12 +66,12 @@ struct SpectraApp: App {
                     location.start()
                     let sources = AssistantSources(
                         store: store, lan: lanScanner, ble: bleScanner, history: history,
-                        link: link, probe: linkProbe, joiner: joiner, speed: speedTester
+                        link: link, probe: linkProbe, joiner: joiner, speed: speedTester, captures: captures,
+                        memory: assistantMemory
                     )
                     assistant.dataSource = { question in sources.attachment(for: question) }
-                    // The assistant can trigger a fresh scan or check itself; see AssistantActions for what it
-                    // cannot do (deauth, LoRa, firmware — anything that transmits stays behind the app's own buttons).
-                    assistant.actions = AssistantActions(sources: sources)
+                    assistant.memory = assistantMemory
+                    assistant.actions = AssistantActions(sources: sources, memory: assistantMemory)
                 }
         }
     }
@@ -82,6 +86,7 @@ struct RootView: View {
     @Environment(NetworkStore.self) private var store
     @Environment(LANScanner.self) private var lanScanner
     @Environment(BLEScanner.self) private var bleScanner
+    @Environment(AssistantModel.self) private var assistant
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("autosaveHistory") private var autosave = true
     @AppStorage("notifyNewDevices") private var notifyNewDevices = true
@@ -102,6 +107,9 @@ struct RootView: View {
             source: "This iPhone"
         )
         history.upsertBluetooth(Array(bleScanner.devices.values), source: "This iPhone")
+        // The same tick teaches the assistant what is usual for each device, so "is this normal for it?" has
+        // something to compare against later.
+        assistant.actions?.sources.recordBaselines()
     }
 
     /// One notice per finished scan, for the hosts that scan marked new.
