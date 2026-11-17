@@ -19,6 +19,22 @@ struct AssistantView: View {
                 if let warning = model.storageWarning {
                     Text(warning).font(.footnote).foregroundStyle(.red)
                 }
+                ForEach(chats) { chat in
+                    NavigationLink(value: chat) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(chat.title.isEmpty ? String(localized: "New chat") : chat.title).lineLimit(1)
+                            if let modelName = chat.modelName {
+                                Label(modelName, systemImage: "cpu").labelStyle(.titleAndIcon)
+                                    .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Text(chat.updatedAt, format: .relative(presentation: .named))
+                                .font(.caption).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                .onDelete(perform: delete)
+            }
+            .overlay {
                 if chats.isEmpty {
                     ContentUnavailableView {
                         Label("No chats yet", systemImage: "bubble.left.and.bubble.right")
@@ -35,22 +51,7 @@ struct AssistantView: View {
                                 .buttonStyle(.borderedProminent)
                         }
                     }
-                    .listRowSeparator(.hidden)
                 }
-                ForEach(chats) { chat in
-                    NavigationLink(value: chat) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(chat.title.isEmpty ? String(localized: "New chat") : chat.title).lineLimit(1)
-                            if let modelName = chat.modelName {
-                                Label(modelName, systemImage: "cpu").labelStyle(.titleAndIcon)
-                                    .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                            Text(chat.updatedAt, format: .relative(presentation: .named))
-                                .font(.caption).foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-                .onDelete(perform: delete)
             }
             .navigationTitle("Assistant")
             .navigationDestination(for: Chat.self) { chat in
