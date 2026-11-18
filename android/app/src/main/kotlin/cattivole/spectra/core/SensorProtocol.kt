@@ -728,6 +728,8 @@ data class SensorInfo(
     val alerts: Int? = null,
     /** How many addresses the sensor watches for. Absent before v9. */
     val watchCount: Int? = null,
+    /** What the board can alert with, in the bits of [alerts] (bit0 sound, bit1 LED). Absent before firmware 0.10.1. */
+    val outputs: Int? = null,
 ) {
     companion object {
         fun decode(json: String): SensorInfo? {
@@ -754,6 +756,7 @@ data class SensorInfo(
                 known = jsonStrings(json, "known"),
                 alerts = jsonInt(json, "alerts"),
                 watchCount = jsonInt(json, "watch"),
+                outputs = jsonInt(json, "outputs"),
             )
         }
 

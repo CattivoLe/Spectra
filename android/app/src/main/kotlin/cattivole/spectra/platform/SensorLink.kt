@@ -366,6 +366,21 @@ class SensorLink(
         publish()
     }
 
+    /** Whether the connected sensor can capture on a channel. */
+    sealed class CaptureSupport {
+        data object Ok : CaptureSupport()
+        /** A 5 GHz channel on a sensor that hears 2.4 GHz only (Cardputer, WROOM-32). */
+        data object BandNotHeard : CaptureSupport()
+        /** A 5 GHz channel on a sensor whose firmware ignores captures above channel 14. */
+        data class FirmwareTooOld(val version: String) : CaptureSupport()
+    }
+
+    fun captureSupport(channel: Int): CaptureSupport {
+        val info = info
+        if (demo != null || info == null) return CaptureSupport.Ok
+        return captureSupport(channel, info.bands, info.fw)
+    }
+
     /** Begin a raw-frame capture on [channel]. [bssid] is an optional filter;
      *  left null, the sensor sends every frame on the channel. */
     fun startRawCapture(channel: Int, bssid: MacAddress? = null, network: MacAddress? = bssid) {
@@ -1052,6 +1067,27 @@ class SensorLink(
         const val RAW_FRAME_CAP = 2000
         const val RAW_BYTE_CAP = 1_000_000
         val liveIntervals = listOf(0, 10, 30, 60, 120, 180, 240)
+
+        /** The firmware that first tunes a raw capture to 5 GHz channels. */
+        const val FIVE_GHZ_CAPTURE_FIRMWARE = "0.10.1"
+
+        fun captureSupport(channel: Int, bands: List<String>, firmware: String): CaptureSupport {
+            if (channel <= 14) return CaptureSupport.Ok
+            if ("5" !in bands) return CaptureSupport.BandNotHeard
+            if (compareVersions(firmware, FIVE_GHZ_CAPTURE_FIRMWARE) < 0) return CaptureSupport.FirmwareTooOld(firmware)
+            return CaptureSupport.Ok
+        }
+
+        /** Numeric comparison of dotted versions, the way "0.9.2" < "0.10.1". */
+        fun compareVersions(a: String, b: String): Int {
+            val left = a.split('.', '-').map { part -> part.takeWhile(Char::isDigit).toIntOrNull() ?: 0 }
+            val right = b.split('.', '-').map { part -> part.takeWhile(Char::isDigit).toIntOrNull() ?: 0 }
+            for (i in 0 until maxOf(left.size, right.size)) {
+                val diff = left.getOrElse(i) { 0 }.compareTo(right.getOrElse(i) { 0 })
+                if (diff != 0) return diff
+            }
+            return 0
+        }
 
         fun intervalTitle(seconds: Int): String = when {
             seconds <= 0 -> "Only when asked"

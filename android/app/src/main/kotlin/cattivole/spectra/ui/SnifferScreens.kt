@@ -28,6 +28,8 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Save
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.WifiTethering
 import androidx.compose.material3.AlertDialog
@@ -217,10 +219,41 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
         },
         onBack = nav::back,
         actions = {
+            if (flows.isNotEmpty()) {
+                AskAssistantButton(
+                    model,
+                    nav,
+                    question = { tr("Analyze the recorded traffic of this phone: which servers and apps did it talk to, and is anything unusual?") },
+                    prepare = {
+                        val name = session?.let { tr("saved session of %s", dateTime(it.stoppedAt)) }
+                            ?: if (traffic.running) "recording in progress" else "current recording"
+                        model.captures.keep(flows, name)
+                    },
+                )
+            }
             if (live && flows.isNotEmpty()) {
-                IconButton(onClick = {
-                    if (traffic.save() != null) notify(tr("Recording saved")) else notify(tr("Nothing to save"))
-                }) { Icon(Icons.Rounded.Save, contentDescription = tr("Save recording")) }
+                if (traffic.isCurrentSaved) {
+                    Icon(
+                        Icons.Rounded.CheckCircle,
+                        contentDescription = tr("Saved"),
+                        tint = Spectra.colors.success,
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                    )
+                } else {
+                    IconButton(onClick = {
+                        val updating = traffic.currentSessionId != null
+                        when {
+                            traffic.save() == null -> notify(tr("Nothing to save"))
+                            updating -> notify(tr("Saved session updated"))
+                            else -> notify(tr("Recording saved"))
+                        }
+                    }) {
+                        Icon(
+                            Icons.Rounded.Save,
+                            contentDescription = if (traffic.currentSessionId != null) tr("Update saved session") else tr("Save recording"),
+                        )
+                    }
+                }
             }
             if (live) {
                 IconButton(onClick = {
@@ -318,8 +351,25 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
         },
     ) {
         if (live) {
+            if (traffic.saved.isNotEmpty()) {
+                card(key = "saved-link", rows = listOf {
+                    ListRow(
+                        title = tr("Saved recordings (%d)", traffic.saved.size),
+                        leading = { IconTile(Icons.Rounded.History, MaterialTheme.colorScheme.secondary) },
+                        onClick = nav::savedTrafficList,
+                    )
+                })
+            }
             traffic.error?.let { message ->
                 card(key = "error", rows = listOf { NoteRow(tr(message), warning = true) })
+            }
+            if (traffic.refusedCertificate && traffic.decryptTls) {
+                card(key = "refused", rows = listOf {
+                    NoteRow(
+                        tr("Apps keep refusing Spectra's certificate, and none has accepted it yet: it is probably not trusted. Connections that refused go through unread."),
+                        warning = true,
+                    )
+                })
             }
             card(
                 key = "tls",
@@ -378,28 +428,48 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
                 },
             )
         }
-        if (live && traffic.saved.isNotEmpty()) {
-            cardSection(
-                traffic.saved,
-                header = tr("Saved recordings"),
-                key = { it.id },
-                sectionKey = "saved",
-                footer = tr("Multicast, including device discovery, is not forwarded while recording."),
-            ) { saved ->
-                ListRow(
-                    title = dateTime(saved.startedAt),
-                    subtitle = tr("%d connections", saved.flows.size),
-                    detail = stopwatch((saved.stoppedAt - saved.startedAt).coerceAtLeast(0)),
-                    leading = { IconTile(Icons.Rounded.WifiTethering, MaterialTheme.colorScheme.secondary) },
-                    onClick = { nav.savedTraffic(saved.id) },
-                )
-            }
-        } else if (live) {
+        if (live) {
             card(
                 key = "multicast",
                 rows = listOf {
                     NoteRow(tr("Multicast, including device discovery, is not forwarded while recording."), warning = false)
                 },
+            )
+        }
+    }
+}
+
+/** The recordings kept on this phone, newest first, with date and time. */
+@Composable
+fun SavedTrafficScreen(model: SpectraModel, nav: Navigator) {
+    model.generation
+    val traffic = model.traffic
+    SpectraScreen(
+        title = tr("Saved recordings"),
+        onBack = nav::back,
+        overlay = {
+            if (traffic.saved.isEmpty()) {
+                EmptyState(Icons.Rounded.WifiTethering, tr("No saved sessions"), tr("Save a recording to keep it here."))
+            }
+        },
+    ) {
+        cardSection(
+            traffic.saved,
+            key = { it.id },
+            sectionKey = "saved",
+            dividerInset = 70.dp,
+        ) { saved ->
+            ListRow(
+                title = dateTime(saved.startedAt),
+                subtitle = tr("%d connections", saved.flows.size),
+                detail = stopwatch((saved.stoppedAt - saved.startedAt).coerceAtLeast(0)),
+                leading = {
+                    IconTile(
+                        if (saved.id == traffic.currentSessionId) Icons.Rounded.CheckCircle else Icons.Rounded.WifiTethering,
+                        if (saved.id == traffic.currentSessionId) Spectra.colors.success else MaterialTheme.colorScheme.secondary,
+                    )
+                },
+                onClick = { nav.savedTraffic(saved.id) },
             )
         }
     }

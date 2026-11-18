@@ -38,6 +38,10 @@ import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwipeToDismissBox
@@ -65,6 +69,7 @@ import cattivole.spectra.core.Band
 import cattivole.spectra.core.HistoryEntry
 import cattivole.spectra.core.hasStoredPassword
 import cattivole.spectra.core.passesWifiFilter
+import cattivole.spectra.core.labelFor
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -90,6 +95,9 @@ internal fun sourceName(source: String): String = when (source) {
     "This phone", "This iPhone" -> tr("This phone")
     else -> source
 }
+
+/** The order kind chips are shown in. */
+private val KIND_ORDER = listOf("networks", "lan", "bluetooth", "lora")
 
 /** How the saved sessions are grouped on screen. */
 private enum class Grouping { DATE, PLACE, LIST }
@@ -124,6 +132,8 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     var sort by rememberSaveable { mutableStateOf(HistorySort.NEWEST) }
     var query by rememberSaveable { mutableStateOf("") }
     var importedShelf by rememberSaveable { mutableStateOf(false) }
+    var kindFilter by rememberSaveable { mutableStateOf<String?>(null) }
+    var menu by remember { mutableStateOf(false) }
     // Today starts open. Every other day stays folded until it is tapped.
     var expanded by remember { mutableStateOf(setOf(todayGroupId())) }
     val context = LocalContext.current
@@ -173,7 +183,9 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
             onDismiss = { showSettings = false },
         )
     }
-    val shown = history.entries.filter { (it.importedFrom != null) == importedShelf }
+    val shelf = history.entries.filter { (it.importedFrom != null) == importedShelf }
+    val availableKinds = KIND_ORDER.filter { kind -> shelf.any { kind in it.shownKinds() } }
+    val shown = kindFilter?.let { kind -> shelf.filter { kind in it.shownKinds() } } ?: shelf
     val needle = query.trim()
     val matched = shown.filter { it.matchesQuery(needle) }.ordered(sort)
     val groups = when (grouping) {
@@ -188,16 +200,40 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
         actions = {
             // Live map is hidden for now.
             // IconButton(onClick = { showLive = true }) { Icon(Icons.Rounded.MyLocation, contentDescription = tr("Live map")) }
-            IconButton(onClick = nav::pcap) { Icon(Icons.Rounded.Description, contentDescription = tr("Decode pcap")) }
-            IconButton(onClick = {
-                importFile.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
-            }) { Icon(Icons.Rounded.FileOpen, contentDescription = tr("Import")) }
             if (shown.isNotEmpty()) {
                 ExportMenu(shown)
             }
-            IconButton(onClick = { showSettings = true }) { Icon(Icons.Rounded.Settings, contentDescription = tr("History settings")) }
-            if (shown.isNotEmpty()) {
-                IconButton(onClick = { confirmClear = true }) { Icon(Icons.Rounded.DeleteSweep, contentDescription = tr("Clear")) }
+            Box {
+                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("More")) }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text(tr("Import…")) },
+                        leadingIcon = { Icon(Icons.Rounded.FileOpen, null) },
+                        onClick = {
+                            menu = false
+                            importFile.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(tr("Settings…")) },
+                        leadingIcon = { Icon(Icons.Rounded.Settings, null) },
+                        onClick = {
+                            menu = false
+                            showSettings = true
+                        },
+                    )
+                    if (shown.isNotEmpty()) {
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(tr("Clear history"), color = MaterialTheme.colorScheme.error) },
+                            leadingIcon = { Icon(Icons.Rounded.DeleteSweep, null, tint = MaterialTheme.colorScheme.error) },
+                            onClick = {
+                                menu = false
+                                confirmClear = true
+                            },
+                        )
+                    }
+                }
             }
         },
         overlay = {
@@ -230,6 +266,17 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
         if (!showMap && history.entries.isNotEmpty()) {
             item(key = "filters") {
                 HistoryFilters(importedShelf, { importedShelf = it }, grouping, { grouping = it }, sort, { sort = it })
+            }
+            if (availableKinds.size > 1) {
+                item(key = "kind-filters") {
+                    ChipRow(contentPadding = FilterChipPadding) {
+                        availableKinds.forEach { kind ->
+                            ToggleChip(labelFor(kind), kindFilter == kind, {
+                                kindFilter = if (kindFilter == kind) null else kind
+                            }, kindIcon(kind))
+                        }
+                    }
+                }
             }
         }
         if (!showMap && history.entries.isNotEmpty() && shown.isEmpty()) {

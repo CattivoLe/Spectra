@@ -105,6 +105,7 @@ public final class ChatStore: Sendable {
             try db.execute(sql: "DELETE FROM message")
             try db.execute(sql: "DELETE FROM chat")
             try db.execute(sql: "DELETE FROM websearch_log")
+            try db.execute(sql: "DELETE FROM websearch_cache")
         }
         try await database.vacuum()
     }
@@ -143,6 +144,16 @@ public final class ChatStore: Sendable {
                 table.column("succeeded", .boolean).notNull()
             }
         }
+        migrator.registerMigration("v2-search-cache") { db in
+            try db.create(table: "websearch_cache") { table in
+                table.autoIncrementedPrimaryKey("id")
+                table.column("date", .datetime).notNull().indexed()
+                table.column("provider", .text).notNull()
+                table.column("query", .text).notNull()
+                table.column("terms", .text).notNull()
+                table.column("gathered", .blob).notNull()
+            }
+        }
         return migrator
     }
 
@@ -174,6 +185,11 @@ public final class ChatStore: Sendable {
 
     public func searchLog(limit: Int = 200) async throws -> [SearchLogEntry] {
         try await database.read { try SearchLogEntry.order(Column("date").desc).limit(limit).fetchAll($0) }
+    }
+
+    /// Removes one entry; the rest of the log stays.
+    public func deleteSearchLogEntry(id: Int64) async throws {
+        try await database.write { _ = try SearchLogEntry.deleteOne($0, key: id) }
     }
 
     public func clearSearchLog() async throws {

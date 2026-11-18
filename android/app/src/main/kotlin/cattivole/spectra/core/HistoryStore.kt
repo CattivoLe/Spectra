@@ -111,7 +111,7 @@ class HistoryEntry(
     }
 }
 
-private fun labelFor(kind: String): String = when (kind) {
+internal fun labelFor(kind: String): String = when (kind) {
     "lan" -> "LAN"
     "bluetooth" -> "Bluetooth"
     "lora" -> "LoRa"

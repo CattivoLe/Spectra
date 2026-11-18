@@ -48,6 +48,11 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -179,9 +184,37 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
     SpectraScreen(
         title = "Wi‑Fi",
         actions = {
-            if (all.isNotEmpty()) {
-                IconButton(onClick = { store.clear() }) {
-                    Icon(Icons.Rounded.DeleteSweep, contentDescription = tr("Clear list"))
+            var menu by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("More")) }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text(tr("Decode pcap…")) },
+                        leadingIcon = { Icon(Icons.Rounded.Description, null) },
+                        onClick = {
+                            menu = false
+                            nav.pcap()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(tr("Sensor…")) },
+                        leadingIcon = { Icon(Icons.Rounded.SettingsInputAntenna, null) },
+                        onClick = {
+                            menu = false
+                            nav.sensorTab()
+                        },
+                    )
+                    if (all.isNotEmpty()) {
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(tr("Clear list")) },
+                            leadingIcon = { Icon(Icons.Rounded.DeleteSweep, null) },
+                            onClick = {
+                                menu = false
+                                store.clear()
+                            },
+                        )
+                    }
                 }
             }
         },
@@ -517,7 +550,9 @@ fun NetworkRow(
                 }
             },
             badges = {
-                if (current) Pill(tr("Connected"), Spectra.colors.success, filled = true)
+                if (current) {
+                    Icon(Icons.Rounded.CheckCircle, contentDescription = tr("Connected"), tint = Spectra.colors.success, modifier = Modifier.size(16.dp))
+                }
                 Icon(lock, contentDescription = reading.auth.name, tint = lockTint, modifier = Modifier.size(15.dp))
                 if (known) {
                     Icon(Icons.Rounded.Key, contentDescription = tr("Password saved"), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(15.dp))
@@ -724,6 +759,15 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
         onBack = nav::back,
         actions = {
             if (!snapshot) {
+                // The question names the network by its BSSID too, so the assistant puts this one first.
+                AskAssistantButton(model, nav, question = {
+                    val captured = model.link.rawCaptureNetwork == reading.bssid && model.link.rawFrameCount > 0
+                    if (captured) {
+                        tr("Analyze the Wi‑Fi network “%s” (%s) and the traffic captured on it: encryption, channel, signal, clients — is everything fine with it?", networkName(network), reading.bssid.text)
+                    } else {
+                        tr("Analyze the Wi‑Fi network “%s” (%s): encryption, channel, signal, clients — is everything fine with it?", networkName(network), reading.bssid.text)
+                    }
+                })
                 val watched = model.isWatched(reading.bssid.text)
                 IconButton(onClick = { model.toggleWatch(reading.bssid.text) }) {
                     Icon(
@@ -1010,6 +1054,7 @@ private fun LazyListScope.captureCard(
     // The sensor keeps one capture; another network's screen starts fresh.
     val mine = link.rawCaptureNetwork == network.id
     val start = { link.startRawCapture(channel, network = network.id) }
+    val support = link.captureSupport(channel)
     val rows = buildList<@Composable () -> Unit> {
         when {
             link.rawCapturing && mine -> {
@@ -1022,17 +1067,34 @@ private fun LazyListScope.captureCard(
                 add { ActionRow(tr("Capture again"), Icons.Rounded.Refresh, onClick = start) }
             }
             else -> add {
-                ActionRow(tr("Capture traffic → save .pcap"), Icons.Rounded.SettingsInputAntenna, onClick = start)
+                ActionRow(
+                    tr("Capture traffic → save .pcap"),
+                    Icons.Rounded.SettingsInputAntenna,
+                    onClick = start,
+                    enabled = support == SensorLink.CaptureSupport.Ok,
+                )
             }
         }
     }
     val footer = buildString {
         append(
-            tr(
-                "Pins the sensor to channel %d and streams the frames it hears into a .pcap for Wireshark. Bluetooth is narrow, so this is a short, thinned sample — not a full capture — and it stops on its own near %d frames.",
-                channel,
-                SensorLink.RAW_FRAME_CAP,
-            ),
+            when (support) {
+                SensorLink.CaptureSupport.Ok -> tr(
+                    "Pins the sensor to channel %d and streams the frames it hears into a .pcap for Wireshark. Bluetooth is narrow, so this is a short, thinned sample — not a full capture — and it stops on its own near %d frames.",
+                    channel,
+                    SensorLink.RAW_FRAME_CAP,
+                )
+                SensorLink.CaptureSupport.BandNotHeard -> tr(
+                    "This network is on 5 GHz (channel %d), and this sensor hears only 2.4 GHz. Capturing it needs the ESP32-C5 sensor.",
+                    channel,
+                )
+                is SensorLink.CaptureSupport.FirmwareTooOld -> tr(
+                    "This network is on 5 GHz (channel %d). The sensor's firmware %s captures on 2.4 GHz only: update the sensor to firmware %s or newer.",
+                    channel,
+                    support.version,
+                    SensorLink.FIVE_GHZ_CAPTURE_FIRMWARE,
+                )
+            },
         )
         if (mine && link.rawDropped) {
             append(" ")

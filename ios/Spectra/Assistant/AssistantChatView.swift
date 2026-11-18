@@ -60,6 +60,9 @@ struct AssistantChatView: View {
                 if let status = session.toolStatus {
                     Label(status, systemImage: "bolt.horizontal").font(.footnote).foregroundStyle(.secondary)
                 }
+                if let reused = session.searchReused {
+                    Label(reused, systemImage: "arrow.uturn.backward.circle").font(.footnote).foregroundStyle(.secondary)
+                }
                 if let notice = session.searchNotice {
                     Label(notice, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
                 }

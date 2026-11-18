@@ -32,6 +32,8 @@ class SnifferVpnService : VpnService() {
     private var foreground = false
     private var lastNote = 0L
     private val stopped = AtomicBoolean(false)
+    /** Why the proxy stopped the recording on its own, shown on the Traffic screen. */
+    @Volatile private var giveUp: String? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -55,6 +57,8 @@ class SnifferVpnService : VpnService() {
             return START_NOT_STICKY
         }
         tunnel = fd
+        giveUp = null
+        CaptureBus.clearNotice()
         startedAt = System.currentTimeMillis()
         val underlying = physicalNetwork()
         val created = TrafficProxy(
@@ -64,15 +68,25 @@ class SnifferVpnService : VpnService() {
             ::lookupApp,
             CaptureBus.decryptTls,
             { CaptureBus.authority },
-        ) { flows ->
-            val still = proxy != null
-            CaptureBus.publish(running = still, flows = flows, startedAt = startedAt, error = null)
-            val now = System.currentTimeMillis()
-            if (still && now - lastNote > 1000) {
-                lastNote = now
-                startInForeground(flows.size)
-            }
-        }
+            { flows ->
+                val still = proxy != null
+                CaptureBus.publish(running = still, flows = flows, startedAt = startedAt, error = giveUp)
+                val now = System.currentTimeMillis()
+                if (still && now - lastNote > 1000) {
+                    lastNote = now
+                    startInForeground(flows.size)
+                }
+            },
+            onGiveUp = { reason ->
+                giveUp = when (reason) {
+                    TrafficProxy.StopReason.STALLED -> ERROR_STALLED
+                    TrafficProxy.StopReason.OVERLOADED -> ERROR_OVERLOADED
+                }
+                // Off the watchdog thread: shutting down joins the proxy's threads.
+                Thread { shutdown() }.start()
+            },
+            onRefusedCertificate = { CaptureBus.noteRefusedCertificate() },
+        )
         proxy = created
         CaptureBus.publish(running = true, flows = emptyList(), startedAt = startedAt, error = null)
         created.start()
@@ -115,6 +129,17 @@ class SnifferVpnService : VpnService() {
         val network = physicalNetwork()
         val dns = network?.let { getSystemService(ConnectivityManager::class.java).getLinkProperties(it)?.dnsServers }.orEmpty()
         val servers = dns.ifEmpty { listOf(InetAddress.getByName("1.1.1.1"), InetAddress.getByName("8.8.8.8")) }
+        if (Build.VERSION.SDK_INT >= 33) {
+            // Local networks stay off the tunnel: printers, casting and the LAN scan talk to them directly,
+            // and nothing there is internet traffic worth recording. The DNS server keeps its route so lookups
+            // are still read, even when it is the router.
+            for ((address, prefix) in LOCAL_RANGES) {
+                runCatching { builder.excludeRoute(android.net.IpPrefix(InetAddress.getByName(address), prefix)) }
+            }
+            for (server in servers.take(4)) {
+                runCatching { builder.addRoute(server, if (server is java.net.Inet4Address) 32 else 128) }
+            }
+        }
         var addedDns = false
         servers.take(4).forEach { server ->
             if (runCatching { builder.addDnsServer(server) }.isSuccess) addedDns = true
@@ -202,8 +227,8 @@ class SnifferVpnService : VpnService() {
         } catch (_: Exception) {
         }
         tunnel = null
-        if (active == null) {
-            CaptureBus.publish(running = false, flows = CaptureBus.flows, startedAt = startedAt, error = CaptureBus.error)
+        if (active == null || giveUp != null) {
+            CaptureBus.publish(running = false, flows = CaptureBus.flows, startedAt = startedAt, error = giveUp ?: CaptureBus.error)
         }
         endForeground()
     }
@@ -220,6 +245,20 @@ class SnifferVpnService : VpnService() {
         const val ACTION_STOP = "cattivole.spectra.STOP_TRAFFIC"
         const val ERROR_DENIED = "The VPN permission was denied."
         const val ERROR_START = "Could not start the recording."
+        const val ERROR_STALLED = "Recording stopped by itself: the recorder stopped responding, and the phone would have been left without a network."
+        const val ERROR_OVERLOADED = "Recording stopped by itself: there was more traffic than the recorder could handle, and the phone would have been left without a network."
+
+        /** Private, link-local and multicast ranges. The tunnel's own 10.111.222.1 is an address, not a route. */
+        private val LOCAL_RANGES = listOf(
+            "10.0.0.0" to 8,
+            "192.168.0.0" to 16,
+            "172.16.0.0" to 12,
+            "169.254.0.0" to 16,
+            "224.0.0.0" to 4,
+            "fe80::" to 10,
+            "fc00::" to 7,
+            "ff00::" to 8,
+        )
         private const val CHANNEL = "traffic"
         private const val NOTIFICATION = 42
     }

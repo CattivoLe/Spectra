@@ -41,6 +41,20 @@ class BleGattClient(context: Context) {
     var deviceAddress: String? = null
         private set
 
+    /** What one device published over GATT, as last read. */
+    data class Read(val address: String, val services: List<Service>, val readAt: Long)
+
+    /**
+     * The last GATT read that returned anything, kept after the link is dropped so the assistant can still
+     * explain it ("what did that device say about itself?"). Replaced by the next read of any device.
+     */
+    var lastRead: Read? = null
+        private set
+
+    /** The link ended after the device had answered: what it gave is kept. */
+    var endedAfterRead: Boolean = false
+        private set
+
     private val app = context.applicationContext
     private val adapter = app.getSystemService(BluetoothManager::class.java)?.adapter
     private val main = Handler(Looper.getMainLooper())
@@ -65,6 +79,7 @@ class BleGattClient(context: Context) {
         disconnect()
         val device: BluetoothDevice? = runCatching { adapter?.getRemoteDevice(address) }.getOrNull()
         deviceAddress = address
+        endedAfterRead = false
         services = emptyList()
         values.clear()
         readQueue.clear()
@@ -129,6 +144,14 @@ class BleGattClient(context: Context) {
                 },
             )
         }
+        noteRead()
+    }
+
+    /** Copies what the bound device has given so far into [lastRead]. */
+    private fun noteRead() {
+        val address = deviceAddress ?: return
+        if (services.isEmpty()) return
+        lastRead = Read(address, services, System.currentTimeMillis())
     }
 
     @SuppressLint("MissingPermission")
@@ -179,6 +202,7 @@ class BleGattClient(context: Context) {
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         if (state !is State.Idle) {
+                            if (state is State.Connected && services.isNotEmpty()) endedAfterRead = true
                             state = if (status != BluetoothGatt.GATT_SUCCESS && state !is State.Connected) {
                                 State.Failed("The device refused the connection.")
                             } else {

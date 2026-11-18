@@ -96,6 +96,39 @@ object FirmwareUpdate {
         else -> null
     }
 
+    /**
+     * The chip an ESP-IDF app image is built for, from the `chip_id` field of its header
+     * (bytes 12–13, little-endian), named the way the sensor reports `chip`.
+     * Null for an unknown chip or a damaged header.
+     */
+    fun chipName(image: ByteArray): String? {
+        if (image.size < 14 || image[0] != MAGIC) return null
+        return when ((image[12].toInt() and 0xFF) or ((image[13].toInt() and 0xFF) shl 8)) {
+            0x0000 -> "ESP32"
+            0x0009 -> "ESP32-S3"
+            0x0017 -> "ESP32-C5"
+            else -> null
+        }
+    }
+
+    /** The version a Spectra image carries in its "SPECTRA-FW:x.y.z" tag. Older images have none. */
+    fun taggedVersion(image: ByteArray): String? {
+        val tag = "SPECTRA-FW:".toByteArray()
+        var index = 0
+        while (index + tag.size < image.size) {
+            var match = true
+            for (i in tag.indices) if (image[index + i] != tag[i]) { match = false; break }
+            if (match) {
+                var end = index + tag.size
+                while (end < image.size && (image[end] == '.'.code.toByte() || image[end] in 48..57)) end++
+                val version = String(image, index + tag.size, end - index - tag.size, Charsets.US_ASCII)
+                return version.ifEmpty { null }
+            }
+            index++
+        }
+        return null
+    }
+
     /** ISO-HDLC CRC-32, the same value as zlib. `123456789` hashes to `0xCBF43926`. */
     object Crc32 {
         fun hash(data: ByteArray): Long {

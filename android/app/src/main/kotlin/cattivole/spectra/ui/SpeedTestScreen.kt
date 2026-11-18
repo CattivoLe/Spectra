@@ -24,6 +24,23 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.platform.SpeedTester
+import cattivole.spectra.core.SpeedResult
+import cattivole.spectra.core.SpeedServerChoice
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import java.util.Locale
 
 /** The LAN tab's way in to the full speed test. */
@@ -35,7 +52,7 @@ fun LazyListScope.speedTestRow(model: SpectraModel, nav: Navigator): @Composable
         subtitle = when {
             tester.running -> tr("Measuring…")
             result != null -> listOfNotNull(result.downBps?.let { "↓ " + speedRate(it) }, result.upBps?.let { "↑ " + speedRate(it) }).joinToString("  ")
-            else -> tr("Eight seconds down and eight up to Cloudflare, with latency under load.")
+            else -> tr("Eight seconds down and eight up, to Cloudflare or a Measurement Lab server you pick, with latency under load.")
         },
         leading = { IconTile(Icons.Rounded.Speed, MaterialTheme.colorScheme.primary) },
         onClick = { nav.speedTest() },
@@ -48,11 +65,42 @@ internal fun speedRate(bps: Double): String = when {
     else -> String.format(Locale.getDefault(), tr("%.0f bit/s"), bps)
 }
 
+/** The picked server, as the row shows it. */
+private fun serverLabel(tester: SpeedTester): String = when (val choice = tester.serverChoice) {
+    SpeedServerChoice.Cloudflare -> tr("Cloudflare, nearest")
+    is SpeedServerChoice.MLab -> {
+        val machine = choice.machine
+        if (machine == null) {
+            tr("M-Lab, nearest")
+        } else {
+            val found = tester.mlabServers.firstOrNull { it.machine == machine }
+            if (found != null && found.city.isNotEmpty()) "M-Lab · ${found.city}" else "M-Lab · ${machine.substringBefore('.')}"
+        }
+    }
+}
+
+/** What the latency under load means for calls and games. */
+private fun verdict(result: SpeedResult): String {
+    val grade = result.bufferbloatGrade
+    val idle = result.idleLatencyMs
+    if (grade == null || idle == null) return tr("Throughput is the steady part of each transfer, after the first second of ramp-up.")
+    val loaded = listOfNotNull(result.loadedDownLatencyMs, result.loadedUpLatencyMs).maxOrNull() ?: idle
+    return when (grade) {
+        "A", "B" -> tr("Latency stays near %d ms even with the line full: calls and games will not suffer while something downloads.", loaded)
+        "C" -> tr("Latency grows to %d ms under load. Noticeable in calls while someone else streams or downloads.", loaded)
+        else -> tr("Latency climbs to %d ms under load: a full queue in the router or modem. Smart queue management (SQM, QoS) on the router fixes this.", loaded)
+    }
+}
+
 @Composable
 fun SpeedTestScreen(model: SpectraModel, nav: Navigator) {
     model.generation
     val tester = model.speed
     val result = tester.result
+    var picking by remember { mutableStateOf(false) }
+    if (picking) {
+        SpeedServerDialog(tester) { picking = false }
+    }
     SpectraScreen(title = tr("Speed test"), onBack = nav::back) {
         freeCard("live") {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -103,7 +151,12 @@ fun SpeedTestScreen(model: SpectraModel, nav: Navigator) {
                 )
             })
         }
-        if (result != null && tester.throttled) {
+        tester.substituted?.let { (wanted, stand) ->
+            card(key = "substituted", rows = listOf {
+                NoteRow(tr("M-Lab does not offer %s right now, so %s ran the test.", wanted, stand), warning = false)
+            })
+        }
+        if (result != null && tester.throttled && !result.mlab) {
             card(key = "throttled", rows = listOf {
                 NoteRow(tr("Cloudflare limited this test after several in a row from your address, so the figures may be lower than the line can do."), warning = true)
             })
@@ -112,6 +165,7 @@ fun SpeedTestScreen(model: SpectraModel, nav: Navigator) {
             card(
                 header = tr("Result"),
                 key = "result",
+                footer = verdict(result),
                 rows = buildList {
                     result.idleLatencyMs?.let { add { InfoRow(tr("Latency"), tr("%d ms", it)) } }
                     result.jitterMs?.let { add { InfoRow(tr("Jitter"), tr("%d ms", it)) } }
@@ -119,14 +173,26 @@ fun SpeedTestScreen(model: SpectraModel, nav: Navigator) {
                         add { InfoRow(tr("Latency under load"), tr("%d ms", it)) }
                     }
                     result.bufferbloatGrade?.let { add { InfoRow(tr("Bufferbloat"), it) } }
-                    result.server?.let { add { InfoRow(tr("Edge"), "Cloudflare $it", mono = true) } }
+                    add { InfoRow(tr("Streams"), if (result.mlab) "1 ↓ · 1 ↑" else "${result.streams} ↓ · ${SpeedTester.UPLOAD_STREAMS} ↑") }
+                    result.server?.let { add { InfoRow(tr("Server"), if (result.mlab) "M-Lab · $it" else "Cloudflare · $it") } }
                 },
             )
         }
         card(
             key = "start",
-            footer = tr("Several streams for eight seconds each way to Cloudflare, which sees your public IP address. On mobile data this can use a few hundred megabytes."),
-            rows = listOf {
+            footer = if (tester.serverChoice is SpeedServerChoice.MLab) {
+                tr("Eight seconds down and eight up over one stream each way to a Measurement Lab server. M-Lab publishes every measurement, your IP address included, as open data. Latency is measured before and during the transfers.")
+            } else {
+                tr("Several streams for eight seconds each way to Cloudflare, which sees your public IP address. On mobile data this can use a few hundred megabytes.")
+            },
+            rows = listOf({
+                InfoRow(
+                    tr("Server"),
+                    serverLabel(tester),
+                    valueColor = MaterialTheme.colorScheme.primary,
+                    onClick = { if (!tester.running) picking = true },
+                )
+            }, {
                 ActionRow(
                     when {
                         tester.running -> tr("Stop")
@@ -136,8 +202,78 @@ fun SpeedTestScreen(model: SpectraModel, nav: Navigator) {
                     if (tester.running) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
                     onClick = { if (tester.running) tester.stop() else tester.start() },
                 )
-            },
+            }),
         )
+    }
+}
+
+/** Cloudflare, or one of the Measurement Lab machines near this network. */
+@Composable
+private fun SpeedServerDialog(tester: SpeedTester, onDismiss: () -> Unit) {
+    LaunchedEffect(Unit) { if (tester.mlabServers.isEmpty()) tester.loadServers() }
+    val pick = { choice: SpeedServerChoice ->
+        tester.serverChoice = choice
+        onDismiss()
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("Server")) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                ServerOption(tr("Cloudflare"), tr("Nearest edge, chosen by the network"), tester.serverChoice == SpeedServerChoice.Cloudflare) {
+                    pick(SpeedServerChoice.Cloudflare)
+                }
+                Text(
+                    tr("Cloudflare answers on one address everywhere and the network routes you to the nearest of its sites, so a particular one cannot be picked. Several parallel streams fill fast lines."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
+                Text("Measurement Lab", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+                ServerOption(tr("Nearest"), tr("Picked by M-Lab at test time"), tester.serverChoice == SpeedServerChoice.MLab(null)) {
+                    pick(SpeedServerChoice.MLab(null))
+                }
+                tester.mlabServers.forEach { server ->
+                    val place = listOf(server.city, java.util.Locale("", server.country).displayCountry)
+                        .filter { it.isNotEmpty() }.joinToString(", ")
+                    ServerOption(place.ifEmpty { server.shortName }, server.shortName, tester.serverChoice == SpeedServerChoice.MLab(server.machine)) {
+                        pick(SpeedServerChoice.MLab(server.machine))
+                    }
+                }
+                if (tester.loadingServers) {
+                    Row(Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Text(tr("Asking M-Lab for servers…"), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else if (tester.mlabServers.isEmpty()) {
+                    TextButton(onClick = tester::loadServers) { Text(tr("Load servers")) }
+                }
+                Text(
+                    tr("M-Lab offers the few machines nearest to this network. It measures over one stream each way and publishes every result, your IP address included, as open data."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(tr("Close")) } },
+    )
+}
+
+@Composable
+private fun ServerOption(title: String, detail: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (selected) Icon(Icons.Rounded.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
     }
 }
 

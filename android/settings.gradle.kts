@@ -15,4 +15,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Spectra"
-include(":app")
+// The assistant's engine (llama.cpp over JNI) and chat logic, shared with LocalChat as on iOS.
+include(":app", ":engine", ":kit")

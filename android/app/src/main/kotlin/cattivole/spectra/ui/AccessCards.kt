@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -107,13 +108,26 @@ fun TrafficLight(access: InternetAccess?, lamp: Dp = 12.dp, modifier: Modifier =
 
 /** Wi-Fi, the mobile network, or whatever the system uses. */
 @Composable
-internal fun RouteRow(link: LinkProbe) {
+internal fun RouteRow(link: LinkProbe, wifiJoined: Boolean? = null) {
+    // Without Wi-Fi a Wi-Fi check has nothing to measure: go through the mobile network, and come back
+    // to Wi-Fi when it returns, unless the reader picked the route themself.
+    var autoCellular by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(wifiJoined) {
+        if (wifiJoined == null || link.running) return@LaunchedEffect
+        if (!wifiJoined && link.route == ProbeRoute.WIFI) {
+            link.route = ProbeRoute.CELLULAR
+            autoCellular = true
+        } else if (wifiJoined && autoCellular && link.route == ProbeRoute.CELLULAR) {
+            link.route = ProbeRoute.WIFI
+            autoCellular = false
+        }
+    }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(tr("Check through"), style = MaterialTheme.typography.bodyLarge)
         ChipRow(contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
-            ToggleChip("Wi-Fi", link.route == ProbeRoute.WIFI, { if (!link.running) link.route = ProbeRoute.WIFI })
-            ToggleChip(tr("Cellular"), link.route == ProbeRoute.CELLULAR, { if (!link.running) link.route = ProbeRoute.CELLULAR })
-            ToggleChip("VPN", link.route == ProbeRoute.VPN, { if (!link.running) link.route = ProbeRoute.VPN })
+            ToggleChip("Wi-Fi", link.route == ProbeRoute.WIFI, { if (!link.running) { link.route = ProbeRoute.WIFI; autoCellular = false } })
+            ToggleChip(tr("Cellular"), link.route == ProbeRoute.CELLULAR, { if (!link.running) { link.route = ProbeRoute.CELLULAR; autoCellular = false } })
+            ToggleChip("VPN", link.route == ProbeRoute.VPN, { if (!link.running) { link.route = ProbeRoute.VPN; autoCellular = false } })
         }
         Text(routeText(link.route), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

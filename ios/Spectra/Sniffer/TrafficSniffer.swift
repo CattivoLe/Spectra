@@ -18,6 +18,24 @@ final class TrafficSniffer {
     private(set) var running = false
     private(set) var flows: [TrafficFlow] = []
     private(set) var saved: [TrafficSession] = []
+    /// The saved session this recording went into, so saving again updates it instead of adding a copy.
+    /// A new recording, or clearing the list, starts a new one.
+    private(set) var currentSessionID: String?
+    /// What the list held when it was last saved: nothing new since then means there is nothing to save.
+    private var savedMark: SaveMark?
+    private struct SaveMark: Equatable {
+        var count: Int
+        var lastAt: Int64
+        var bytes: Int64
+        init(_ flows: [TrafficFlow]) {
+            count = flows.count
+            lastAt = flows.map(\.lastAt).max() ?? 0
+            bytes = flows.reduce(0) { $0 + $1.sent + $1.received }
+        }
+    }
+
+    /// The list on screen is already saved as it is.
+    var isCurrentSaved: Bool { !flows.isEmpty && savedMark == SaveMark(flows) }
     private(set) var startedAt: Int64 = 0
     private(set) var error: String?
     private(set) var caFingerprint: String?
@@ -27,14 +45,68 @@ final class TrafficSniffer {
 
     private var manager: NETunnelProviderManager?
     private var pollTask: Task<Void, Never>?
+    private var statusObserver: NSObjectProtocol?
     private let defaults = UserDefaults(suiteName: TrafficSniffer.appGroup)
     private static let tlsKey = "traffic_decrypt_tls"
+    /// Written by the tunnel when it stops itself (see `PacketTunnelProvider.giveUp`).
+    private static let stopReasonKey = "traffic_stop_reason"
+    /// Written by the tunnel when it stopped decrypting for the run (see `TrafficProxy.mitmVerdict`).
+    private static let tlsNoticeKey = "traffic_tls_notice"
     private static let keepSessions = 30
 
     init() {
         decryptTLS = UserDefaults(suiteName: TrafficSniffer.appGroup)?.bool(forKey: Self.tlsKey) ?? false
         loadSaved()
         refreshCA()
+        // The tunnel outlives the app: after a relaunch, pick up one that is still recording, so it can be
+        // stopped from here rather than only from Settings.
+        Task { await attachToExistingTunnel() }
+    }
+
+    /// Follows the system's own VPN state, which is the truth: the tunnel may stop itself, be turned off in
+    /// Settings, or still be running from before the app was relaunched.
+    private func attachToExistingTunnel() async {
+        guard let manager = try? await NETunnelProviderManager.loadAllFromPreferences().first else { return }
+        observe(manager)
+    }
+
+    private func observe(_ manager: NETunnelProviderManager) {
+        self.manager = manager
+        if let statusObserver { NotificationCenter.default.removeObserver(statusObserver) }
+        statusObserver = NotificationCenter.default.addObserver(
+            forName: .NEVPNStatusDidChange, object: manager.connection, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.syncStatus() }
+        }
+        syncStatus()
+    }
+
+    private func syncStatus() {
+        guard let status = manager?.connection.status else { return }
+        switch status {
+        case .connected, .connecting, .reasserting:
+            if !running {
+                running = true
+                if startedAt == 0 { startedAt = Int64(Date().timeIntervalSince1970 * 1000) }
+            }
+            if pollTask == nil { startPolling() }
+        case .disconnected, .invalid:
+            guard running else { return }
+            running = false
+            pollTask?.cancel()
+            pollTask = nil
+            readLiveSnapshot()
+            if let reason = defaults?.string(forKey: Self.stopReasonKey) {
+                error = reason == "stalled"
+                    ? String(localized: "Recording stopped by itself: the recorder stopped responding, and the phone would have been left without a network.")
+                    : String(localized: "Recording stopped by itself: there was more traffic than the recorder could handle, and the phone would have been left without a network.")
+                defaults?.removeObject(forKey: Self.stopReasonKey)
+            }
+        case .disconnecting:
+            break
+        @unknown default:
+            break
+        }
     }
 
     // MARK: VPN lifecycle
@@ -44,11 +116,13 @@ final class TrafficSniffer {
         error = nil
         do {
             let manager = try await loadOrCreateManager()
-            self.manager = manager
+            observe(manager)
             try manager.connection.startVPNTunnel()
+            currentSessionID = nil
+            savedMark = nil
             running = true
             startedAt = Int64(Date().timeIntervalSince1970 * 1000)
-            startPolling()
+            if pollTask == nil { startPolling() }
         } catch {
             self.error = error.localizedDescription
         }
@@ -65,6 +139,8 @@ final class TrafficSniffer {
     /// so the list refills from new traffic; most useful once stopped.
     func clear() {
         flows = []
+        currentSessionID = nil
+        savedMark = nil
         if let url = containerURL()?.appendingPathComponent("live.json") {
             try? FileManager.default.removeItem(at: url)
         }
@@ -97,6 +173,10 @@ final class TrafficSniffer {
     }
 
     private func readLiveSnapshot() {
+        if defaults?.string(forKey: Self.tlsNoticeKey) != nil {
+            defaults?.removeObject(forKey: Self.tlsNoticeKey)
+            error = String(localized: "Apps keep refusing Spectra's certificate, and none has accepted it yet: it is probably not trusted. Connections that refused go through unread.")
+        }
         guard let url = containerURL()?.appendingPathComponent("live.json"),
               let data = try? Data(contentsOf: url),
               let decoded = try? JSONDecoder().decode([TrafficFlow].self, from: data) else { return }
@@ -105,20 +185,33 @@ final class TrafficSniffer {
 
     // MARK: Saved sessions
 
-    func saveCurrent() {
-        guard !flows.isEmpty else { return }
+    /// Saves the list on screen. Saving the same recording again updates its session rather than adding an
+    /// identical one; returns whether anything was written.
+    @discardableResult
+    func saveCurrent() -> Bool {
+        guard !flows.isEmpty, !isCurrentSaved, let dir = sessionsDir() else { return false }
+        let id = currentSessionID ?? UUID().uuidString
         let session = TrafficSession(
-            id: UUID().uuidString,
+            id: id,
             startedAt: startedAt > 0 ? startedAt : (flows.map(\.startedAt).min() ?? 0),
             stoppedAt: Int64(Date().timeIntervalSince1970 * 1000),
             flows: flows
         )
-        guard let dir = sessionsDir() else { return }
-        try? session.encoded().write(to: dir.appendingPathComponent("\(session.id).json"))
-        saved = ([session] + saved).prefix(Self.keepSessions).map { $0 }
-        for old in saved.dropFirst(Self.keepSessions) {
+        do {
+            try session.encoded().write(to: dir.appendingPathComponent("\(id).json"), options: .atomic)
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+        let all = [session] + saved.filter { $0.id != id }
+        saved = Array(all.prefix(Self.keepSessions))
+        // Whatever no longer fits goes from disk too (the old code computed this after trimming, so never did).
+        for old in all.dropFirst(Self.keepSessions) {
             try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(old.id).json"))
         }
+        currentSessionID = id
+        savedMark = SaveMark(flows)
+        return true
     }
 
     func delete(_ session: TrafficSession) {
@@ -126,6 +219,10 @@ final class TrafficSniffer {
             try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(session.id).json"))
         }
         saved.removeAll { $0.id == session.id }
+        if session.id == currentSessionID {
+            currentSessionID = nil
+            savedMark = nil
+        }
     }
 
     private func loadSaved() {

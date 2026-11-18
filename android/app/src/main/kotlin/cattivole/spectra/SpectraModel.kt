@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import cattivole.spectra.platform.BleGattClient
 import cattivole.spectra.platform.BleRadio
 import cattivole.spectra.platform.DeviceBleScanner
@@ -42,6 +43,22 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     val speed = cattivole.spectra.platform.SpeedTester(app) { connection.currentNetwork() }
     val usb = UsbEspFlasher(app)
     val wifiJoiner = WifiJoiner(app)
+
+    /** The capture last decoded and the traffic last handed over, for the assistant to talk about. */
+    val captures = cattivole.spectra.assistant.CaptureShelf()
+    /** Notes and per-device baselines the assistant keeps between chats. */
+    val assistantMemory = cattivole.spectra.assistant.AssistantMemory(java.io.File(app.filesDir, "assistant/memory.json"))
+    val assistantSources = cattivole.spectra.assistant.AssistantSources(this, captures, assistantMemory)
+
+    /** The on-device assistant. Created the first time anything needs it: its tab or a ✨ button. */
+    val assistant: cattivole.spectra.assistant.AssistantModel by lazy {
+        cattivole.spectra.assistant.AssistantModel(app, viewModelScope, assistantSources).also { model ->
+            model.onDownloadsActive = { active ->
+                val intent = android.content.Intent(app, cattivole.spectra.platform.AssistantDownloadService::class.java)
+                if (active) androidx.core.content.ContextCompat.startForegroundService(app, intent) else app.stopService(intent)
+            }
+        }
+    }
 
     var generation by mutableIntStateOf(0)
         private set
@@ -119,6 +136,21 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         wifiJoiner.onJoined = { ssid, password -> link.rememberJoined(ssid, password) }
         wifiJoiner.start()
         phone.start()
+        // Without its ✨ button the assistant still reads the Traffic screen: the live list, or the newest saved session.
+        captures.recordedTraffic = {
+            val flows = traffic.flows
+            if (flows.isNotEmpty()) {
+                cattivole.spectra.assistant.CaptureShelf.Recording(
+                    if (traffic.running) "recording in progress" else "current recording",
+                    flows,
+                    flows.maxOf { it.lastAt },
+                )
+            } else {
+                traffic.saved.firstOrNull()?.let { session ->
+                    cattivole.spectra.assistant.CaptureShelf.Recording("saved session of ${cattivole.spectra.ui.dateTime(session.stoppedAt)}", session.flows, session.stoppedAt)
+                }
+            }
+        }
     }
 
     /**
@@ -127,6 +159,8 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
      * to call often.
      */
     fun autosave() {
+        // The same tick teaches the assistant what is usual for each device, so "is this normal for it?" has an answer.
+        runCatching { assistantSources.recordBaselines() }
         if (!autosaveHistory) return
         history.upsertNetworks(store, PHONE_SOURCE)
         history.upsertLan(lan.devices, lan.networkKey, lan.networkLabel, PHONE_SOURCE)

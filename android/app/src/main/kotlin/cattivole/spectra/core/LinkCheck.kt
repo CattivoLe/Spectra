@@ -179,7 +179,12 @@ data class RegionReach(val code: String, val host: String, val ok: Boolean, val 
 
 data class AbroadView(val code: String, val city: String, val ok: Boolean, val millis: Int?)
 
-data class TraceHop(val address: String?, val millis: Int?)
+data class TraceHop(
+    val address: String?,
+    val millis: Int?,
+    /** Reverse DNS of the address, when it has one. */
+    val name: String? = null,
+)
 
 data class LocalTrace(val target: String, val hops: List<TraceHop>, val unavailable: Boolean)
 
@@ -357,8 +362,11 @@ object LinkParse {
         if (denied) return PingReply(null, null, reached = false, denied = true, unreachable = false)
         val millis = Regex("""time[=<]\s*([0-9.]+)\s*ms""", RegexOption.IGNORE_CASE)
             .find(output)?.groupValues?.get(1)?.toDoubleOrNull()?.roundToInt()
+        // The header names the phone's own address when ping is bound to an interface
+        // ("PING 1.1.1.1 (1.1.1.1) from 192.168.1.114 wlan0: …"): only the reply lines name the hop.
+        val replies = output.lineSequence().filterNot { it.trimStart().startsWith("PING", ignoreCase = true) }.joinToString("\n")
         val address = Regex("""(?i)\bfrom\s+(\d{1,3}(?:\.\d{1,3}){3})""")
-            .find(output)?.groupValues?.get(1)
+            .find(replies)?.groupValues?.get(1)
         val reached = output.contains("bytes from", ignoreCase = true) &&
             !output.contains("time to live exceeded", ignoreCase = true)
         val unreachable = output.contains("unreachable", ignoreCase = true)
@@ -487,11 +495,13 @@ private fun abroadOf(json: JSONObject) = AbroadView(
 private fun hopJson(hop: TraceHop) = JSONObject().apply {
     hop.address?.let { put("address", it) }
     hop.millis?.let { put("millis", it) }
+    hop.name?.let { put("name", it) }
 }
 
 private fun hopOf(json: JSONObject) = TraceHop(
     json.optStringOrNull("address"),
     if (json.has("millis")) json.optInt("millis") else null,
+    json.optStringOrNull("name"),
 )
 
 private fun localJson(trace: LocalTrace) = JSONObject()

@@ -27,6 +27,7 @@ struct AssistantActions {
         case checkPortForwarding = "check_port_forwarding"
         case capturePcap = "capture_pcap"
         case connectBluetooth = "connect_bluetooth"
+        case searchHistory = "search_history"
         case remember
         case forget
     }
@@ -41,7 +42,7 @@ struct AssistantActions {
     /// executor below reads whichever key is present and ignores the field entirely where a tool needs neither.
     static let grammar = """
         root  ::= ws "{" ws "\\"tool\\"" ws ":" ws tool tail ws "}" ws
-        tool  ::= "\\"scan_wifi\\"" | "\\"scan_lan\\"" | "\\"scan_bluetooth\\"" | "\\"check_connection\\"" | "\\"speed_test\\"" | "\\"scan_ports\\"" | "\\"check_port_forwarding\\"" | "\\"capture_pcap\\"" | "\\"connect_bluetooth\\"" | "\\"remember\\"" | "\\"forget\\""
+        tool  ::= "\\"scan_wifi\\"" | "\\"scan_lan\\"" | "\\"scan_bluetooth\\"" | "\\"check_connection\\"" | "\\"speed_test\\"" | "\\"scan_ports\\"" | "\\"check_port_forwarding\\"" | "\\"capture_pcap\\"" | "\\"connect_bluetooth\\"" | "\\"search_history\\"" | "\\"remember\\"" | "\\"forget\\""
         tail  ::= ( ws "," ws addrfield )? ( ws "," ws textfield )?
         addrfield ::= ( "\\"host\\"" | "\\"bssid\\"" ) ws ":" ws "\\"" [a-zA-Z0-9._:-]+ "\\""
         textfield ::= "\\"text\\"" ws ":" ws "\\"" [^\\"]+ "\\""
@@ -68,6 +69,9 @@ struct AssistantActions {
         For connect_bluetooth, name a device exactly as it appears in the Bluetooth devices list, to connect to \
         it and read what it tells about itself:
         <tool_call>{"tool": "connect_bluetooth", "text": "Momentum 3"}
+        For search_history, say what to look for in everything saved under History — a network or device name, \
+        an IP, MAC or BSSID — or leave "text" out for an overview of all saved sessions:
+        <tool_call>{"tool": "search_history", "text": "Galaxy Buds"}
         Stop right after the closing brace — no closing tag, nothing else on the line. Each one takes a few \
         seconds, and you will be given its result to answer with next.
         Which one:
@@ -88,11 +92,20 @@ struct AssistantActions {
         on the open internet. It needs the LAN hosts list: call scan_lan first when there is none.
         - capture_pcap: capture Wi‑Fi traffic on a network's channel for a few seconds. Use when asked to capture, \
         sniff, or record traffic.
-        - connect_bluetooth: connect to ONE Bluetooth device and read the services and characteristics it \
-        publishes — often its model, maker, firmware version and battery level. Use when asked to connect to a \
-        device, read it, or find out what exactly it is («подключись к Momentum 3», «что это за устройство», \
-        «прочитай данные с наушников»). The device must be in the Bluetooth list first: call scan_bluetooth \
-        when it is not there. Reading takes a few seconds and the link is dropped again afterwards.
+        - connect_bluetooth: connect to ONE Bluetooth device and read its GATT services and characteristics — \
+        often its model, maker, firmware version and battery level. Use when asked to connect to a device, read \
+        it, read its GATT services, or find out what exactly it is («подключись к Momentum 3», «что это за \
+        устройство», «прочитай GATT наушников»). The device must be in the Bluetooth list first: call \
+        scan_bluetooth when it is not there. Reading takes a few seconds and the link is dropped again afterwards. \
+        When the attached data already holds a GATT read of that device and the user asks to analyze or explain \
+        it, explain that read instead of connecting again: name each standard service (Device Information, \
+        Battery, Heart Rate, …), say what the decoded values reveal (maker, model, firmware), and point out \
+        vendor-specific services and characteristics that accept writes without pairing.
+        - search_history: read everything saved under History, across all sessions and days: networks, LAN hosts \
+        with their ports, Bluetooth devices, connection checks, sensor summaries. Use when asked whether something \
+        was seen before, what changed since last time, what was at a place, or anything about earlier scans \
+        («было ли это устройство раньше», «что было в истории», «когда я видел эту сеть»). It reads saved data \
+        only; it does not scan.
         IMPORTANT: when the user asks to check, verify, test or measure ANYTHING about their own network, devices \
         or connection — call the matching tool. These are live measurements, not web lookups. A web search cannot \
         ping a host, measure speed, or scan a network. When the user asks you to scan, check, test or measure \
@@ -104,7 +117,10 @@ struct AssistantActions {
         When the attached data already has a traffic capture and the user asks to decode, explain or analyze it \
         («расшифруй pcap», «что в захвате»), explain that capture: what kinds of frames or protocols it holds, \
         which devices talked most and to whom, and anything unusual (deauthentication bursts, unknown devices, \
-        plain-text protocols). Call capture_pcap only when the user asks for a new capture.
+        plain-text protocols). Call capture_pcap only when the user asks for a new capture. \
+        "Recorded traffic of this phone" is different: the phone's own connections, recorded on the phone itself. \
+        For it, say which servers and services the phone talked to, which apps or hosts were the busiest, what \
+        went unencrypted over plain HTTP, and anything that looks like tracking, advertising or an unexpected destination.
         You have a dossier — a persistent notebook shared across all chats. Use it to save important findings, \
         conclusions, and facts worth keeping: a suspicious device, a weak password, a resolved incident, a note \
         about the user's network setup. To save a note:
@@ -123,7 +139,7 @@ struct AssistantActions {
         ToolRegistry(
             grammar: Self.grammar,
             maxSteps: 4,
-            preflight: { question in Self.requested(in: question).map(\.rawValue) },
+            preflight: { [sources] question in Self.preflightCalls(for: question, devices: sources.ble.devices.values) },
             runningLabel: Self.runningLabel
         ) { [sources, memory] name, argsJSON in
             await Self.run(name, argsJSON: argsJSON, sources: sources, memory: memory)
@@ -169,7 +185,67 @@ struct AssistantActions {
         return Name.allCases.filter(found.contains)
     }
 
+    /// `requested(in:)` plus the one check with an argument the app can fill in itself: a Bluetooth device the
+    /// question names and asks to connect to or read («подключись к Momentum 3», «прочитай GATT Galaxy Buds»). A
+    /// small model asked that usually answers from the Bluetooth list instead of calling connect_bluetooth, so the
+    /// app reads the device first and the model only has to explain what came back.
+    static func preflightCalls(for question: String, devices: some Collection<BLEDevice>) -> [String] {
+        var calls: [String] = []
+        // A question about earlier scans gets History read for it, with the question as what to look for: a small
+        // model rarely thinks of a tool for "was this here before?" and answers from today's snapshot instead.
+        if asksAboutHistory(question), let text = jsonString(String(question.prefix(300))) {
+            calls.append("{\"tool\": \"\(Name.searchHistory.rawValue)\", \"text\": \(text)}")
+        }
+        return calls + scanCalls(for: question, devices: devices)
+    }
+
+    static func asksAboutHistory(_ question: String) -> Bool {
+        let text = question.lowercased()
+        return !AssistantDigest.matches(RequestStems.aboutChecks, in: text)
+            && AssistantDigest.matches(RequestStems.history, in: text)
+    }
+
+    private static func jsonString(_ value: String) -> String? {
+        (try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    private static func scanCalls(for question: String, devices: some Collection<BLEDevice>) -> [String] {
+        var names = requested(in: question)
+        guard let device = bluetoothTarget(in: question, among: devices),
+              let quoted = try? JSONSerialization.data(withJSONObject: device.displayName, options: .fragmentsAllowed),
+              let name = String(data: quoted, encoding: .utf8) else {
+            return names.map(\.rawValue)
+        }
+        // The device is already heard: a fresh sweep first would only add a few seconds.
+        names.removeAll { $0 == .scanBluetooth }
+        return names.map(\.rawValue) + ["{\"tool\": \"\(Name.connectBluetooth.rawValue)\", \"text\": \(name)}"]
+    }
+
+    /// The heard Bluetooth device a question names and asks to connect to or read, if any. The longest name found
+    /// in the question wins («Galaxy Buds2 Pro» over «Galaxy»), then the strongest signal.
+    static func bluetoothTarget(in question: String, among devices: some Collection<BLEDevice>) -> BLEDevice? {
+        let text = question.lowercased()
+        func has(_ stems: [String]) -> Bool { AssistantDigest.matches(stems, in: text) }
+        guard !has(RequestStems.aboutChecks), has(RequestStems.connectTo) || has(RequestStems.readDevice) else { return nil }
+        let named = devices.filter { device in
+            let name = device.displayName.lowercased()
+            return name.count >= 3 && !name.contains("{") && !name.contains("}") && text.contains(name)
+        }
+        return named.max {
+            ($0.displayName.count, $0.rssi) < ($1.displayName.count, $1.rssi)
+        }
+    }
+
     private enum RequestStems {
+        /// Asking about what was saved earlier rather than what is around now.
+        static let history = [
+            "history", "earlier", "previously", "last time", "last week", "yesterday", "saved session", "seen before",
+            "истори", "раньше", "прошл", "вчера", "сохранённ", "сохраненн", "сесси", "встречал", "видел ли", "был ли", "была ли",
+            "были ли", "было ли",
+        ]
+        /// Asking to read what one device publishes about itself. Verbs only: «проанализируй GATT-сервисы X» is
+        /// about a read already made (the device screen's ✨ button asks exactly that), not a request for a new one.
+        static let readDevice = ["read", "прочита", "прочт", "считай", "считать"]
         /// Asking to run something, not just to read.
         static let run = [
             "scan", "rescan", "check", "test", "measure", "run", "refresh", "look for",
@@ -219,6 +295,7 @@ struct AssistantActions {
         case .checkPortForwarding: String(localized: "Asking the router about port forwarding…")
         case .capturePcap: String(localized: "Capturing traffic…")
         case .connectBluetooth: String(localized: "Connecting to the device…")
+        case .searchHistory: String(localized: "Looking through History…")
         case .remember: String(localized: "Saving a note…")
         case .forget: String(localized: "Removing a note…")
         case nil: String(localized: "Running \(name)…")
@@ -325,6 +402,9 @@ struct AssistantActions {
                 return "\"\(AssistantDigest.clean(wanted))\" is not a Bluetooth device this phone can hear. "
                     + "Call scan_bluetooth first, then use a name from that list."
             }
+            // CoreBluetooth only hands out peripherals it has heard: a scan that was stopped meanwhile still
+            // has them, but a device that moved away does not answer, which the timeout below covers.
+            if !sources.ble.isScanning { sources.ble.start() }
             sources.ble.connectGATT(device.id)
             await waitWhile(timeout: 15) {
                 switch sources.ble.gattState {
@@ -332,11 +412,20 @@ struct AssistantActions {
                 default: false
                 }
             }
-            // Characteristic values land after the services do: give the reads a moment before writing it up.
-            if sources.ble.gattState == .connected { try? await Task.sleep(for: .seconds(2)) }
+            // Characteristics arrive after the services, and their values after that: wait until every service
+            // has its list (or the link ends), then give the reads a moment before writing it up.
+            if sources.ble.gattState == .connected {
+                await waitWhile(timeout: 5) {
+                    sources.ble.gattState == .connected && sources.ble.gattServices.contains { $0.characteristics.isEmpty }
+                }
+                try? await Task.sleep(for: .seconds(1.5))
+            }
             let report = gattReport(for: device, scanner: sources.ble)
             sources.ble.disconnectGATT()
             return report
+
+        case .searchHistory:
+            return HistoryDigest.text(sources.history.entries, query: decodeArg(argsJSON, keys: ["text", "host", "bssid"]) ?? "")
 
         case .remember:
             guard let text = decodeArg(argsJSON, keys: ["text"]) else {
@@ -409,34 +498,25 @@ struct AssistantActions {
     /// an unknown device's own words, and it reaches the model inside a tool result.
     private static func gattReport(for device: BLEDevice, scanner: BLEScanner) -> String {
         let name = AssistantDigest.clean(device.displayName)
-        if case .failed(let reason) = scanner.gattState {
+        switch scanner.gattState {
+        case .failed(let reason):
             return "Could not connect to \"\(name)\": \(AssistantDigest.clean(reason, limit: 100)). "
                 + "Many devices refuse a connection while they are paired with their owner's phone."
+        case .connecting:
+            return "\"\(name)\" did not answer the connection request within 15 seconds. It may be out of range, "
+                + "asleep, or accepting connections only from its paired phone. Nothing was read."
+        case .discovering:
+            return "Connected to \"\(name)\", but it did not list its services within 15 seconds. Nothing was read."
+        default:
+            break
         }
-        guard !scanner.gattServices.isEmpty else {
+        guard !scanner.gattServices.isEmpty, let read = scanner.lastRead, read.deviceID == device.id else {
             return "Connected to \"\(name)\", but it published no services to read. "
                 + "Headphones and trackers often keep everything behind pairing."
         }
-
-        var lines = ["Read from \"\(name)\" over Bluetooth just now (\(device.rssi) dBm):"]
-        for service in scanner.gattServices.prefix(12) {
-            let title = service.name.map { "\(AssistantDigest.clean($0)) (\(service.uuid))" } ?? service.uuid
-            lines.append("- Service \(title)")
-            for characteristic in service.characteristics.prefix(10) {
-                var parts = [AssistantDigest.clean(BLENumbers.characteristicName(uuid: characteristic.uuid) ?? characteristic.uuid)]
-                parts.append(characteristic.properties)
-                if let data = characteristic.value, !data.isEmpty {
-                    if let decoded = GATTValue.decode(uuid: characteristic.uuid, bytes: data) {
-                        parts.append("= \(AssistantDigest.clean(decoded, limit: 80))")
-                    } else {
-                        parts.append("= 0x" + data.prefix(16).map { String(format: "%02x", $0) }.joined())
-                    }
-                }
-                lines.append("  · " + parts.joined(separator: " · "))
-            }
-        }
-        if scanner.gattState == .ended { lines.append("The device closed the link after answering, which is normal.") }
-        return lines.joined(separator: "\n")
+        var text = GATTDigest.text(read, intro: "Read just now over Bluetooth from")
+        if scanner.gattState == .ended { text += "\nThe device closed the link after answering, which is normal." }
+        return text
     }
 
     private static func decodeArg(_ argsJSON: String, keys: [String]) -> String? {

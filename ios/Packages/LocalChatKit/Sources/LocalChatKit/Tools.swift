@@ -18,7 +18,8 @@ public struct ToolRegistry: Sendable {
     /// Tools the question itself plainly asks for ("scan Bluetooth", «просканируй блютуз»), run by the app before
     /// the model starts, so a small model never has to decide on its own — in whatever language — whether to call
     /// them. Their results reach the model exactly as if it had made the calls itself, and count against `maxSteps`.
-    /// Only argument-free tools: the call sent is `{"tool": "<name>"}`.
+    /// Each entry is a tool name, sent as `{"tool": "<name>"}`, or a whole call object (`{"tool": …, "text": …}`)
+    /// for a tool that needs an argument the app already found in the question.
     public var preflight: @MainActor (_ question: String) -> [String]
 
     public init(

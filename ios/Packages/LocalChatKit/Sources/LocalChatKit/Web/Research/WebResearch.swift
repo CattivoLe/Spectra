@@ -84,16 +84,26 @@ public struct WebResearch: Sendable {
     /// `check` смотрит на отобранное и возвращает новый запрос, если ответа нет (`nil` — найденного хватает).
     /// `approve` спрашивает пользователя перед вторым запросом (как и перед первым); `nil` от него — второго захода не будет.
     /// `sent` сообщает о каждом запросе, ушедшем в сеть, — для журнала.
+    /// `initial` — выдача первого запроса из кэша (`SearchCache`): тогда первый запрос в сеть не уходит.
+    /// `fetched` получает каждую выдачу, пришедшую из сети, — чтобы положить её в кэш.
     public func runWithRetry(
         query: String,
         question: String,
+        initial: Gathered? = nil,
         check: (@Sendable (_ question: String, _ evidence: [Passage], _ tried: [String]) async -> String?)?,
         approve: (@Sendable (String) async -> String?)?,
         sent: @escaping @Sendable (String) async -> Void = { _ in },
+        fetched: @escaping @Sendable (String, Gathered) async -> Void = { _, _ in },
         progress: @escaping @Sendable (ResearchStage) async -> Void = { _ in }
     ) async throws -> SearchPayload {
-        var gathered = try await gather(query: query, progress: progress)
-        await sent(query)
+        var gathered: Gathered
+        if let initial {
+            gathered = initial
+        } else {
+            gathered = try await gather(query: query, progress: progress)
+            await sent(query)
+            await fetched(query, gathered)
+        }
         var queries = [query]
         // Без чтения страниц отбирать и проверять нечего: отдаём описания из выдачи как есть.
         guard pagesToRead > 0 else {
@@ -114,6 +124,7 @@ public struct WebResearch: Sendable {
                 await progress(.retrying(query: next))
                 let more = try await gather(query: next, progress: { _ in })
                 await sent(next)
+                await fetched(next, more)
                 queries.append(next)
                 gathered = Self.merge(gathered, more)
                 await progress(.selecting)

@@ -15,11 +15,11 @@ struct TLSBridgeTests {
         func add(_ t: String) { s += t + " " }
     }
 
-    // Disabled: the bridge itself compiles and is a faithful port of
-    // `TlsBridge.kt`, but driving a full four-endpoint TLS handshake purely
-    // in-memory via EmbeddedChannel is flaky (stalls at the first app write).
-    // Tracked for a follow-up; not needed to run the sniffer on-device.
-    @Test(.disabled("flaky in-memory TLS handshake under EmbeddedChannel; revisit"))
+    // Was disabled as "flaky, stalls at the first app write". It was not flaky: `writeApp` used
+    // `EmbeddedChannel.writeOutbound`, which blocks on a write NIOSSL holds until the other handshake ends —
+    // a deadlock. On the phone it froze the proxy, and the whole phone's network with it, on the first
+    // HTTPS request once the CA was trusted.
+    @Test(.timeLimit(.minutes(1)))
     func bridgeShowsCleartextHttp() throws {
         let log = Log()
         do {
@@ -155,7 +155,8 @@ private nonisolated final class TLSEndpoint {
     func send(_ plain: [UInt8]) {
         var buffer = channel.allocator.buffer(capacity: plain.count)
         buffer.writeBytes(plain)
-        _ = try? channel.writeOutbound(buffer)
+        // Not `writeOutbound`: it waits for a write NIOSSL holds until the handshake is done (see TLSBridge.writeApp).
+        channel.writeAndFlush(buffer, promise: nil)
         drain()
     }
 
@@ -165,6 +166,7 @@ private nonisolated final class TLSEndpoint {
         while moved && guardCount < 1024 {
             guardCount += 1
             moved = false
+            loop.run()
             while let out = try? channel.readOutbound(as: ByteBuffer.self) {
                 var copy = out
                 onOutbound(copy.readBytes(length: copy.readableBytes) ?? [])

@@ -697,6 +697,55 @@ struct AssistantWebSessionTests {
         #expect(r.engine.received[1].last?.content.contains("Высота 330 метров.") == true)
     }
 
+    /// The same thing asked again in other words, in a new chat: answered from the first search, nothing sent.
+    @Test func aSimilarQuestionReusesTheEarlierSearch() async throws {
+        let r = try await rig(confirm: true)
+        let asked = Mutex(0)
+        r.web.approve = { query in asked.withLock { $0 += 1 }; return query }
+        r.session.send("Какая высота у Эйфелевой башни?")
+        await r.session.waitUntilIdle()
+        #expect(WebStubProtocol.requests(host: r.host).count == 1)
+        #expect(try await r.store.searchCacheCount() == 1)
+
+        let controller = EngineController(engine: r.engine)
+        try await controller.load(modelAt: URL(fileURLWithPath: "/tmp/m.gguf"))
+        let again = ChatSession(chat: try await r.store.createChat(), store: r.store, controller: controller,
+                                systemPrompt: "Base prompt.", web: r.web)
+        again.send("эйфелева башня, какая у неё высота")
+        await again.waitUntilIdle()
+        #expect(WebStubProtocol.requests(host: r.host).count == 1, "nothing went out the second time")
+        #expect(asked.withLock { $0 } == 1, "nothing to confirm when nothing is sent")
+        #expect(again.searchReused != nil)
+        #expect(again.messages.first?.search?.results.count == 2)
+        #expect(r.engine.received.last?.last?.content.contains("Высота 330 метров.") == true)
+        #expect(try await r.store.searchLog().count == 1, "the log lists only what was sent")
+    }
+
+    /// A different question about the same thing is a different search.
+    @Test func aDifferentQuestionStillSearches() async throws {
+        let r = try await rig()
+        r.session.send("Какая высота у Эйфелевой башни?")
+        await r.session.waitUntilIdle()
+        r.session.send("Сколько весит Эйфелева башня?")
+        await r.session.waitUntilIdle()
+        #expect(WebStubProtocol.requests(host: r.host).count == 2)
+        #expect(r.session.searchReused == nil)
+    }
+
+    @Test func expiredSearchesAreNotReused() async throws {
+        let store = try ChatStore()
+        let gathered = WebResearch.Gathered(results: [SearchResult(title: "t", url: URL(string: "https://e.example/a")!, snippet: "s")],
+                                            passages: [], pagesRead: 0)
+        try await store.cacheSearch(query: "высота башни", provider: "P", gathered: gathered,
+                                    now: Date().addingTimeInterval(-SearchCache.lifetime - 60))
+        #expect(try await store.cachedSearch(for: "высота башни", provider: "P") == nil)
+        try await store.cacheSearch(query: "высота башни", provider: "P", gathered: gathered)
+        #expect(try await store.cachedSearch(for: "башни высота", provider: "P")?.query == "высота башни")
+        #expect(try await store.cachedSearch(for: "высота башни", provider: "Other") == nil, "another service, another search")
+        try await store.clearSearchCache()
+        #expect(try await store.searchCacheCount() == 0)
+    }
+
     @Test func fullResearchReadsThePageAndGivesTheModelTheFact() async throws {
         let r = try await rig(readPages: true)
         r.session.send("Какая высота у Эйфелевой башни?")
@@ -724,5 +773,17 @@ struct AssistantWebSessionTests {
         #expect(WebStubProtocol.sentQueries(r.host) == ["Сколько метров до макушки", "высота башни в метрах"])
         #expect(r.session.messages[0].search?.extraQueries == ["высота башни в метрах"])
         #expect(try await r.store.searchLog().count == 2, "both queries are in the log")
+    }
+}
+
+
+struct SearchCacheSimilarityTests {
+    @Test func wordingDoesNotMatterButMeaningDoes() {
+        #expect(SearchCache.isSimilar("Какая высота у Эйфелевой башни?", "эйфелева башня высота"))
+        #expect(SearchCache.isSimilar("wifi 6 router price", "router price wifi 6"))
+        #expect(SearchCache.isSimilar("WPA3 transition mode", "WPA3 transition mode security"), "one extra word")
+        #expect(!SearchCache.isSimilar("высота Эйфелевой башни", "вес Эйфелевой башни"))
+        #expect(!SearchCache.isSimilar("wifi 6 router price", "wifi 7 router"))
+        #expect(!SearchCache.isSimilar("что", "как"), "nothing meaningful to compare")
     }
 }

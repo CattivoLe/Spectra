@@ -46,6 +46,9 @@ final class BLEScanner: NSObject {
     /// The device the GATT section is bound to, so a stale connection to an
     /// earlier device does not spill into another device's detail view.
     private(set) var gattDeviceID: UUID?
+    /// The last GATT read that returned anything, kept after the link is dropped so the assistant can still
+    /// explain it ("what did that device say about itself?"). Replaced by the next read of any device.
+    private(set) var lastRead: GATTRead?
 
     var isScanning: Bool { state == .scanning }
 
@@ -324,6 +327,7 @@ extension BLEScanner: CBPeripheralDelegate {
             peripheral.discoverCharacteristics(nil, for: service)
         }
         gattState = .connected
+        noteRead()
     }
 
     func peripheral(
@@ -345,6 +349,7 @@ extension BLEScanner: CBPeripheralDelegate {
         where characteristic.properties.contains(.read) {
             peripheral.readValue(for: characteristic)
         }
+        noteRead()
     }
 
     func peripheral(
@@ -360,6 +365,15 @@ extension BLEScanner: CBPeripheralDelegate {
               let ci = gattServices[si].characteristics.firstIndex(where: { $0.uuid == charKey })
         else { return }
         gattServices[si].characteristics[ci].value = characteristic.value
+        noteRead()
+    }
+
+    /// Copies what the bound device has given so far into `lastRead`.
+    private func noteRead() {
+        guard let id = gattDeviceID, !gattServices.isEmpty else { return }
+        let device = devices[id]
+        lastRead = GATTRead(deviceID: id, name: device?.displayName ?? String(localized: "Unknown device"),
+                            rssi: device?.rssi, services: gattServices, readAt: .now)
     }
 
     private static func propertyLabels(_ properties: CBCharacteristicProperties) -> String {
@@ -378,6 +392,15 @@ struct GATTCharacteristic: Identifiable, Equatable {
     let properties: String
     var value: Data?
     var id: String { uuid }
+}
+
+/// What one device published over GATT, as last read.
+struct GATTRead: Equatable {
+    let deviceID: UUID
+    let name: String
+    let rssi: Int?
+    let services: [GATTService]
+    let readAt: Date
 }
 
 struct GATTService: Identifiable, Equatable {

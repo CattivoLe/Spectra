@@ -937,7 +937,6 @@ CDEK	СДЭК
 the Federal Tax Service	ФНС
 Paste a link or a whole message	Вставьте ссылку или всё сообщение
 No link found in that text.	В этом тексте нет ссылки.
-A short link: the real address is hidden.	Короткая ссылка: настоящий адрес скрыт.
 An unusually long name: %s levels in front of %s.	Необычно длинное имя: %s уровней перед %s.
 Check a link	Проверить ссылку
 Who really owns the site, look-alike names and phishing bait.	Кому на самом деле принадлежит сайт, имена-двойники и приманки фишинга.
@@ -1127,3 +1126,216 @@ The path from this phone to any site or address, hop by hop, on a map.	Путь 
 Could not find an IPv4 address for this target.	Не удалось найти IPv4-адрес этой цели.
 Path to %s	Путь до %s
 %s is %s. One probe per hop; a hop that does not answer shows as an asterisk.	%s — это %s. По одному пакету на хоп; не ответивший хоп показан звёздочкой.
+Scanning Wi‑Fi…	Сканирую Wi‑Fi…
+Scanning the network…	Сканирую сеть…
+Scanning Bluetooth…	Сканирую Bluetooth…
+Checking the connection…	Проверяю соединение…
+Measuring speed…	Замеряю скорость…
+Capturing traffic…	Снимаю трафик…
+Running %s…	Выполняю %s…
+Decode the last traffic capture	Расшифруй последний захват трафика
+Give me a security summary: network, internet, and what to fix	Дай сводку по безопасности: сеть, интернет и что стоит исправить
+Scan my local network and show me what these devices are	Просканируй локальную сеть и покажи, что это за устройства
+Scan Bluetooth nearby: is there someone else's tracker?	Просканируй Bluetooth рядом: нет ли чужого трекера?
+Scan the Wi‑Fi around me: which channel is freer?	Просканируй Wi‑Fi вокруг: какой канал свободнее?
+Check my internet connection: DNS, latency, provider	Проверь интернет-соединение: DNS, задержки, провайдер
+Measure my internet speed	Замерь скорость интернета
+Could not open the saved chats: %s. New chats will not be saved.	Не удалось открыть сохранённые диалоги: %s. Новые диалоги не сохранятся.
+Assistant	Ассистент
+Delete all chats?	Удалить все диалоги?
+New chat	Новый диалог
+Internet…	Интернет…
+Could not load the model: %s	Не удалось загрузить модель: %s
+Loading the model…	Загружаю модель…
+Used an earlier search, «%s» (%s): nothing was sent.	Использован недавний поиск «%s» (%s): ничего не отправлено.
+Read from Spectra: %s	Прочитано в Spectra: %s
+Ran: %s	Выполнено: %s
+Send	Отправить
+Will be sent to “%s”	Будет отправлено в «%s»
+Writing the search query…	Составляю запрос…
+Searching the web…	Ищу в интернете…
+Checking whether that is enough…	Проверяю, хватает ли найденного…
+Searching again: «%s»…	Ищу ещё: «%s»…
+Reading pages: %d…	Читаю страницы: %d…
+Picking what matters…	Выбираю нужное…
+Search cancelled: answering without the internet.	Поиск отменён: ответ без интернета.
+Search is not set up: %s.	Поиск не настроен: %s.
+Nothing found for «%s». Answering without the internet.	По запросу «%s» ничего не нашлось. Ответ без интернета.
+Search failed: %s Answering without the internet.	Поиск не удался: %s Ответ без интернета.
+Models	Модели
+%s · for search by meaning	%s · для поиска по смыслу
+Catalog	Каталог
+Checking the file…	Проверяю файл…
+Pause	Пауза
+Download over Wi‑Fi only	Скачивать только по Wi‑Fi
+Real web search through a SearXNG server you provide (ideally your own). The server must have the JSON format enabled.	Настоящий веб-поиск через сервер SearXNG, который вы укажете (лучше свой). На сервере должен быть включён формат JSON.
+API key	Ключ API
+Privacy	Приватность
+Saved searches	Сохранённые поиски
+Forget saved searches	Забыть сохранённые поиски
+failed	не удался
+Ask the assistant	Спросить ассистента
+Analyze the GATT services of “%s”: what is this device, and what does it tell about itself?	Проанализируй GATT-сервисы «%s»: что это за устройство и что оно сообщает о себе?
+Analyze the devices on my local network: what each one is and what deserves attention?	Проанализируй устройства в моей локальной сети: что это за устройства и на что стоит обратить внимание?
+IPv6-only network	Сеть только с IPv6
+Scan again	Сканировать снова
+IPv6 only	Только IPv6
+No IPv4 to scan	Нет IPv4 для поиска
+Open Wi-Fi	Открытая Wi-Fi
+This network has no password. Anyone nearby can join it and read traffic that is not encrypted.	У этой сети нет пароля. Любой поблизости может подключиться и читать незашифрованный трафик.
+Redirects	Переадресации
+Expanding requests the link without loading the page. The sites along the way see your IP address and may learn that the link was opened.	Для раскрытия ссылка запрашивается без загрузки страницы. Сайты по пути увидят ваш IP-адрес и могут узнать, что ссылку открыли.
+Stopped after 10 redirects.	Остановлено после 10 переадресаций.
+Stopped: %s	Остановлено: %s
+The last redirect leaves the web for a %s: link.	Последняя переадресация уводит из веба на ссылку %s:.
+Final address	Конечный адрес
+Following redirects…	Проходим по переадресациям…
+Expand redirects	Раскрыть переадресации
+The site could not be reached to read its certificate.	Не удалось связаться с сайтом, чтобы прочитать сертификат.
+Issued by an authority this site does not use: likely a proxy, an antivirus or an attacker re-signing HTTPS.	Выдан центром, которым этот сайт не пользуется: похоже, HTTPS переподписывает прокси, антивирус или злоумышленник.
+Issued by the authority this site normally uses.	Выдан центром, которым этот сайт обычно пользуется.
+Error	Ошибка
+Issued to	Выдан для
+Common name	Имя (CN)
+Names covered	Покрываемые имена
+Issued by	Выдан кем
+Organization	Организация
+Certificate	Сертификат
+Chain of trust	Цепочка доверия
+No	Нет
+Expected authority	Ожидаемый центр
+Validity	Срок действия
+Valid from	Действует с
+Valid until	Действует до
+Remaining	Осталось
+Expired	Истёк
+The certificate's fingerprint. Compare it with the one another network or device sees: a different value for the same site means someone in between re-signs the traffic.	Отпечаток сертификата. Сравните его с тем, что видно из другой сети или с другого устройства: другое значение для того же сайта значит, что кто-то посередине переподписывает трафик.
+This check was saved before certificate details were kept. Run the connection check again to see them.	Эта проверка сохранена до того, как приложение стало хранить подробности сертификата. Запустите проверку соединения снова, чтобы их увидеть.
+Capture	Захват
+Blink the LED on findings	Мигать светодиодом при находках
+Beep on findings	Пищать при находках
+Reinstall %s	Переустановить %s
+Install firmware %s	Установить прошивку %s
+Install included firmware	Установить встроенную прошивку
+Analyze the recorded traffic of this phone: which servers and apps did it talk to, and is anything unusual?	Проанализируй записанный трафик этого телефона: с какими серверами и приложениями он связывался и нет ли чего-то необычного?
+Saved	Сохранено
+Update saved session	Обновить сохранённую сессию
+Apps keep refusing Spectra's certificate, and none has accepted it yet: it is probably not trusted. Connections that refused go through unread.	Приложения отклоняют сертификат Spectra, и ни одно ещё его не приняло — видимо, ему не включено доверие. Отклонившие соединения идут без расшифровки.
+No saved sessions	Нет сохранённых сессий
+Decode this traffic capture: what is in it, and is anything unusual?	Расшифруй этот захват трафика: что в нём и есть ли что-то необычное?
+Eight seconds down and eight up, to Cloudflare or a Measurement Lab server you pick, with latency under load.	Восемь секунд на приём и восемь на отдачу, к Cloudflare или выбранному серверу Measurement Lab, с задержкой под нагрузкой.
+Cloudflare, nearest	Cloudflare, ближайший
+M-Lab, nearest	M-Lab, ближайший
+Throughput is the steady part of each transfer, after the first second of ramp-up.	Скорость — установившаяся часть каждой передачи, после первой секунды разгона.
+Latency stays near %d ms even with the line full: calls and games will not suffer while something downloads.	Задержка остаётся около %d мс даже при полной загрузке канала: звонки и игры не пострадают, пока что-то скачивается.
+Latency grows to %d ms under load. Noticeable in calls while someone else streams or downloads.	Под нагрузкой задержка растёт до %d мс. Заметно в звонках, пока кто-то ещё смотрит видео или скачивает.
+Latency climbs to %d ms under load: a full queue in the router or modem. Smart queue management (SQM, QoS) on the router fixes this.	Под нагрузкой задержка взлетает до %d мс: очередь в роутере или модеме переполнена. Лечится умным управлением очередью (SQM, QoS) на роутере.
+M-Lab does not offer %s right now, so %s ran the test.	Сейчас M-Lab не предлагает %s, поэтому тест прошёл через %s.
+Streams	Потоки
+Eight seconds down and eight up over one stream each way to a Measurement Lab server. M-Lab publishes every measurement, your IP address included, as open data. Latency is measured before and during the transfers.	Восемь секунд на приём и восемь на отдачу, по одному потоку в каждую сторону, к серверу Measurement Lab. M-Lab публикует каждое измерение вместе с вашим IP-адресом как открытые данные. Задержка измеряется до и во время передачи.
+Nearest edge, chosen by the network	Ближайший узел, выбирает сеть
+Cloudflare answers on one address everywhere and the network routes you to the nearest of its sites, so a particular one cannot be picked. Several parallel streams fill fast lines.	Cloudflare везде отвечает на одном адресе, а сеть сама ведёт к ближайшей его площадке, поэтому выбрать конкретную нельзя. Несколько параллельных потоков загружают даже быстрые линии.
+Nearest	Ближайший
+Picked by M-Lab at test time	M-Lab выберет при запуске теста
+Asking M-Lab for servers…	Запрос серверов у M-Lab…
+Load servers	Загрузить серверы
+M-Lab offers the few machines nearest to this network. It measures over one stream each way and publishes every result, your IP address included, as open data.	M-Lab предлагает несколько ближайших к этой сети машин. Измерение идёт одним потоком в каждую сторону, а каждый результат вместе с вашим IP-адресом публикуется как открытые данные.
+Sensor…	Сенсор…
+Analyze the Wi‑Fi network “%s” (%s) and the traffic captured on it: encryption, channel, signal, clients — is everything fine with it?	Проанализируй Wi‑Fi сеть «%s» (%s) и захваченный в ней трафик: шифрование, канал, сигнал, клиенты — всё ли с ней в порядке?
+Analyze the Wi‑Fi network “%s” (%s): encryption, channel, signal, clients — is everything fine with it?	Проанализируй Wi‑Fi сеть «%s» (%s): шифрование, канал, сигнал, клиенты — всё ли с ней в порядке?
+This network is on 5 GHz (channel %d), and this sensor hears only 2.4 GHz. Capturing it needs the ESP32-C5 sensor.	Эта сеть в диапазоне 5 ГГц (канал %d), а этот сенсор слышит только 2,4 ГГц. Для захвата нужен сенсор ESP32-C5.
+This network is on 5 GHz (channel %d). The sensor's firmware %s captures on 2.4 GHz only: update the sensor to firmware %s or newer.	Эта сеть в диапазоне 5 ГГц (канал %d). Прошивка сенсора %s захватывает только на 2,4 ГГц: обновите сенсор до прошивки %s или новее.
+Asking the router about port forwarding…	Спрашиваю роутер о пробросе портов…
+Connecting to the device…	Подключаюсь к устройству…
+Looking through History…	Смотрю Историю…
+Saving a note…	Сохраняю заметку…
+Removing a note…	Удаляю заметку…
+I tried to run a check but could not finish it. Please ask again.	Я попробовал запустить проверку, но не смог её закончить. Спросите, пожалуйста, ещё раз.
+Earlier chats	Прошлые диалоги
+The on-device assistant needs Android 12 or newer.	Ассистенту на телефоне нужен Android 12 или новее.
+Every chat is erased from this phone. Models, the dossier and settings stay.	Все диалоги будут стёрты с телефона. Модели, досье и настройки останутся.
+More	Ещё
+Models…	Модели…
+Dossier…	Досье…
+Delete all chats	Удалить все диалоги
+No model yet	Модели пока нет
+The assistant runs a language model on this phone: nothing you ask leaves it. Download one to start; Gemma 4 E2B is the best place to start.	Ассистент работает на языковой модели прямо на телефоне: ваши вопросы никуда не уходят. Скачайте модель, чтобы начать; лучше всего начать с Gemma 4 E2B.
+Choose a model	Выбрать модель
+Ask about what Spectra found	Спросите о том, что нашла Spectra
+The assistant reads the app's own scans and can run fresh ones: Wi‑Fi, LAN, Bluetooth, the connection. It runs on this phone.	Ассистент читает результаты сканирований приложения и может запустить новые: Wi‑Fi, LAN, Bluetooth, соединение. Он работает на этом телефоне.
+Hold a chat to delete it.	Удерживайте диалог, чтобы удалить его.
+Download a model under Models to start.	Чтобы начать, скачайте модель в разделе «Модели».
+Try asking	Попробуйте спросить
+Thinking…	Думаю…
+Web: %d sources for «%s»	Интернет: %d источн. по запросу «%s»
+Answer again	Ответить заново
+Continue	Продолжить
+Editing the question	Правка вопроса
+Ask about your network…	Спросите о своей сети…
+Send this query to the internet?	Отправить этот запрос в интернет?
+Don't send	Не отправлять
+This question did not need the internet.	Для этого вопроса интернет не понадобился.
+Models are downloaded from Hugging Face and run on this phone. Larger ones answer better but need more memory and are slower.	Модели скачиваются с Hugging Face и работают на этом телефоне. Крупные отвечают лучше, но им нужно больше памяти и они медленнее.
+Downloading: %s of %s	Загрузка: %s из %s
+Paused at %s	Пауза на %s
+Download failed: %s	Загрузка не удалась: %s
+tight on this phone's memory	впритык по памяти телефона
+too big for this phone	слишком велика для этого телефона
+A model is several gigabytes: on mobile data the download waits for Wi‑Fi unless this is off.	Модель весит несколько гигабайт: на мобильном интернете загрузка ждёт Wi‑Fi, если этот переключатель включён.
+Off by default. When on, a question about something the app cannot measure (what WPS is, which firmware is vulnerable) may be searched on the web. Questions about your own network never are.	По умолчанию выключено. Если включить, вопрос о том, что приложение не может измерить (что такое WPS, какая прошивка уязвима), может быть найден в интернете. Вопросы о вашей собственной сети туда не уходят никогда.
+Search the web	Искать в интернете
+Search service	Поисковый сервис
+Real Brave web search. Needs your API key (there is a free plan). The key is kept encrypted on this phone.	Настоящий поиск Brave. Нужен ваш API-ключ (есть бесплатный тариф). Ключ хранится на телефоне в зашифрованном виде.
+Server address	Адрес сервера
+Confirm each search	Подтверждать каждый поиск
+Read the pages found	Читать найденные страницы
+A similar question within a day reuses an earlier search: nothing is sent again.	Похожий вопрос в течение суток берёт уже найденное: повторно ничего не отправляется.
+Kept	Сохранено
+Saved searches forgotten	Сохранённые поиски забыты
+What was sent	Что отправлялось
+Hold an entry to delete it.	Удерживайте запись, чтобы удалить её.
+sent	отправлено
+Clear the dossier?	Очистить досье?
+The notes and what the assistant learned about each device are erased.	Заметки и то, что ассистент узнал о каждом устройстве, будут стёрты.
+Clear all	Очистить всё
+Dossier	Досье
+No notes yet	Заметок пока нет
+The assistant saves important findings here during chats: suspicious devices, weak passwords, conclusions.	Ассистент сохраняет сюда важные находки из диалогов: подозрительные устройства, слабые пароли, выводы.
+Hold a note to delete it.	Удерживайте заметку, чтобы удалить её.
+Devices the assistant knows the usual state of: %d.	Устройств, обычное состояние которых знает ассистент: %d.
+Code	Код
+Model downloads	Загрузка моделей
+Downloading the assistant's model	Загружается модель ассистента
+Import…	Импорт…
+Settings…	Настройки…
+This Wi-Fi gives the phone no IPv4 address. The device scan walks an IPv4 subnet, so there is nothing to sweep here. Connection, speed and link checks still work.	Эта сеть Wi‑Fi не выдаёт телефону адрес IPv4. Поиск устройств обходит подсеть IPv4, так что здесь нечего сканировать. Проверки соединения, скорости и ссылок работают.
+Edit the path if the camera needs one (e.g. /cam, /live).	Допишите путь, если он нужен камере (например, /cam, /live).
+Android does not trust this certificate: something between you and the site may be re-signing HTTPS.	Android не доверяет этому сертификату: возможно, что-то между вами и сайтом подменяет HTTPS.
+Trusted by Android	Доверяет Android
+%d days	%d дн.
+The firmware inside the app is for %s, and this sensor is %s. Pick its own firmware.bin, or flash it over USB.	Прошивка в приложении — для %s, а этот сенсор — %s. Выберите его собственный firmware.bin или прошейте по USB.
+The app carries the firmware.bin from its last build. Rebuild the Android app after pio run and the new version shows up here.	Приложение везёт firmware.bin из последней сборки. Пересоберите приложение для Android после pio run — и новая версия появится здесь.
+%s · up to date	%s · актуальная
+saved session of %s	сохранённая сессия от %s
+Saved session updated	Сохранённая сессия обновлена
+Saved recordings (%d)	Сохранённые записи (%d)
+Save a recording to keep it here.	Сохраните запись, чтобы она осталась здесь.
+Decode pcap…	Расшифровать pcap…
+Recording stopped by itself: the recorder stopped responding, and the phone would have been left without a network.	Запись остановилась сама: запись трафика перестала отвечать, и телефон остался бы без сети.
+Recording stopped by itself: there was more traffic than the recorder could handle, and the phone would have been left without a network.	Запись остановилась сама: трафика было больше, чем она успевает обработать, и телефон остался бы без сети.
+M-Lab did not offer a server. Try again or pick Cloudflare.	M-Lab не предложил сервер. Попробуйте ещё раз или выберите Cloudflare.
+Fast and writes well in many languages, Russian included: about 27 words per second on iPhone 16. The best place to start.	Быстрая и хорошо пишет по-русски: на iPhone 16 около 27 слов в секунду. С неё лучше начать.
+Larger and more thoughtful, but slower: about 15 words per second on iPhone 16. Needs a phone with 8 GB of memory.	Крупнее и вдумчивее, но медленнее: около 15 слов в секунду на iPhone 16. Нужен телефон с 8 ГБ памяти.
+About 15 words per second on iPhone 16. Noticeably weaker than Gemma in Russian in our tests.	Около 15 слов в секунду на iPhone 16. По-русски в наших пробах заметно слабее Gemma.
+Qwen 3 retrained for Russian by the Vikhr team: writes natural Russian and calls checks reliably. In our tests it sometimes misread numbers (it called a strong signal weak). Not yet measured on iPhone.	Qwen 3, дообученная командой Vikhr для русского: пишет по-русски естественно и уверенно вызывает проверки. В наших пробах иногда путала цифры (назвала сильный сигнал слабым). Скорость на iPhone ещё не замеряли.
+Mistral's small model: good at calling checks and fairly fluent in Russian, although Russian is not officially supported. Tends to answer at length. Not yet measured on iPhone.	Маленькая модель Mistral: хорошо вызывает проверки и довольно бегло пишет по-русски, хотя официально русский не поддерживает. Склонна отвечать длинно. Скорость на iPhone ещё не замеряли.
+The lightest and fastest (about 42 words per second), good for older phones. Its Russian is clumsy.	Самая лёгкая и быстрая (около 42 слов в секунду), подойдёт слабым телефонам. По-русски пишет неуклюже.
+A version of Llama 3.2 with its built-in refusals removed: it answers what ordinary models decline. About 24 tokens per second on iPhone 16. Russian is not officially supported: it writes it clumsily and slips into English words, so it suits English better.	Версия Llama 3.2 без встроенных отказов: отвечает на то, на что обычные модели не соглашаются. Около 24 токенов в секунду на iPhone 16. Русский официально не поддерживается: пишет неуклюже и вставляет английские слова, лучше подходит для английского.
+Built with Llama. The model's safety limits have been removed: it may give inaccurate, rude or inappropriate answers. Use at your own risk; not for children.	Built with Llama. Из модели убраны защитные ограничения: она может выдавать неточные, грубые или неприемлемые ответы. Используйте на свою ответственность; не для детей.
+Not for chatting: it helps the web search find the right parts of pages by meaning, not only by matching words. In our trials it found the answer in all 16 cases, against 14 for matching words alone. Needs web search turned on.	Не для разговора: помогает поиску в интернете находить на страницах нужные куски по смыслу, а не только по совпадению слов. В наших пробах нашла ответ во всех 16 случаях против 14 у поиска по словам. Нужен включённый поиск в интернете.
+This is not a model file: GGUF format expected.	Это не файл модели: ожидается формат GGUF.
+Not enough space: %s needed, %s free.	Не хватает места: нужно %s, свободно %s.
+Any file in GGUF format will do.	Подойдёт любой файл в формате GGUF.
+Copying %s…	Копирую %s…
+Import from a file…	Импорт из файла…
+Could not import the file: %s	Не удалось импортировать файл: %s

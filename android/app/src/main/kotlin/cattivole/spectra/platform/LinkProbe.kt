@@ -2,6 +2,7 @@ package cattivole.spectra.platform
 
 import cattivole.spectra.core.AbroadView
 import cattivole.spectra.core.HopPlace
+import cattivole.spectra.core.PingReply
 import cattivole.spectra.core.RouteTrace
 import cattivole.spectra.core.AccessCheck
 import cattivole.spectra.core.AccessReport
@@ -842,33 +843,58 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
      * [iface] keeps the trace on the LAN when the check is not following the VPN.
      * If the phone refuses that bind, the trace falls back to the system route.
      */
+    /**
+     * Every TTL goes out at once, as on iOS, and the replies are sorted afterwards, so a path takes a couple of
+     * seconds instead of one timeout per silent hop. Hops that stayed silent get a second try, and every hop that
+     * answered is named by reverse DNS.
+     */
     private suspend fun localTrace(iface: String?, target: String = "1.1.1.1", maxHops: Int = 16): LocalTrace = withContext(Dispatchers.IO) {
-        val hops = mutableListOf<TraceHop>()
+        // The first probe finds which options this phone's ping accepts; the rest go out together with them.
         var timeoutFlag: String? = "-W"
         var bind = iface
-        for (ttl in 1..maxHops) {
-            if (!coroutineContext.isActive) break
-            var output = runPing(target, ttl, timeoutFlag, bind)
-            if (output != null && timeoutFlag != null && optionRejected(output)) {
-                timeoutFlag = null
-                output = runPing(target, ttl, null, bind)
-            }
-            if (bind != null && output != null && ifaceRejected(output)) {
-                bind = null
-                output = runPing(target, ttl, timeoutFlag, null)
-            }
-            if (output == null) {
-                return@withContext LocalTrace(target, hops, unavailable = hops.isEmpty())
-            }
-            val reply = LinkParse.pingOutput(output)
-            if (reply.denied) {
-                return@withContext LocalTrace(target, hops, unavailable = hops.isEmpty())
-            }
-            hops += TraceHop(reply.address, reply.millis)
-            if (reply.reached || reply.unreachable) break
-            if (hops.size >= 3 && hops.takeLast(3).all { it.address == null }) break
+        var output = runPing(target, 1, timeoutFlag, bind)
+        if (output != null && optionRejected(output)) {
+            timeoutFlag = null
+            output = runPing(target, 1, null, bind)
         }
-        LocalTrace(target, hops, unavailable = false)
+        if (bind != null && output != null && ifaceRejected(output)) {
+            bind = null
+            output = runPing(target, 1, timeoutFlag, null)
+        }
+        if (output == null) return@withContext LocalTrace(target, emptyList(), unavailable = true)
+        val first = LinkParse.pingOutput(output)
+        if (first.denied) return@withContext LocalTrace(target, emptyList(), unavailable = true)
+
+        val replies = arrayOfNulls<PingReply>(maxHops + 1)
+        replies[1] = first
+        suspend fun probe(ttls: List<Int>) = coroutineScope {
+            val gate = Semaphore(8)
+            ttls.map { ttl ->
+                async {
+                    gate.withPermit {
+                        if (!coroutineContext.isActive) return@withPermit
+                        runPing(target, ttl, timeoutFlag, bind)?.let { replies[ttl] = LinkParse.pingOutput(it) }
+                    }
+                }
+            }.awaitAll()
+        }
+        if (!(first.reached || first.unreachable)) probe((2..maxHops).toList())
+        fun end(): Int = (1..maxHops).firstOrNull { replies[it]?.let { r -> r.reached || r.unreachable } == true } ?: maxHops
+        // A silent router before the end gets one more try: a single lost probe should not leave a star.
+        val silent = (1..end()).filter { replies[it]?.address == null }
+        if (silent.isNotEmpty() && coroutineContext.isActive) probe(silent)
+        var last = end()
+        // Past the last hop that answered, a run of stars says nothing: drop it.
+        if ((1..last).none { replies[it]?.reached == true }) {
+            last = (1..last).lastOrNull { replies[it]?.address != null }?.let { minOf(it + 1, last) } ?: last
+        }
+        val hops = (1..last).map { ttl -> replies[ttl].let { TraceHop(it?.address, it?.millis) } }
+        val names = coroutineScope {
+            hops.mapNotNull { it.address }.distinct().map { address ->
+                async { address to runCatching { java.net.InetAddress.getByName(address).canonicalHostName }.getOrNull()?.takeIf { it != address } }
+            }.awaitAll().toMap()
+        }
+        LocalTrace(target, hops.map { hop -> hop.address?.let { hop.copy(name = names[it]) } ?: hop }, unavailable = false)
     }
 
     private fun runPing(host: String, ttl: Int, timeoutFlag: String?, iface: String?): String? {

@@ -159,6 +159,9 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
     SpectraScreen(
         title = "LAN",
         actions = {
+            if (lan.devices.isNotEmpty()) {
+                AskAssistantButton(model, nav, question = { tr("Analyze the devices on my local network: what each one is and what deserves attention?") })
+            }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -224,6 +227,13 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
         searchPlaceholder = tr("IP, name or MAC"),
         overlay = {
             when {
+                lan.devices.isEmpty() && !lan.scanning && lan.noNetwork && lan.ipv6Only -> EmptyState(
+                    Icons.Rounded.Lan,
+                    tr("IPv6-only network"),
+                    tr("This Wi-Fi gives the phone no IPv4 address. The device scan walks an IPv4 subnet, so there is nothing to sweep here. Connection, speed and link checks still work."),
+                    action = tr("Scan again"),
+                    onAction = lan::scan,
+                )
                 lan.devices.isEmpty() && !lan.scanning && lan.noNetwork -> EmptyState(
                     Icons.Rounded.WifiOff,
                     tr("No Wi-Fi"),
@@ -249,12 +259,14 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
                     icon = Icons.Rounded.Lan,
                     title = when {
                         lan.scanning -> tr("Scanning…")
+                        lan.noNetwork && lan.ipv6Only -> tr("IPv6 only")
                         lan.noNetwork -> tr("No Wi-Fi")
                         info != null -> info.localIp
                         else -> "LAN"
                     },
                     detail = when {
                         lan.scanning -> lanPhase(lan.progress)
+                        lan.noNetwork && lan.ipv6Only -> tr("No IPv4 to scan")
                         lan.noNetwork -> tr("Join a network")
                         info != null -> listOfNotNull("/${info.prefixLength}", info.gateway?.let { tr("gateway %s", it) }, lan.lastScanDate?.let { ago(it) })
                             .joinToString(" · ")
@@ -267,6 +279,12 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
         }
         if (lan.scanning) {
             card(key = "progress", rows = listOf { ProgressRow(lanPhase(lan.progress), lan.fraction) })
+        }
+        val joined = model.store.networks().values.firstOrNull { model.wifiJoiner.isCurrent(it) }
+        if (joined != null && joined.latest.auth.raw == 0) {
+            card(key = "open-wifi", header = tr("Open Wi-Fi"), rows = listOf {
+                NoteRow(tr("This network has no password. Anyone nearby can join it and read traffic that is not encrypted."), warning = true)
+            })
         }
         if (lan.widePrefix) {
             card(key = "wide", rows = listOf { NoteRow(tr("The prefix is wider than /20, so only the local /24 is walked."), warning = false) })
@@ -329,6 +347,56 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
 }
 
 /** Name, verdict and note for one host. */
+/** The stream address, editable, then opened in a player or copied. */
+@Composable
+private fun StreamAddressDialog(address: String, onChange: (String) -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val notify = LocalNotify.current
+    val copy = rememberCopier()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("Stream address")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(tr("Edit the path if the camera needs one (e.g. /cam, /live)."))
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = onChange,
+                    singleLine = true,
+                    placeholder = { Text("rtsp://…") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri,
+                        autoCorrectEnabled = false,
+                    ),
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onDismiss()
+                try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(address.trim())))
+                } catch (_: android.content.ActivityNotFoundException) {
+                    // Android has no player for rtsp:// or rtmp:// of its own.
+                    copy(tr("Stream address"), address.trim())
+                    notify(tr("No app here opens %s links. Install a player such as VLC; the address is copied.", address.substringBefore("://")))
+                } catch (_: Exception) {
+                }
+            }) { Text(tr("Open")) }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = {
+                    copy(tr("Stream address"), address.trim())
+                    onDismiss()
+                }) { Text(tr("Copy")) }
+                TextButton(onClick = onDismiss) { Text(tr("Cancel")) }
+            }
+        },
+    )
+}
+
 @Composable
 private fun LabelDialog(device: LanDevice, onSave: (DeviceLabel) -> Unit, onDismiss: () -> Unit) {
     var name by rememberSaveable { mutableStateOf(device.customName.orEmpty()) }
@@ -428,6 +496,15 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
     val snapshot = entryId != null
     val context = LocalContext.current
     var editing by rememberSaveable { mutableStateOf(false) }
+    /** A stream address shown for editing before it opens: cameras often want a path such as /live. */
+    var editableStream by rememberSaveable { mutableStateOf<String?>(null) }
+    editableStream?.let { address ->
+        StreamAddressDialog(
+            address,
+            onChange = { editableStream = it },
+            onDismiss = { editableStream = null },
+        )
+    }
     if (!snapshot) lan.labels.apply(device)
     if (editing) {
         LabelDialog(
@@ -611,7 +688,9 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
                                         port,
                                         device,
                                         stream = stream != null,
-                                        onOpen = (web ?: stream)?.let { address ->
+                                        onOpen = if (stream != null) {
+                                            { editableStream = stream }
+                                        } else web?.let { address ->
                                             {
                                                 try {
                                                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(address)))

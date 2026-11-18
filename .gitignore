@@ -23,6 +23,11 @@ android/app/build/
 android/local.properties
 android/.idea/
 android/captures/
+android/engine/build/
+android/kit/build/
+android/engine/.cxx/
+# llama.cpp sources, fetched by android/scripts/fetch-llama.sh
+android/engine/src/main/cpp/llama.cpp/
 *.apk
 *.aab
 

@@ -426,6 +426,12 @@ fun BleDetail(model: SpectraModel, nav: Navigator, address: String, entryId: Str
         subtitle = if (snapshot) entry?.let { tr("Saved %s", dateTime(it.savedAt)) } else device.address,
         onBack = nav::back,
         actions = {
+            // Once its services were read, the assistant can explain them: the read outlives the link this screen drops.
+            if (!snapshot && model.gatt.lastRead?.address == device.address) {
+                AskAssistantButton(model, nav, question = {
+                    tr("Analyze the GATT services of “%s”: what is this device, and what does it tell about itself?", device.shownName())
+                })
+            }
             if (!snapshot) {
                 val watched = model.isWatched(device.address)
                 IconButton(onClick = { model.toggleWatch(device.address) }) {

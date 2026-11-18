@@ -12,8 +12,12 @@ data class SpeedResult(
     /** Throughput every quarter second, in bit/s. */
     val downSamples: List<Double>,
     val upSamples: List<Double>,
-    /** The Cloudflare edge that served the test, like "BEG". */
+    /** The Cloudflare edge that served the test, like "BEG", or the M-Lab machine as "Belgrade · mlab1-beg01". */
     val server: String?,
+    /** Measurement Lab ran the test, over one stream each way. */
+    val mlab: Boolean = false,
+    /** Download streams. */
+    val streams: Int = 4,
 ) {
     /**
      * Latency added by a full download or upload queue, the "bufferbloat"

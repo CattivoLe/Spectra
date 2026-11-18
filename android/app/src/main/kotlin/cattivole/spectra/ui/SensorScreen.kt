@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.SettingsInputAntenna
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.material3.AlertDialog
@@ -98,8 +99,31 @@ internal fun intervalLabel(seconds: Int): String = when {
 
 private class PendingFirmware(val name: String, val data: ByteArray)
 
+/** The application image (firmware.bin) a flash bundle carries, with the chip and version its header names. */
+private class BundledFirmware(val fileName: String, val data: ByteArray, val version: String?, val chip: String?)
+
+private fun bundledFirmware(bundles: Collection<cattivole.spectra.core.FlashBundle.Image>): List<BundledFirmware> =
+    bundles.mapNotNull { image ->
+        // The bootloader is an ESP image too; the app sits at the highest offset.
+        val app = image.segments
+            .filter { it.data.isNotEmpty() && it.data[0] == cattivole.spectra.core.FirmwareUpdate.MAGIC }
+            .maxByOrNull { it.offset } ?: return@mapNotNull null
+        if (cattivole.spectra.core.FirmwareUpdate.validate(app.data) != null) return@mapNotNull null
+        val chip = cattivole.spectra.core.FirmwareUpdate.chipName(app.data)
+        val suffix = when (chip) {
+            "ESP32-C5" -> "-esp32-c5"
+            "ESP32" -> "-esp32"
+            else -> ""
+        }
+        BundledFirmware("firmware$suffix.bin", app.data, cattivole.spectra.core.FirmwareUpdate.taggedVersion(app.data), chip)
+    }
+
+/** The image built for [chip]. An image whose header names no known chip only goes to a sensor no other image fits. */
+private fun List<BundledFirmware>.matching(chip: String): BundledFirmware? =
+    firstOrNull { it.chip == chip } ?: if (any { it.chip != null }) null else firstOrNull()
+
 @Composable
-fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}) {
+fun SensorScreen(model: SpectraModel, onBack: (() -> Unit)? = null, onFlash: () -> Unit = {}) {
     model.generation
     // USB attach is not always delivered while the screen is up, so the port is
     // re-read here. An unchanged list does not redraw.
@@ -143,7 +167,8 @@ fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}) {
             dismissButton = { TextButton(onClick = { pending = null }) { Text(tr("Cancel")) } },
         )
     }
-    SpectraScreen(tr("Sensor")) {
+    val included = remember(model.usb.bundles) { bundledFirmware(model.usb.bundles.values) }
+    SpectraScreen(tr("Sensor"), onBack = onBack) {
         freeCard("status") { SensorStatus(model) }
         card(
             header = tr("Flash from the phone"),
@@ -197,12 +222,27 @@ fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}) {
                     add { InfoRow(tr("Scans this session"), "${model.store.scanCount}") }
                 },
             )
-            card(
-                header = tr("Alerts on sensor"),
-                key = "alerts",
-                footer = tr("The LED blinks red for a threat, yellow for a warning, orange for a tracker that keeps showing up, green for an open network, blue for a watched Bluetooth device and purple for a watched network."),
-                rows = buildList { add { AlertRow(link) } },
-            )
+            // Older firmware does not say what the board has: every mode is offered, as before.
+            val outputs = link.info?.outputs ?: 0b11
+            if (outputs != 0) {
+                card(
+                    header = tr("Alerts on sensor"),
+                    key = "alerts",
+                    footer = if (outputs and 0b10 != 0) {
+                        tr("The LED blinks red for a threat, yellow for a warning, orange for a tracker that keeps showing up, green for an open network, blue for a watched Bluetooth device and purple for a watched network.")
+                    } else {
+                        null
+                    },
+                    rows = buildList {
+                        when (outputs) {
+                            // The ESP32-C5 board: an RGB LED and no speaker.
+                            0b10 -> add { AlertBitRow(link, tr("Blink the LED on findings"), 0b10) }
+                            0b01 -> add { AlertBitRow(link, tr("Beep on findings"), 0b01) }
+                            else -> add { AlertRow(link) }
+                        }
+                    },
+                )
+            }
             link.info?.let { info ->
                 val connected = link.state is SensorLink.State.Connected
                 card(
@@ -210,11 +250,18 @@ fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}) {
                     key = "device",
                     footer = when {
                         connected && !info.ota -> tr("This firmware cannot take updates from the app. Connect the board with a USB cable and use Flash over USB once. After that, updates install from here.")
-                        connected && info.ota -> tr("Choose firmware.bin from pio run, the same app image Launcher installs. A merged image with a bootloader is rejected.")
+                        connected && included.isNotEmpty() && included.matching(info.chip) == null -> tr(
+                            "The firmware inside the app is for %s, and this sensor is %s. Pick its own firmware.bin, or flash it over USB.",
+                            included.mapNotNull { it.chip }.joinToString(", "),
+                            info.chip,
+                        )
+                        connected && included.matching(info.chip) != null -> tr("The app carries the firmware.bin from its last build. Rebuild the Android app after pio run and the new version shows up here.")
+                        connected -> tr("Choose firmware.bin from pio run, the same app image Launcher installs. A merged image with a bootloader is rejected.")
                         else -> null
                     },
                     rows = buildList {
-                        add { InfoRow(tr("Firmware"), info.fw) }
+                        val upToDate = connected && info.ota && included.matching(info.chip)?.version == info.fw
+                        add { InfoRow(tr("Firmware"), if (upToDate) tr("%s · up to date", info.fw) else info.fw) }
                         add { InfoRow(tr("Reported interval"), intervalLabel(info.interval)) }
                         add { InfoRow(tr("Updates"), if (info.ota) tr("From the app") else tr("Not from the app")) }
                         link.batteryLevel?.let { level -> add { InfoRow(tr("Battery"), batteryLine(level, link.isCharging == true)) } }
@@ -230,6 +277,24 @@ fun SensorScreen(model: SpectraModel, onFlash: () -> Unit = {}) {
                             }
                         }
                         if (connected && info.ota && link.firmwareUpdate?.isRunning != true) {
+                            // The app carries an image per board; only the one for this sensor's chip is offered.
+                            val bundled = included.matching(info.chip)
+                            if (bundled != null) {
+                                val version = bundled.version
+                                add {
+                                    if (version != null && version == info.fw) {
+                                        ActionRow(tr("Reinstall %s", version), Icons.Rounded.Refresh, onClick = {
+                                            pending = PendingFirmware(bundled.fileName, bundled.data)
+                                        })
+                                    } else {
+                                        ActionRow(
+                                            if (version != null) tr("Install firmware %s", version) else tr("Install included firmware"),
+                                            Icons.Rounded.SystemUpdate,
+                                            onClick = { pending = PendingFirmware(bundled.fileName, bundled.data) },
+                                        )
+                                    }
+                                }
+                            }
                             add {
                                 ActionRow(tr("Choose a firmware file…"), Icons.Rounded.FolderOpen, onClick = {
                                     picker.launch(arrayOf("application/octet-stream", "*/*"))
@@ -489,6 +554,25 @@ private fun AlertRow(link: SensorLink) {
                 )
             }
         }
+    }
+}
+
+/** One alert output on or off, keeping the other: a board without a speaker should not wipe the sound setting the Cardputer will use. */
+@Composable
+private fun AlertBitRow(link: SensorLink, title: String, bit: Int) {
+    val on = link.alertMode.flags and bit != 0
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .toggleable(value = on, role = Role.Switch, onValueChange = { checked ->
+                val flags = if (checked) link.alertMode.flags or bit else link.alertMode.flags and bit.inv()
+                SensorLink.AlertMode.entries.firstOrNull { it.flags == flags }?.let(link::setAlertMode)
+            })
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+        Switch(checked = on, onCheckedChange = null)
     }
 }
 

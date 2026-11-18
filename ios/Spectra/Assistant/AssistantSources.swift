@@ -70,7 +70,7 @@ struct AssistantSources {
             hasBluetooth: !ble.devices.isEmpty,
             hasWifi: !store.networks.isEmpty,
             hasLinkReport: probe.report?.status != nil,
-            hasCapture: captures.latest != nil || (!link.rawCapturing && link.rawFrameCount > 0)
+            hasCapture: captures.latest != nil || captures.currentRecording != nil || (!link.rawCapturing && link.rawFrameCount > 0)
         )
     }
 
@@ -168,13 +168,30 @@ struct AssistantSources {
             snapshot.link = info
         }
         snapshot.capture = captureText()
+        if let read = ble.lastRead {
+            let age = Int(now.timeIntervalSince(read.readAt) / 60)
+            snapshot.gatt = GATTDigest.text(read, intro: age < 1 ? "Read just now from" : "Read \(age) min ago from")
+        }
         return snapshot
     }
 
-    /// The capture last decoded on the Decode pcap screen, or else the one the sensor still holds from its last run.
+    /// Both kinds of recorded traffic the user may mean by "the capture", newest first: the Wi‑Fi capture (see
+    /// `pcapText`) and the phone's own traffic from the Traffic screen.
     private func captureText() -> String? {
+        var parts: [(date: Date, text: String)] = []
+        if let pcap = pcapText() { parts.append(pcap) }
+        if let recording = captures.currentRecording {
+            parts.append((recording.keptAt, TrafficDigest.text(recording.flows, name: recording.name,
+                                                                origin: "recorded on the phone (Traffic screen)")))
+        }
+        guard !parts.isEmpty else { return nil }
+        return parts.sorted { $0.date > $1.date }.map(\.text).joined(separator: "\n\n")
+    }
+
+    /// The capture last decoded on the Decode pcap screen, or else the one the sensor still holds from its last run.
+    private func pcapText() -> (date: Date, text: String)? {
         if let entry = captures.latest {
-            return CaptureDigest.text(entry.analysis, name: entry.name, origin: entry.origin, describe: describe)
+            return (entry.decodedAt, CaptureDigest.text(entry.analysis, name: entry.name, origin: entry.origin, describe: describe))
         }
         guard !link.rawCapturing, link.rawFrameCount > 0,
               let analysis = try? PcapAnalyzer.analyze(link.rawCapturePcap()) else { return nil }
@@ -182,7 +199,7 @@ struct AssistantSources {
         if let bssid = link.rawCaptureNetwork, let network = store.networks[bssid] {
             name = network.revealedSSID ?? network.latest.ssid ?? bssid.description
         }
-        return CaptureDigest.text(analysis, name: name, origin: "taken by the Spectra sensor, not opened yet", describe: describe)
+        return (.distantPast, CaptureDigest.text(analysis, name: name, origin: "taken by the Spectra sensor, not opened yet", describe: describe))
     }
 
     /// A name for an address seen in a capture: the Wi‑Fi network it belongs to, a LAN device, or the maker.

@@ -35,6 +35,26 @@ nonisolated final class TrafficProxy {
     private var ipID: UInt16 = 1
     private var dirty = false
     private var lastPublish = Date.distantPast
+    private var sweeper: RepeatedTask?
+
+    /// The loop's health as the tunnel's watchdog sees it from another thread, hence the lock: the watchdog must
+    /// never wait on the loop itself, or a stuck loop takes the watchdog down with it.
+    struct Backlog: Sendable {
+        /// Packets handed to `loop` and not processed yet.
+        var pending = 0
+        /// When the loop last took a packet.
+        var lastDrain = Date()
+        /// When the 5 s sweep last ran: a loop stuck inside one task stops beating even with nothing queued.
+        var lastBeat = Date()
+        var links = 0
+        /// What the loop is doing right now ("packet", "mitm <host>", …) and since when, for the log of a stall.
+        var phase = "idle"
+        var phaseSince = Date()
+        /// The phone kept refusing the certificate and never accepted it: probably not trusted (a notice only).
+        var decryptOff = false
+    }
+    private let backlog = OSAllocatedUnfairLock(initialState: Backlog())
+    var backlogState: Backlog { backlog.withLock { $0 } }
 
     init(
         writer: @escaping TunnelWriter,
@@ -47,15 +67,40 @@ nonisolated final class TrafficProxy {
         self.decryptTLS = decryptTLS
         self.certificate = certificate
         self.onFlows = onFlows
+        // Without this, links only ever closed on an error — which UDP almost never has — so every DNS query
+        // left one behind, the table filled up within minutes, and from then on every new connection on the
+        // phone was refused: no app could reach the network until the VPN was turned off.
+        sweeper = loop.scheduleRepeatedTask(initialDelay: .seconds(5), delay: .seconds(5)) { [weak self] _ in
+            self?.sweep(now: Self.now())
+        }
     }
 
-    /// Feeds one captured IP packet (called off the tunnel read callback).
+    /// Feeds one captured IP packet (called off the tunnel read callback). Past `maxBacklog` waiting packets the
+    /// packet is dropped rather than queued: TCP sends it again, and a proxy that cannot keep up must not grow
+    /// without bound inside an extension the system kills at a few dozen megabytes.
     func handle(_ packet: Data) {
-        loop.execute { self.process([UInt8](packet)) }
+        let accepted = backlog.withLock { state -> Bool in
+            guard state.pending < Self.maxBacklog else { return false }
+            state.pending += 1
+            return true
+        }
+        guard accepted else { return }
+        loop.execute {
+            self.backlog.withLock { state in
+                state.pending -= 1
+                state.lastDrain = Date()
+                state.phase = "packet"
+                state.phaseSince = state.lastDrain
+            }
+            self.process([UInt8](packet))
+            self.phase("idle")
+        }
     }
 
     func stop() {
         loop.execute {
+            self.sweeper?.cancel()
+            self.sweeper = nil
             self.tcp.values.forEach { $0.close() }
             self.udp.values.forEach { $0.close() }
             self.publish(force: true)
@@ -81,7 +126,7 @@ nonisolated final class TrafficProxy {
             }
         case IPCodec.udp:
             guard let header = IPCodec.parseUDP(ip.payload) else { return }
-            if decryptTLS() && header.dstPort == 443 {
+            if header.dstPort == 443 && shouldDecrypt() {
                 udp.removeValue(forKey: key("UDP", ip.src, header.srcPort, ip.dst, header.dstPort))?.close()
                 return
             }
@@ -94,8 +139,46 @@ nonisolated final class TrafficProxy {
         publish(force: false)
     }
 
+    /// Closes links nobody used for a while: a UDP association after `udpIdle` (a DNS one after `dnsIdle`), a TCP
+    /// connection after `tcpIdle`, or one whose server never answered within `connectTimeout`.
+    func sweep(now: Int64) {
+        defer {
+            let links = tcp.count + udp.count
+            backlog.withLock {
+                $0.lastBeat = Date()
+                $0.links = links
+            }
+        }
+        for link in udp.values where now - link.flow.lastAt > Int64((link.isDNS ? Self.dnsIdle : Self.udpIdle) * 1000) {
+            link.close()
+        }
+        for link in tcp.values where link.isStale(now: now) {
+            link.fail()
+        }
+        publish(force: false)
+    }
+
+    /// With the table full, the link used longest ago makes way for the new one instead of the new one being
+    /// refused: a full table must never cut the phone off.
+    private func makeRoom() -> Bool {
+        while tcp.count + udp.count >= Self.maxLinks {
+            let oldUDP = udp.values.min { $0.flow.lastAt < $1.flow.lastAt }
+            let oldTCP = tcp.values.min { $0.flow.lastAt < $1.flow.lastAt }
+            if let oldUDP, oldUDP.flow.lastAt <= (oldTCP?.flow.lastAt ?? .max) {
+                oldUDP.close()
+            } else if let oldTCP {
+                oldTCP.fail()
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+
+    var linkCount: Int { tcp.count + udp.count }
+
     private func openTCP(_ ip: IPCodec.Packet, _ header: IPCodec.TCP, _ key: String) {
-        if tcp.count + udp.count >= Self.maxLinks { reject(ip, header); return }
+        guard makeRoom() else { reject(ip, header); return }
         let flow = track(ip, "TCP", header.srcPort, header.dstPort)
         let link = TCPLink(proxy: self, key: key, flow: flow, src: ip.src, dst: ip.dst,
                            srcPort: header.srcPort, dstPort: header.dstPort, v6: ip.version == 6)
@@ -105,7 +188,7 @@ nonisolated final class TrafficProxy {
     }
 
     private func openUDP(_ ip: IPCodec.Packet, _ header: IPCodec.UDP, _ key: String) -> UDPLink? {
-        if tcp.count + udp.count >= Self.maxLinks { return nil }
+        guard makeRoom() else { return nil }
         let flow = track(ip, "UDP", header.srcPort, header.dstPort)
         let link = UDPLink(proxy: self, key: key, flow: flow, src: ip.src, dst: ip.dst,
                            srcPort: header.srcPort, dstPort: header.dstPort)
@@ -158,6 +241,41 @@ nonisolated final class TrafficProxy {
     func removeTCP(_ key: String) { tcp.removeValue(forKey: key) }
     func removeUDP(_ key: String) { udp.removeValue(forKey: key) }
     func shouldDecrypt() -> Bool { decryptTLS() }
+
+    /// Names what the loop is about to do, so a stall can be pinned to it.
+    func phase(_ name: String) {
+        backlog.withLock {
+            $0.phase = name
+            $0.phaseSince = Date()
+        }
+    }
+
+    // MARK: Hosts that refuse the certificate
+
+    /// A host whose app refused Spectra's certificate is left alone for the rest of the run: its connections go
+    /// through untouched instead of failing again and again. Apps and system services that pin their
+    /// certificates always refuse, however the CA is trusted, so one refusal never turns decryption off as a whole.
+    private var refusedHosts: Set<String> = []
+    private var refusals = 0
+    private var acceptances = 0
+    /// So many refusals and not one acceptance: the phone probably does not trust the certificate at all.
+    /// Only reported (`Backlog.decryptOff`), since it cannot be told apart from a run of pinned services.
+    static let refusalsBeforeNotice = 10
+
+    func mitmAllowed(host: String) -> Bool { !refusedHosts.contains(host) }
+
+    func mitmVerdict(host: String, accepted: Bool) {
+        if accepted {
+            acceptances += 1
+            return
+        }
+        refusedHosts.insert(host)
+        refusals += 1
+        if refusals == Self.refusalsBeforeNotice && acceptances == 0 {
+            backlog.withLock { $0.decryptOff = true }
+            snifferLog.error("\(self.refusals) certificate refusals and no acceptance: the CA is probably not trusted")
+        }
+    }
     func authority() -> LocalCertificateAuthority? { certificate() }
 
     private func publish(force: Bool) {
@@ -181,8 +299,13 @@ nonisolated final class TrafficProxy {
 
     static let maxLinks = 400
     static let maxShown = 400
+    static let maxBacklog = 4096
     static let tcpIdle: TimeInterval = 300
     static let udpIdle: TimeInterval = 60
+    /// A DNS association is a question or two (A and AAAA may share a port) and their answers: done within seconds.
+    static let dnsIdle: TimeInterval = 10
+    /// A server that has not accepted the connection by then is not going to.
+    static let connectTimeout: TimeInterval = 20
 
     // MARK: Live flow (mutable, snapshotted for the UI)
 

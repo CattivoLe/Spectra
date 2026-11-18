@@ -500,14 +500,10 @@ struct NetworkRow: View {
                             .foregroundStyle(.yellow)
                     }
                     if isCurrent {
-                        Text("Connected")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(.green, in: .capsule)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                            .accessibilityLabel("Connected")
                     }
                 }
                 Group {

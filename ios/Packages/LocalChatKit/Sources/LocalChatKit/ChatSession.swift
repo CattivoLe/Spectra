@@ -30,6 +30,8 @@ public final class ChatSession {
     public private(set) var searchStage: ResearchStage?
     /// Сообщение о том, что поиск не состоялся: ответ при этом всё равно даётся, но без интернета.
     public private(set) var searchNotice: String?
+    /// Set when the last answer reused an earlier web search instead of going online (see `SearchCache`).
+    public private(set) var searchReused: String?
     /// A tool call is awaiting its result, e.g. "Scanning Wi‑Fi…". `nil` the rest of the time.
     public private(set) var toolStatus: String?
 
@@ -196,6 +198,7 @@ public final class ChatSession {
         task = Task { @MainActor in
             do {
                 searchNotice = nil
+                searchReused = nil
                 try await prepare()
                 guard messages.last?.role == .user else {
                     isGenerating = false
@@ -262,7 +265,22 @@ public final class ChatSession {
             try Task.checkCancellation()
         }
 
-        if web.confirmEachSearch {
+        let research: WebResearch
+        do {
+            research = try web.makeResearch()
+        } catch {
+            searchNotice = String(localized: "\(error.localizedDescription)")
+            return
+        }
+        let providerName = research.provider.name
+
+        // A similar question was searched not long ago: reuse what it brought back. Nothing goes online, so
+        // there is nothing to confirm either.
+        let reused = try? await store.cachedSearch(for: query, provider: providerName)
+        if let reused {
+            query = reused.query
+            searchReused = String(localized: "Used an earlier search, «\(reused.query)» (\(reused.date.formatted(date: .omitted, time: .shortened))): nothing was sent.")
+        } else if web.confirmEachSearch {
             // Без окна подтверждения наружу ничего не уходит.
             guard let approved = await web.approve?(query) else {
                 // Turning the search down is the user's own choice, unlike a planner that decided it was not
@@ -274,15 +292,6 @@ public final class ChatSession {
         }
         query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
-
-        let research: WebResearch
-        do {
-            research = try web.makeResearch()
-        } catch {
-            searchNotice = String(localized: "\(error.localizedDescription)")
-            return
-        }
-        let providerName = research.provider.name
 
         // A second pass: the model looks at what was found and, if the answer is not there, proposes another query.
         // That query goes online too, so with confirmation on the user sees it first.
@@ -306,8 +315,11 @@ public final class ChatSession {
 
         do {
             let payload = try await research.runWithRetry(
-                query: query, question: question, check: check, approve: approve,
-                sent: { sentQuery in try? await store.logSearch(query: sentQuery, provider: providerName, succeeded: true) }
+                query: query, question: question, initial: reused?.gathered, check: check, approve: approve,
+                sent: { sentQuery in try? await store.logSearch(query: sentQuery, provider: providerName, succeeded: true) },
+                fetched: { sentQuery, gathered in
+                    try? await store.cacheSearch(query: sentQuery, provider: providerName, gathered: gathered)
+                }
             ) { stage in
                 await MainActor.run { [weak self] in self?.searchStage = stage }
             }
@@ -388,8 +400,10 @@ public final class ChatSession {
         // What the question itself plainly asks to run goes first, without leaving it to the model: the results
         // then reach it as if it had made those calls itself, and it only has to answer from them.
         if !continuing, let tools, let question = messages.dropLast().last, question.role == .user {
-            for name in tools.preflight(question.content).prefix(stepsLeft) {
-                let args = "{\"tool\": \"\(name)\"}"
+            for entry in tools.preflight(question.content).prefix(stepsLeft) {
+                let call = Self.parseToolCall(tools.callTag + entry, tag: tools.callTag)
+                let name = call?.name ?? entry
+                let args = call?.argsJSON ?? "{\"tool\": \"\(entry)\"}"
                 stepsLeft -= 1
                 toolsUsed.append(name)
                 toolStatus = tools.runningLabel(name)

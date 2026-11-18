@@ -69,6 +69,7 @@ struct SpectraApp: App {
                         link: link, probe: linkProbe, joiner: joiner, speed: speedTester, captures: captures,
                         memory: assistantMemory
                     )
+                    captures.recordedTraffic = { [weak sniffer] in sniffer?.assistantRecording }
                     assistant.dataSource = { question in sources.attachment(for: question) }
                     assistant.memory = assistantMemory
                     assistant.actions = AssistantActions(sources: sources, memory: assistantMemory)

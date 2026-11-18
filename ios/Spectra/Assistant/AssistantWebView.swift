@@ -8,6 +8,7 @@ struct AssistantWebView: View {
     @State private var testing = false
     @State private var testResult: String?
     @State private var logCount = 0
+    @State private var cacheCount = 0
 
     var body: some View {
         @Bindable var web = model.web
@@ -96,10 +97,26 @@ struct AssistantWebView: View {
             } footer: {
                 Text("Everything that was sent to the internet is recorded here.")
             }
+
+            Section {
+                LabeledContent("Saved searches", value: "\(cacheCount)")
+                Button("Forget saved searches", role: .destructive) {
+                    Task {
+                        try? await model.store.clearSearchCache()
+                        cacheCount = 0
+                    }
+                }
+                .disabled(cacheCount == 0)
+            } footer: {
+                Text("A question searched in the last 24 hours, or one worded almost the same, is answered from what that search found: nothing is sent again. The pages are kept on the phone, encrypted with the chats.")
+            }
         }
         .navigationTitle("Internet")
         .navigationBarTitleDisplayMode(.inline)
-        .task { logCount = (try? await model.store.searchLog().count) ?? 0 }
+        .task {
+            logCount = (try? await model.store.searchLog().count) ?? 0
+            cacheCount = (try? await model.store.searchCacheCount()) ?? 0
+        }
         .confirmationDialog("Allow web search?", isPresented: $confirmEnable, titleVisibility: .visible) {
             Button("Allow") { model.web.isEnabled = true }
         } message: {
@@ -155,6 +172,7 @@ struct AssistantSearchLogView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            .onDelete(perform: delete)
         }
         .navigationTitle("Query log")
         .navigationBarTitleDisplayMode(.inline)
@@ -168,6 +186,15 @@ struct AssistantSearchLogView: View {
             .disabled(entries.isEmpty)
         }
         .task { entries = (try? await model.store.searchLog()) ?? [] }
+    }
+
+    /// Swipe to delete a single entry.
+    private func delete(_ offsets: IndexSet) {
+        let ids = offsets.compactMap { entries[$0].id }
+        entries.remove(atOffsets: offsets)
+        Task {
+            for id in ids { try? await model.store.deleteSearchLogEntry(id: id) }
+        }
     }
 }
 

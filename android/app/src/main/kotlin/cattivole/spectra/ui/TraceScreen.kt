@@ -145,6 +145,9 @@ private fun HopLine(ttl: Int, hop: TraceHop, place: HopPlace?) {
         )
         Column(Modifier.weight(1f)) {
             Text(hop.address ?: "*", style = MaterialTheme.typography.bodyLarge.merge(Tabular))
+            hop.name?.let { name ->
+                Text(name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            }
             val detail = when {
                 place != null -> listOfNotNull(
                     listOfNotNull(place.city, place.countryCode?.let { Locale("", it).displayCountry.ifEmpty { it } }).joinToString(", ").ifEmpty { null },

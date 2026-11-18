@@ -6,9 +6,11 @@ import SwiftUI
 /// publishes into the shared App Group.
 struct SnifferView: View {
     @Environment(TrafficSniffer.self) private var sniffer
+    @Environment(CaptureShelf.self) private var captures
     @State private var exportItem: ShareItem?
     @State private var kindFilter: TrafficKind?
     @State private var search = ""
+    @State private var saves = 0
 
     /// Flows after the protocol filter and the host/request search.
     private var filtered: [TrafficFlow] {
@@ -31,8 +33,12 @@ struct SnifferView: View {
                           systemImage: sniffer.running ? "stop.circle.fill" : "record.circle")
                 }
                 if sniffer.running || !sniffer.flows.isEmpty {
-                    Button("Save session", action: sniffer.saveCurrent)
-                        .disabled(sniffer.flows.isEmpty)
+                    saveButton
+                }
+                if !sniffer.saved.isEmpty {
+                    NavigationLink { SavedSessionsView() } label: {
+                        Label("Saved sessions (\(sniffer.saved.count))", systemImage: "tray.full")
+                    }
                 }
                 if !sniffer.flows.isEmpty {
                     Button("Clear", role: .destructive, action: sniffer.clear)
@@ -75,22 +81,13 @@ struct SnifferView: View {
                 }
             }
 
-            if !sniffer.saved.isEmpty {
-                Section("Saved") {
-                    ForEach(sniffer.saved) { session in
-                        NavigationLink { SavedSessionView(session: session) } label: {
-                            VStack(alignment: .leading) {
-                                Text(Date(timeIntervalSince1970: Double(session.stoppedAt) / 1000), style: .date)
-                                Text("\(session.flows.count) connections").font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .onDelete { indexes in indexes.map { sniffer.saved[$0] }.forEach(sniffer.delete) }
-                }
-            }
         }
         .navigationTitle("Traffic")
+        .sensoryFeedback(.success, trigger: saves)
         .searchable(text: $search, prompt: "Host or request")
+        .askAssistant(isShown: !sniffer.flows.isEmpty,
+                      question: { String(localized: "Analyze the recorded traffic of this phone: which servers and apps did it talk to, and is anything unusual?") },
+                      prepare: { captures.keep(traffic: sniffer.flows, name: sniffer.running ? "recording in progress" : "current recording") })
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -106,6 +103,24 @@ struct SnifferView: View {
                           : "line.3.horizontal.decrease.circle.fill")
                 }
             }
+        }
+    }
+
+    /// Says what a tap does and what it did: saved as it is (nothing to do), save, or update the session this
+    /// recording was already saved as — never a second identical session.
+    @ViewBuilder
+    private var saveButton: some View {
+        if sniffer.isCurrentSaved {
+            Label("Saved", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        } else {
+            Button {
+                if sniffer.saveCurrent() { saves += 1 }
+            } label: {
+                Label(sniffer.currentSessionID == nil ? "Save session" : "Update saved session",
+                      systemImage: "square.and.arrow.down")
+            }
+            .disabled(sniffer.flows.isEmpty)
         }
     }
 
@@ -199,14 +214,51 @@ struct ExchangeDetailView: View {
     }
 }
 
+/// Every saved recording, newest first, with its time so two from the same day can be told apart.
+struct SavedSessionsView: View {
+    @Environment(TrafficSniffer.self) private var sniffer
+
+    var body: some View {
+        List {
+            if sniffer.saved.isEmpty { Text("No saved sessions").foregroundStyle(.secondary) }
+            ForEach(sniffer.saved) { session in
+                NavigationLink { SavedSessionView(session: session) } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(Date(timeIntervalSince1970: Double(session.stoppedAt) / 1000),
+                                 format: .dateTime.day().month().hour().minute())
+                            if session.id == sniffer.currentSessionID {
+                                Text("This recording").font(.caption).foregroundStyle(.green)
+                            }
+                        }
+                        Text("\(session.flows.count) connections").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .onDelete { indexes in indexes.map { sniffer.saved[$0] }.forEach(sniffer.delete) }
+        }
+        .navigationTitle("Saved sessions")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { if !sniffer.saved.isEmpty { EditButton() } }
+    }
+}
+
 struct SavedSessionView: View {
     let session: TrafficSession
+    @Environment(CaptureShelf.self) private var captures
     var body: some View {
         List(session.flows) { flow in
             NavigationLink { FlowDetailView(flow: flow) } label: { FlowRow(flow: flow) }
         }
         .navigationTitle("Session")
         .navigationBarTitleDisplayMode(.inline)
+        .askAssistant(isShown: !session.flows.isEmpty,
+                      question: { String(localized: "Analyze the recorded traffic of this phone: which servers and apps did it talk to, and is anything unusual?") },
+                      prepare: {
+                          let stopped = Date(timeIntervalSince1970: Double(session.stoppedAt) / 1000)
+                          captures.keep(traffic: session.flows,
+                                        name: "saved session of " + stopped.formatted(.dateTime.day().month().hour().minute()))
+                      })
     }
 }
 

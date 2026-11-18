@@ -64,7 +64,7 @@ fun LazyListScope.connectionEntry(model: SpectraModel, nav: Navigator) {
                 )
             }
         }
-        add { RouteRow(link) }
+        add { RouteRow(link, model.wifiJoiner.currentSsid != null) }
         if (link.running) {
             add { ProgressRow(tr(link.phase.ifEmpty { "Checking…" }), link.fraction) }
         } else {
@@ -100,7 +100,7 @@ fun LinkScreen(model: SpectraModel, nav: Navigator) {
             }
         },
     ) {
-        card(key = "route", rows = listOf { RouteRow(link) })
+        card(key = "route", rows = listOf { RouteRow(link, model.wifiJoiner.currentSsid != null) })
         if (link.running) {
             card(key = "progress", rows = listOf { ProgressRow(tr(link.phase.ifEmpty { "Checking…" }), link.fraction) })
         }
@@ -331,12 +331,17 @@ private fun AbroadRow(view: AbroadView) {
 
 @Composable
 private fun HopRow(number: Int, hop: TraceHop) {
-    val value = when {
-        hop.address == null -> "*"
-        hop.millis != null -> tr("%s · %d ms", hop.address, hop.millis)
-        else -> hop.address
+    val address = hop.address
+    if (address == null) {
+        InfoRow("$number", "*", mono = true)
+        return
     }
-    InfoRow("$number", value, mono = true)
+    ListRow(
+        title = address,
+        subtitle = hop.name,
+        detail = hop.millis?.let { tr("%d ms", it) },
+        leading = { Text("$number", style = MaterialTheme.typography.titleSmall.merge(Tabular), color = MaterialTheme.colorScheme.onSurfaceVariant) },
+    )
 }
 
 @Composable

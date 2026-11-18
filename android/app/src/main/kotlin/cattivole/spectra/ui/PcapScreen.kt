@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -77,7 +78,13 @@ private sealed interface PcapPhase {
  * [onSave] then takes the place of opening another file.
  */
 @Composable
-fun PcapScreen(onBack: () -> Unit, capture: Pair<String, ByteArray>? = null, onSave: (() -> Unit)? = null) {
+fun PcapScreen(
+    onBack: () -> Unit,
+    capture: Pair<String, ByteArray>? = null,
+    onSave: (() -> Unit)? = null,
+    /** Keeps the decoded capture for the assistant and opens a chat about it. Null hides the ✨ button. */
+    onAsk: ((name: String, analysis: CaptureAnalysis, fromSensor: Boolean) -> Unit)? = null,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var phase by remember { mutableStateOf<PcapPhase>(capture?.let { PcapPhase.Loading(it.first) } ?: PcapPhase.Idle) }
@@ -103,6 +110,12 @@ fun PcapScreen(onBack: () -> Unit, capture: Pair<String, ByteArray>? = null, onS
         tr("Decode pcap"),
         onBack = onBack,
         actions = {
+            val loaded = phase as? PcapPhase.Loaded
+            if (onAsk != null && loaded != null) {
+                IconButton(onClick = { onAsk(loaded.name, loaded.analysis, capture != null) }) {
+                    Icon(Icons.Rounded.AutoAwesome, contentDescription = tr("Ask the assistant"), tint = Spectra.colors.revealed)
+                }
+            }
             if (onSave != null) {
                 IconButton(onClick = onSave) {
                     Icon(Icons.Rounded.Download, contentDescription = tr("Save .pcap"))

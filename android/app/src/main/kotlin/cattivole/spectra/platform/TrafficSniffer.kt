@@ -27,6 +27,22 @@ internal object CaptureBus {
     /** When on, new TLS connections are opened with [LocalCa] and read as HTTP. */
     val decryptTls: AtomicBoolean = AtomicBoolean(false)
 
+    /** Apps keep refusing the certificate during this recording. */
+    @Volatile
+    var refusedCertificate: Boolean = false
+        private set
+
+    fun noteRefusedCertificate() {
+        main.post {
+            refusedCertificate = true
+            listeners.toList().forEach { it() }
+        }
+    }
+
+    fun clearNotice() {
+        main.post { refusedCertificate = false }
+    }
+
     /** The authority that signs those connections. Null until the key has been read. */
     @Volatile
     var authority: LocalCa? = null
@@ -69,6 +85,16 @@ class TrafficSniffer(context: Context) {
     /** True when the live list has grown since the last save. */
     var unsaved: Boolean = false
         private set
+
+    /** The saved session this recording was written to. A second save updates it instead of adding another. */
+    var currentSessionId: String? = null
+        private set
+
+    /** The recording on screen is saved as it stands. */
+    val isCurrentSaved: Boolean get() = currentSessionId != null && !unsaved
+
+    /** Apps keep refusing this app's certificate, and none has accepted it: it is probably not trusted. */
+    val refusedCertificate: Boolean get() = CaptureBus.refusedCertificate
 
     /** Row kept at the top of the list. `session:flow:exchange`. */
     var focusedKey: String? = null
@@ -142,6 +168,7 @@ class TrafficSniffer(context: Context) {
 
     fun start() {
         error = null
+        currentSessionId = null
         if (CaptureBus.decryptTls.get() && CaptureBus.authority == null) {
             CaptureBus.authority = runCatching { LocalCa.open(caDir) }.getOrNull()
         }
@@ -152,20 +179,22 @@ class TrafficSniffer(context: Context) {
         app.startService(Intent(app, SnifferVpnService::class.java).setAction(SnifferVpnService.ACTION_STOP))
     }
 
-    /** Writes the live list. Null when there is nothing to keep. */
+    /** Writes the live list; one recording is one session, re-saving updates it. Null when there is nothing to keep. */
     fun save(): TrafficSession? {
         if (flows.isEmpty()) return null
+        val id = currentSessionId ?: UUID.randomUUID().toString()
         val session = TrafficSession(
-            id = UUID.randomUUID().toString(),
+            id = id,
             startedAt = startedAt.takeIf { it > 0 } ?: flows.minOf { it.startedAt },
             stoppedAt = System.currentTimeMillis(),
             flows = flows,
         )
         dir.mkdirs()
         File(dir, "${session.id}.json").writeText(session.toJson().toString())
-        val next = listOf(session) + saved
+        val next = listOf(session) + saved.filterNot { it.id == id }
         next.drop(KEEP).forEach { File(dir, "${it.id}.json").delete() }
         saved = next.take(KEEP)
+        currentSessionId = id
         savedBytes = flows.sumOf { it.sent + it.received }
         unsaved = false
         changed()
@@ -176,6 +205,7 @@ class TrafficSniffer(context: Context) {
 
     fun delete(id: String) {
         File(dir, "$id.json").delete()
+        if (currentSessionId == id) currentSessionId = null
         saved = saved.filterNot { it.id == id }
         changed()
     }
@@ -190,6 +220,7 @@ class TrafficSniffer(context: Context) {
         flows = emptyList()
         unsaved = false
         savedBytes = -1L
+        currentSessionId = null
         error = null
         if (focusedKey?.startsWith("live:") == true) focusedKey = null
         changed()

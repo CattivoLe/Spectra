@@ -231,7 +231,7 @@ object LinkInspector {
 
         // Where the site lives
         if (site in shorteners) {
-            note(LinkInspection.Kind.SHORTENER, LinkInspection.Severity.CAUTION, "A short link: the real address is hidden.")
+            note(LinkInspection.Kind.SHORTENER, LinkInspection.Severity.CAUTION, "A short link: the real address is hidden. Expand the redirects to see it.")
         }
         if (platform != null) {
             note(LinkInspection.Kind.FREE_HOSTING, LinkInspection.Severity.CAUTION, "The site sits on %s, where anyone can make an address like this.", platform)

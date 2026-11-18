@@ -176,9 +176,14 @@ fun LinkCheckScreen(nav: Navigator) {
             confirmButton = { TextButton(onClick = { wifiCode = null }) { Text("OK") } },
         )
     }
+    // Redirects are followed only when asked: the sites along the way see the request.
+    var trace by remember { mutableStateOf<cattivole.spectra.platform.RedirectTrace?>(null) }
+    var tracing by remember { mutableStateOf(false) }
     LaunchedEffect(checked) {
         site = null
         siteBusy = false
+        trace = null
+        tracing = false
     }
     val noLink = checked != null && inspection == null && checked!!.isNotBlank()
     SpectraScreen(title = tr("Check a link"), onBack = nav::back) {
@@ -308,6 +313,61 @@ fun LinkCheckScreen(nav: Navigator) {
                         }
                     },
                 )
+                val start = target.link.let { if (it.contains("://")) it else "${target.scheme}://$it" }
+                card(
+                    header = tr("Redirects"),
+                    key = "redirects",
+                    footer = tr("Expanding requests the link without loading the page. The sites along the way see your IP address and may learn that the link was opened."),
+                    rows = buildList {
+                        val done = trace
+                        when {
+                            done != null -> {
+                                done.hops.forEach { hop ->
+                                    add { InfoRow(hop.url, "${hop.status}", mono = true, copyable = true) }
+                                }
+                                done.stop?.let { stop ->
+                                    val why = when (stop) {
+                                        cattivole.spectra.platform.RedirectTrace.Stop.TooManyHops -> tr("Stopped after 10 redirects.")
+                                        is cattivole.spectra.platform.RedirectTrace.Stop.Failed -> tr("Stopped: %s", stop.reason)
+                                        is cattivole.spectra.platform.RedirectTrace.Stop.LeftTheWeb -> tr("The last redirect leaves the web for a %s: link.", stop.scheme)
+                                    }
+                                    add { NoteRow(why, warning = stop is cattivole.spectra.platform.RedirectTrace.Stop.LeftTheWeb) }
+                                }
+                                val final = LinkInspector.inspect(done.final)
+                                if (final != null) {
+                                    add {
+                                        ListRow(
+                                            title = tr("Final address"),
+                                            subtitle = final.site.ifEmpty { final.link },
+                                            leading = { IconTile(final.verdict.icon(), final.verdict.color(), size = 32.dp) },
+                                        )
+                                    }
+                                }
+                            }
+                            tracing -> add { ProgressRow(tr("Following redirects…"), null) }
+                            else -> add {
+                                ActionRow(tr("Expand redirects"), Icons.Rounded.Search, onClick = {
+                                    tracing = true
+                                    val link = checked
+                                    scope.launch {
+                                        val result = cattivole.spectra.platform.RedirectTracer.trace(start)
+                                        if (checked == link) {
+                                            trace = result
+                                            tracing = false
+                                        }
+                                    }
+                                })
+                            }
+                        }
+                    },
+                )
+                // The final address gets the same reading as the link itself.
+                trace?.let { done ->
+                    val final = LinkInspector.inspect(done.final)
+                    if (final != null && !cattivole.spectra.platform.RedirectTracer.sameAddress(done.final, start)) {
+                        inspectionCards(final, "final")
+                    }
+                }
             }
         }
     }

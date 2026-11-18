@@ -48,7 +48,13 @@ class TrafficProxy(
     private val decryptTls: java.util.concurrent.atomic.AtomicBoolean,
     private val certificate: () -> LocalCa?,
     private val onFlows: (List<TrafficFlow>) -> Unit,
+    /** The proxy stopped on its own; the value names why. The service ends the recording. */
+    private val onGiveUp: (StopReason) -> Unit = {},
+    /** Apps keep refusing the certificate and none has accepted it: it is probably not trusted. */
+    private val onRefusedCertificate: () -> Unit = {},
 ) {
+    enum class StopReason { STALLED, OVERLOADED }
+
     private val running = AtomicBoolean(true)
     private val selector = Selector.open()
     private val incoming = ArrayBlockingQueue<ByteArray>(512)
@@ -62,10 +68,51 @@ class TrafficProxy(
     private var lastPublish = 0L
     private var reader: Thread? = null
     private var loop: Thread? = null
+    private var watchdog: Thread? = null
+
+    /** When the loop last went round. A loop that stops turning takes every connection on the phone with it. */
+    @Volatile private var lastBeat = System.currentTimeMillis()
+    /** Since when the packet queue has been full, or 0. */
+    @Volatile private var fullSince = 0L
+
+    /** Hosts whose apps refused our certificate: later connections to them pass through unread. */
+    private val refusedHosts = HashSet<String>()
+    private var refusals = 0
+    private var acceptances = 0
+    private var refusalNoticeSent = false
 
     fun start() {
         reader = Thread(this::readTun, "spectra-tun").also { it.start() }
         loop = Thread(this::pump, "spectra-nat").also { it.start() }
+        watchdog = Thread(this::watch, "spectra-watch").also {
+            it.isDaemon = true
+            it.start()
+        }
+    }
+
+    /**
+     * Stops the recording when the loop has stalled or cannot keep up, so the phone is not left without a
+     * network. Reads only volatile fields: waiting on the loop would stall with it.
+     */
+    private fun watch() {
+        while (running.get()) {
+            try {
+                Thread.sleep(WATCH_EVERY)
+            } catch (_: InterruptedException) {
+                return
+            }
+            if (!running.get()) return
+            val now = System.currentTimeMillis()
+            val full = fullSince
+            val reason = when {
+                now - lastBeat > STALL_AFTER -> StopReason.STALLED
+                full != 0L && now - full > OVERLOAD_AFTER -> StopReason.OVERLOADED
+                else -> null
+            } ?: continue
+            android.util.Log.w("SpectraTraffic", "stopping: $reason, beat ${now - lastBeat} ms ago, links ${tcp.size + udp.size}")
+            onGiveUp(reason)
+            return
+        }
     }
 
     fun stop() {
@@ -96,7 +143,12 @@ class TrafficProxy(
                 break
             }
             if (size <= 0) break
-            if (incoming.offer(buffer.copyOf(size))) selector.wakeup()
+            if (incoming.offer(buffer.copyOf(size))) {
+                fullSince = 0L
+                selector.wakeup()
+            } else if (fullSince == 0L) {
+                fullSince = System.currentTimeMillis()
+            }
         }
         running.set(false)
         selector.wakeup()
@@ -105,6 +157,7 @@ class TrafficProxy(
     private fun pump() {
         while (running.get()) {
             try {
+                lastBeat = System.currentTimeMillis()
                 selector.select(200)
                 while (true) {
                     val packet = incoming.poll() ?: break
@@ -177,11 +230,24 @@ class TrafficProxy(
         }
     }
 
-    private fun openTcp(ip: IpCodec.Packet, header: IpCodec.Tcp, key: String) {
-        if (tcp.size + udp.size >= MAX_LINKS) {
-            reject(ip, header)
-            return
+    /**
+     * Frees a slot when the table is full by closing the link that has been quiet longest, so a new
+     * connection is never refused: refusing every SYN would leave the phone offline until the recording stops.
+     */
+    private fun makeRoom() {
+        while (tcp.size + udp.size >= MAX_LINKS) {
+            val oldestUdp = udp.values.minByOrNull { it.flow.lastAt }
+            val oldestTcp = tcp.values.minByOrNull { it.flow.lastAt }
+            when {
+                oldestUdp != null && (oldestTcp == null || oldestUdp.flow.lastAt <= oldestTcp.flow.lastAt) -> oldestUdp.close()
+                oldestTcp != null -> oldestTcp.fail()
+                else -> return
+            }
         }
+    }
+
+    private fun openTcp(ip: IpCodec.Packet, header: IpCodec.Tcp, key: String) {
+        makeRoom()
         val channel = try {
             SocketChannel.open().apply { configureBlocking(false) }
         } catch (_: IOException) {
@@ -209,7 +275,7 @@ class TrafficProxy(
     }
 
     private fun openUdp(ip: IpCodec.Packet, header: IpCodec.Udp, key: String): UdpLink? {
-        if (tcp.size + udp.size >= MAX_LINKS) return null
+        makeRoom()
         val channel = try {
             DatagramChannel.open().apply { configureBlocking(false) }
         } catch (_: IOException) {
@@ -589,7 +655,7 @@ class TrafficProxy(
                 try {
                     bridge.fromClient(data)
                 } catch (_: Exception) {
-                    if (flow.exchanges.isEmpty()) flow.refused = true
+                    if (flow.exchanges.isEmpty() && !clientTrusted) refused()
                     fail()
                 }
                 return true
@@ -603,9 +669,32 @@ class TrafficProxy(
                 if (buf.size > 18_000) passthroughHeld()
                 return true
             }
+            val sni = TrafficHints.tlsServerName(buf)
+            if (sni != null && sni in refusedHosts) {
+                // This host's app refused our certificate before: read nothing, but let it work.
+                if (sni.isNotEmpty()) flow.host = sni
+                flow.tls = true
+                inspect = Inspect.OTHER
+                passthroughHeld()
+                return true
+            }
             if (!startMitm(buf)) passthroughHeld()
             return true
         }
+
+        /** The app on the phone refused our certificate for this host. */
+        private fun refused() {
+            flow.refused = true
+            flow.host?.takeIf { it.isNotEmpty() }?.let { refusedHosts.add(it) }
+            refusals++
+            if (!refusalNoticeSent && acceptances == 0 && refusals >= REFUSALS_BEFORE_NOTICE) {
+                refusalNoticeSent = true
+                onRefusedCertificate()
+            }
+        }
+
+        /** True once the phone's side of the handshake went through: the app trusted our certificate. */
+        private var clientTrusted = false
 
         private fun startMitm(hello: ByteArray): Boolean {
             val sni = TrafficHints.tlsServerName(hello)
@@ -621,6 +710,10 @@ class TrafficProxy(
                     clientContext = ca.contextFor(host),
                     serverContext = LocalCa.trustDefault(),
                     onClientPlain = { plain ->
+                        if (!clientTrusted) {
+                            clientTrusted = true
+                            acceptances++
+                        }
                         http.client(plain)
                         applyHttp()
                     },
@@ -644,7 +737,7 @@ class TrafficProxy(
                 bridge.fromClient(hello)
             } catch (_: Exception) {
                 mitm = null
-                flow.refused = true
+                refused()
                 fail()
             }
             return true
@@ -900,7 +993,9 @@ class TrafficProxy(
         }
 
         fun sweep(now: Long) {
-            if (now - flow.lastAt > UDP_IDLE) close()
+            // Every DNS query comes from a new port: kept for a minute, they alone would fill the table.
+            val idle = if (dstPort == 53) DNS_IDLE else UDP_IDLE
+            if (now - flow.lastAt > idle) close()
         }
 
         fun close() {
@@ -925,6 +1020,11 @@ class TrafficProxy(
         private const val MAX_IN = 256 * 1024
         private const val TCP_IDLE = 300_000L
         private const val UDP_IDLE = 60_000L
+        private const val DNS_IDLE = 10_000L
+        private const val WATCH_EVERY = 2_000L
+        private const val STALL_AFTER = 10_000L
+        private const val OVERLOAD_AFTER = 10_000L
+        private const val REFUSALS_BEFORE_NOTICE = 10
     }
 }
 

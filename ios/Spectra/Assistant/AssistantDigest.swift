@@ -98,6 +98,8 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
     var link: Link?
     /// The traffic capture last taken or opened, already written up (see `CaptureDigest`). `nil` when there is none.
     var capture: String?
+    /// The last GATT read of a Bluetooth device, already written up (see `GATTDigest`). `nil` when none was made.
+    var gatt: String?
     /// Persistent dossier notes saved by the assistant across chats.
     var memory: String?
 }
@@ -137,8 +139,8 @@ nonisolated enum AssistantTopic: String, CaseIterable, Sendable {
              "on my network", "on the network", "in my network", "local network",
              "хост", "порт", "принтер", "шлюз", "камер", "телевизор", "умн", "подключен", "в моей сети", "в сети", "локальн"]
         case .bluetooth:
-            ["bluetooth", "ble", "tracker", "airtag", "tag", "headphone", "earbud", "beacon",
-             "блютуз", "блютус", "bluetooth", "трекер", "метк", "наушник", "маяк"]
+            ["bluetooth", "ble", "tracker", "airtag", "tag", "headphone", "earbud", "beacon", "gatt", "characteristic",
+             "блютуз", "блютус", "bluetooth", "трекер", "метк", "наушник", "маяк", "гатт", "характеристик"]
         case .history:
             ["history", "earlier", "before", "previous", "last time", "session", "saved", "yesterday", "ago", "trend", "compare", "changed",
              "истори", "раньше", "прошл", "сохран", "сесси", "вчера", "назад", "сравн", "изменил"]
@@ -280,7 +282,7 @@ nonisolated enum AssistantDigest {
 
         for topic in topics {
             let section: [String] = switch topic {
-            case .wifi: wifiSection(snapshot, overview: overview)
+            case .wifi: wifiSection(snapshot, overview: overview, focus: text)
             case .threats: threatSection(snapshot, keepEmpty: !unmatched)
             case .lan: lanSection(snapshot, overview: overview)
             case .bluetooth: bluetoothSection(snapshot, overview: overview)
@@ -335,10 +337,14 @@ nonisolated enum AssistantDigest {
         return line.joined(separator: " ")
     }
 
-    private static func wifiSection(_ s: AssistantSnapshot, overview: Bool) -> [String] {
+    /// `focus` is the lower-cased question: a network it names by BSSID goes first, so asking about one network in
+    /// a crowded place still shows that network, with its address, rather than cutting it off below the strongest.
+    private static func wifiSection(_ s: AssistantSnapshot, overview: Bool, focus: String = "") -> [String] {
         let present = s.wifi.filter(\.inRange)
         guard !present.isEmpty else { return ["Wi-Fi networks: none heard yet (needs the Cardputer sensor)."] }
+        func named(_ ap: AssistantSnapshot.Wifi) -> Bool { !focus.isEmpty && focus.contains(ap.bssid.lowercased()) }
         let ranked = present.sorted {
+            if named($0) != named($1) { return named($0) }
             if $0.isCurrent != $1.isCurrent { return $0.isCurrent }
             if ($0.security == "Open") != ($1.security == "Open") { return $0.security == "Open" }
             return $0.rssi > $1.rssi
@@ -351,7 +357,7 @@ nonisolated enum AssistantDigest {
             if ap.isCurrent { parts.append("CURRENT") }
             if ap.clients > 0 { parts.append("\(ap.clients) clients") }
             if ap.streaming { parts.append("steady traffic") }
-            lines.append("- " + parts.joined(separator: " · ") + (overview ? "" : " · \(ap.bssid)"))
+            lines.append("- " + parts.joined(separator: " · ") + (overview && !named(ap) ? "" : " · \(ap.bssid)"))
         }
         if ranked.count > limit { lines.append("- …and \(ranked.count - limit) more, weaker.") }
         let crowded = Dictionary(grouping: present, by: \.channel).filter { $0.value.count >= 4 }
@@ -418,14 +424,17 @@ nonisolated enum AssistantDigest {
     }
 
     private static func bluetoothSection(_ s: AssistantSnapshot, overview: Bool) -> [String] {
-        guard !s.bluetooth.isEmpty else { return ["Bluetooth devices: none heard yet."] }
+        // The last GATT read goes first: when it exists, it is usually what the question is about, and the list
+        // below it is what the 3600-character cut may trim.
+        let gatt = overview ? [] : s.gatt.map { [$0] } ?? []
+        guard !s.bluetooth.isEmpty else { return gatt + ["Bluetooth devices: none heard yet."] }
         let ranked = s.bluetooth.sorted {
             if ($0.tracker != nil) != ($1.tracker != nil) { return $0.tracker != nil }
             if $0.nearby != $1.nearby { return $0.nearby }
             return $0.rssi > $1.rssi
         }
         let limit = overview ? 6 : 12
-        var lines = ["Bluetooth devices (\(s.bluetooth.count), \(s.bluetooth.filter(\.nearby).count) nearby), strongest first:"]
+        var lines = gatt + ["Bluetooth devices (\(s.bluetooth.count), \(s.bluetooth.filter(\.nearby).count) nearby), strongest first:"]
         for device in ranked.prefix(limit) {
             var parts = [clean(device.name)]
             if let company = device.company, !device.name.contains(company) { parts.append(clean(company)) }
@@ -451,8 +460,9 @@ nonisolated enum AssistantDigest {
 
     private static func captureSection(_ s: AssistantSnapshot) -> [String] {
         guard let capture = s.capture else {
-            return ["Traffic capture: none yet. The user can take one from a Wi‑Fi network's card (Capture traffic) or open a .pcap "
-                    + "under History → Decode pcap; you can also take a short one yourself with capture_pcap."]
+            return ["Traffic capture: none yet. The user can take one from a Wi‑Fi network's card (Capture traffic), open a .pcap "
+                    + "under History → Decode pcap, or record the phone's own traffic on the LAN tab → Traffic; you can also "
+                    + "take a short Wi‑Fi capture yourself with capture_pcap."]
         }
         return [capture]
     }

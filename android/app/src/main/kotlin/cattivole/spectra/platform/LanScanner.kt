@@ -178,6 +178,10 @@ class LanScanner(
     var noNetwork: Boolean = false
         private set
 
+    /** The joined Wi-Fi or Ethernet gives this phone IPv6 only: there is no IPv4 subnet to sweep. */
+    var ipv6Only: Boolean = false
+        private set
+
     /**
      * Stable identity of the joined network, so repeat scans of the same LAN
      * merge into one saved session: the gateway's hardware address; falls back
@@ -221,12 +225,14 @@ class LanScanner(
             val info = currentSubnet()
             subnet = info
             if (info == null) {
+                ipv6Only = hasIpv6OnlyLink()
                 progress = "Join a Wi-Fi network to scan it"
                 noNetwork = true
                 scanning = false
                 publish()
                 return@launch
             }
+            ipv6Only = false
             val hosts = hostAddresses(info)
             progress = "Looking for ${hosts.size} addresses"
             fraction = 0.05f
@@ -417,6 +423,20 @@ class LanScanner(
         val route = selectRoute()
         routeNetwork = route?.network
         return route?.subnet
+    }
+
+    /** A Wi-Fi or Ethernet link with a global IPv6 address and no IPv4 one. */
+    @Suppress("DEPRECATION")
+    private fun hasIpv6OnlyLink(): Boolean {
+        val manager = app.getSystemService(ConnectivityManager::class.java) ?: return false
+        return manager.allNetworks.any { network ->
+            val caps = manager.getNetworkCapabilities(network) ?: return@any false
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return@any false
+            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) return@any false
+            val addresses = manager.getLinkProperties(network)?.linkAddresses?.map { it.address } ?: return@any false
+            addresses.none { it is Inet4Address } &&
+                addresses.any { it is java.net.Inet6Address && !it.isLinkLocalAddress && !it.isLoopbackAddress }
+        }
     }
 
     @Suppress("DEPRECATION")

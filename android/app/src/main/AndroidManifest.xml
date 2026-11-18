@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- The assistant's engine and chat store target Android 12; on older phones its tab says so and stays off. -->
+    <uses-sdk tools:overrideLibrary="alexcattivo.localchat.engine,alexcattivo.localchat.kit" />
 
     <!-- Wi-Fi names. Nearby devices covers the scan on API 33+. Fine location
          is still required: without it the system returns an empty list, and
@@ -20,6 +24,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- The assistant's model is several gigabytes: its download keeps going while the app is in the background. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- BLE advertisements and the GATT link to the Cardputer.
          neverForLocation keeps the scan from being treated as location. -->
@@ -36,6 +42,7 @@
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
+        android:largeHeap="true"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -43,6 +50,11 @@
         android:localeConfig="@xml/locales_config"
         android:supportsRtl="true"
         android:theme="@style/Theme.Spectra">
+        <service
+            android:name=".platform.AssistantDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <service
             android:name=".platform.SnifferVpnService"
             android:exported="false"

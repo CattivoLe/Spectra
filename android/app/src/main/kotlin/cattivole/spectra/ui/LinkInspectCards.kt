@@ -16,6 +16,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Icon
+import androidx.compose.material3.AlertDialog
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -43,10 +49,13 @@ internal fun LazyListScope.tlsCard(check: TlsCheck) {
         rows = check.observations.map<TlsObservation, @Composable () -> Unit> { seen ->
             {
                 val good = seen.trusted && seen.expected
+                var open by remember { mutableStateOf(false) }
+                if (open) CertificateDialog(seen) { open = false }
                 ListRow(
                     title = seen.host,
                     subtitle = seen.issuer ?: seen.error.orEmpty(),
                     detail = seen.trustError?.takeIf { seen.error == null },
+                    onClick = { open = true },
                     leading = {
                         IconTile(
                             when {
@@ -74,6 +83,114 @@ internal fun LazyListScope.tlsCard(check: TlsCheck) {
             )
         },
     )
+}
+
+/** What one reference site's certificate looked like from this network. */
+@Composable
+private fun CertificateDialog(seen: TlsObservation, onDismiss: () -> Unit) {
+    val fine = seen.error == null && seen.trusted && seen.expected
+    val verdict = when {
+        seen.error != null -> tr("The site could not be reached to read its certificate.")
+        !seen.trusted -> tr("Android does not trust this certificate: something between you and the site may be re-signing HTTPS.")
+        !seen.expected -> tr("Issued by an authority this site does not use: likely a proxy, an antivirus or an attacker re-signing HTTPS.")
+        else -> tr("Issued by the authority this site normally uses.")
+    }
+    val dates = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                when {
+                    seen.error != null -> Icons.Rounded.HelpOutline
+                    fine -> Icons.Rounded.Verified
+                    else -> Icons.Rounded.GppBad
+                },
+                contentDescription = null,
+                tint = when {
+                    seen.error != null -> MaterialTheme.colorScheme.outline
+                    fine -> Spectra.colors.success
+                    else -> Spectra.colors.danger
+                },
+            )
+        },
+        title = { Text(seen.host) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(verdict, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                seen.error?.let { CertSection(tr("Error"), listOf(it)) }
+                if (seen.error == null) {
+                    CertSection(
+                        tr("Issued to"),
+                        listOfNotNull(
+                            seen.subject?.let { tr("Common name") + ": " + it },
+                            seen.names?.takeIf { it.isNotEmpty() }?.let { tr("Names covered") + ":\n" + it.joinToString("\n") },
+                        ),
+                    )
+                    CertSection(
+                        tr("Issued by"),
+                        listOfNotNull(
+                            seen.issuer?.let { tr("Organization") + ": " + it },
+                            seen.issuerCommonName?.takeIf { it != seen.issuer }?.let { tr("Certificate") + ": " + it },
+                            seen.chain?.takeIf { it.isNotEmpty() }?.let { chain ->
+                                tr("Chain of trust") + ":\n" + chain.mapIndexed { index, name -> "  ".repeat(index) + "↳ " + name }.joinToString("\n")
+                            },
+                            tr("Trusted by Android") + ": " + (if (seen.trusted) tr("Yes") else tr("No")),
+                            seen.trustError,
+                            tr("Expected authority") + ": " + (if (seen.expected) tr("Yes") else tr("No")),
+                        ),
+                    )
+                    val from = seen.notBefore
+                    val until = seen.notAfter
+                    if (from != null && until != null) {
+                        val days = ((until - System.currentTimeMillis()) / 86_400_000L).toInt()
+                        CertSection(
+                            tr("Validity"),
+                            listOf(
+                                tr("Valid from") + ": " + dates.format(java.util.Date(from)),
+                                tr("Valid until") + ": " + dates.format(java.util.Date(until)),
+                                tr("Remaining") + ": " + if (days < 0) tr("Expired") else tr("%d days", days),
+                            ),
+                        )
+                    }
+                    seen.fingerprint?.let { print ->
+                        CertSection("SHA-256", listOf(print), mono = true)
+                        Text(
+                            tr("The certificate's fingerprint. Compare it with the one another network or device sees: a different value for the same site means someone in between re-signs the traffic."),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (seen.subject == null && seen.notAfter == null) {
+                        Text(
+                            tr("This check was saved before certificate details were kept. Run the connection check again to see them."),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(tr("Close")) } },
+    )
+}
+
+@Composable
+private fun CertSection(title: String, lines: List<String>, mono: Boolean = false) {
+    if (lines.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        androidx.compose.foundation.text.selection.SelectionContainer {
+            Text(
+                lines.joinToString("\n"),
+                style = if (mono) {
+                    MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                } else {
+                    MaterialTheme.typography.bodyMedium
+                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 /** Who answers this network's name lookups. */

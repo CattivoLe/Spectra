@@ -9,7 +9,7 @@ plugins {
 
 android {
     namespace = "cattivole.spectra"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "cattivole.spectra"
@@ -17,6 +17,8 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
+        // `-Pabi=arm64-v8a` packs one architecture: a phone-only APK about half the size.
+        providers.gradleProperty("abi").orNull?.let { only -> ndk { abiFilters += only } }
     }
 
     // The OUI and Bluetooth SIG tables are shared with the iOS app and live in
@@ -25,6 +27,8 @@ android {
     sourceSets["main"].resources.srcDir("../../data")
     // One zip per board, packed from the last pio build when that output exists.
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/flashAssets"))
+    // The assistant's model catalog is shared with iOS: copied from ios/Spectra/Assistant at build time.
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/assistantAssets"))
 
     buildTypes {
         release {
@@ -37,15 +41,13 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     buildFeatures {
         compose = true
     }
 
     packaging {
+        // llama.cpp's CPU backend variants are loaded from the library directory: they must be plain files.
+        jniLibs.useLegacyPackaging = true
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
@@ -56,10 +58,15 @@ android {
 // redraw. Strong skipping would skip any row whose object is the same instance
 // as before, so a changed network or sensor state would not be drawn.
 composeCompiler {
-    enableStrongSkippingMode = false
+    featureFlags.add(org.jetbrains.kotlin.compose.compiler.gradle.ComposeFeatureFlag.StrongSkipping.disabled())
+}
+
+kotlin {
+    compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }
 }
 
 dependencies {
+    implementation(project(":kit"))
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
@@ -74,6 +81,8 @@ dependencies {
     implementation("org.osmdroid:osmdroid-android:6.1.20")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.brotli:dec:0.1.2")
+    // WebSockets for Measurement Lab's ndt7 speed test.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // The system QR scanner sheet: no camera permission, the camera never reaches the app.
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
@@ -156,8 +165,14 @@ tasks.register("packFlashBundle") {
     }
 }
 
+val assistantAssets = layout.buildDirectory.dir("generated/assistantAssets")
+val copyAssistantAssets by tasks.registering(Copy::class) {
+    from(rootProject.file("../ios/Spectra/Assistant/AssistantModels.json"))
+    into(assistantAssets)
+}
+
 tasks.matching { it.name == "preBuild" || (it.name.startsWith("merge") && it.name.endsWith("Assets")) }.configureEach {
-    dependsOn("packFlashBundle")
+    dependsOn("packFlashBundle", copyAssistantAssets)
 }
 
 /** Offset of a named entry in an ESP-IDF partition table. */

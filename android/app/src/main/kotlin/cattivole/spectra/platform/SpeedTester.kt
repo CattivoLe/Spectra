@@ -3,7 +3,10 @@ package cattivole.spectra.platform
 import android.content.Context
 import android.net.Network
 import android.util.Log
+import cattivole.spectra.core.MLabNdt7
+import cattivole.spectra.core.MLabServer
 import cattivole.spectra.core.SpeedResult
+import cattivole.spectra.core.SpeedServerChoice
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,9 +33,8 @@ import java.util.concurrent.atomic.AtomicLong
  * small connections before and during the load to see how much the full
  * queue slows everything else down.
  *
- * Uses Cloudflare's speed endpoints, over the connection the route setting
- * names, like the connection check. The iOS app can also use a
- * Measurement Lab server; this one cannot yet.
+ * Uses Cloudflare's speed endpoints or a Measurement Lab ndt7 server, over
+ * the connection the route setting names, like the connection check.
  */
 class SpeedTester(context: Context, private val route: suspend () -> Network?) {
     enum class Phase { IDLE, PREPARING, LATENCY, DOWNLOAD, UPLOAD, DONE, FAILED }
@@ -59,6 +61,26 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
     var throttled: Boolean = false
         private set
 
+    /** Machines M-Lab offered at the last look, for the server picker. */
+    var mlabServers: List<MLabServer> = emptyList()
+        private set
+    var loadingServers: Boolean = false
+        private set
+
+    /** The server the next test runs against. Remembered across launches. */
+    var serverChoice: SpeedServerChoice = SpeedServerChoice.fromRaw(
+        context.applicationContext.getSharedPreferences("spectra", Context.MODE_PRIVATE).getString(KEY_SERVER, null),
+    )
+        set(value) {
+            field = value
+            app.getSharedPreferences("spectra", Context.MODE_PRIVATE).edit().putString(KEY_SERVER, value.raw).apply()
+            publish()
+        }
+
+    /** Set when the machine picked earlier was not offered, so the nearest one ran the test. */
+    var substituted: Pair<String, String>? = null
+        private set
+
     /** Why the last test failed, in English for `tr`; the argument is filled into `%s`. */
     var failure: Pair<String, String?>? = null
         private set
@@ -76,8 +98,26 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
         return { listeners.remove(listener) }
     }
 
+    /** Asks M-Lab for the machines nearest to this network. */
+    fun loadServers() {
+        if (loadingServers) return
+        loadingServers = true
+        publish()
+        scope.launch {
+            val network = route()
+            val found = if (network == null) emptyList() else withContext(Dispatchers.IO) { locate(network) }
+            if (found.isNotEmpty()) mlabServers = found
+            loadingServers = false
+            publish()
+        }
+    }
+
+    private fun locate(network: Network): List<MLabServer> =
+        text(network, MLabNdt7.LOCATE_URL)?.let(MLabNdt7::parseLocate).orEmpty()
+
     fun start() {
         job?.cancel()
+        substituted = null
         phase = Phase.PREPARING
         progress = 0.02f
         liveBps = 0.0
@@ -118,10 +158,34 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
             phase = Phase.LATENCY
             progress = 0.06f
             publish()
+            val choice = serverChoice
+            val backend: Backend
+            if (choice is SpeedServerChoice.MLab) {
+                val offered = withContext(Dispatchers.IO) { locate(network) }
+                if (offered.isNotEmpty()) {
+                    mlabServers = offered + mlabServers.filter { old -> offered.none { it.machine == old.machine } }
+                }
+                // Test URLs carry single-use tokens, so a machine picked earlier needs a fresh offer.
+                val chosen = choice.machine?.let { wanted -> offered.firstOrNull { it.machine == wanted } }
+                val server = chosen ?: offered.firstOrNull()
+                if (server == null) {
+                    fail("M-Lab did not offer a server. Try again or pick Cloudflare.")
+                    return
+                }
+                if (choice.machine != null && chosen == null) {
+                    substituted = choice.machine.substringBefore('.') to server.shortName
+                }
+                backend = Backend.MLab(server)
+            } else {
+                backend = Backend.Cloudflare
+            }
             val (edge, idle) = withContext(Dispatchers.IO) {
-                val trace = text(network, "https://$HOST/cdn-cgi/trace")
-                val colo = trace?.lineSequence()?.firstOrNull { it.startsWith("colo=") }?.substringAfter('=')
-                colo to (0 until 8).mapNotNull { connectMillis(network) }
+                val label = when (backend) {
+                    Backend.Cloudflare -> text(network, "https://$HOST/cdn-cgi/trace")
+                        ?.lineSequence()?.firstOrNull { it.startsWith("colo=") }?.substringAfter('=')
+                    is Backend.MLab -> listOf(backend.server.city, backend.server.shortName).filter { it.isNotEmpty() }.joinToString(" · ")
+                }
+                label to (0 until 8).mapNotNull { connectMillis(network, backend) }
             }
             // Without a latency figure the throughput can still be measured:
             // only a test that moves no data at all has failed.
@@ -129,10 +193,10 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
             val (latency, jitter) = SpeedResult.latency(idle)
 
             phase = Phase.DOWNLOAD
-            val down = transfer(network, download = true, streams = DOWNLOAD_STREAMS, from = 0.1f, to = 0.55f) { downSamples = it }
+            val down = transfer(network, backend, download = true, from = 0.1f, to = 0.55f) { downSamples = it }
             phase = Phase.UPLOAD
             liveBps = 0.0
-            val up = transfer(network, download = false, streams = UPLOAD_STREAMS, from = 0.55f, to = 1f) { upSamples = it }
+            val up = transfer(network, backend, download = false, from = 0.55f, to = 1f) { upSamples = it }
 
             result = SpeedResult(
                 measuredAt = System.currentTimeMillis(),
@@ -145,12 +209,14 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
                 downSamples = down.first,
                 upSamples = up.first,
                 server = edge,
+                mlab = backend is Backend.MLab,
+                streams = backend.downloadStreams,
             )
             liveBps = 0.0
             progress = 1f
             Log.i(TAG, "Speed test: down ${result?.downBps} up ${result?.upBps} via $edge")
             if (result?.downBps == null && result?.upBps == null) {
-                if (throttled) {
+                if (throttled && backend == Backend.Cloudflare) {
                     fail("Cloudflare is turning away speed tests from this address for now (HTTP 429). Try again in a few minutes.")
                 } else {
                     fail("No data got through. The network may be blocking the speed server.")
@@ -177,8 +243,8 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
     /** Runs the streams for [SECONDS] and returns the quarter-second rates and the latency seen meanwhile. */
     private suspend fun transfer(
         network: Network,
+        backend: Backend,
         download: Boolean,
-        streams: Int,
         from: Float,
         to: Float,
         onSamples: (List<Double>) -> Unit,
@@ -187,12 +253,20 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
         val moved = leg.moved
         val deadline = leg.deadline
         val open = leg.open
+        val streams = if (download) backend.downloadStreams else backend.uploadStreams
         // Each stream stops by itself at the deadline. It is not cancelled:
         // a blocked socket read or write ignores cancellation anyway.
         val workers = (0 until streams).map {
             launch(Dispatchers.IO) {
-                while (System.nanoTime() < deadline) {
-                    if (download) pull(network, leg) else push(network, leg)
+                when (backend) {
+                    Backend.Cloudflare -> while (System.nanoTime() < deadline) {
+                        if (download) pull(network, leg) else push(network, leg)
+                    }
+                    is Backend.MLab -> if (download) {
+                        MLabSocket.download(network, backend.server.downloadUrl, leg.moved, deadline, leg.sockets)
+                    } else {
+                        MLabSocket.upload(network, backend.server.uploadUrl, leg.moved, deadline, leg.sockets)
+                    }
                 }
             }
         }
@@ -200,7 +274,7 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
             val seen = mutableListOf<Int>()
             delay(1000)
             while (isActive && System.nanoTime() < deadline) {
-                connectMillis(network)?.let { seen.add(it) }
+                connectMillis(network, backend)?.let { seen.add(it) }
                 delay(400)
             }
             seen
@@ -228,7 +302,10 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
         // A stream stuck in a write to a slow uplink, or waiting for the
         // server's reply, would hold the test past its end: closing the
         // connection makes the blocked call return.
-        withContext(Dispatchers.IO) { open.forEach { runCatching { it.disconnect() } } }
+        withContext(Dispatchers.IO) {
+            open.forEach { runCatching { it.disconnect() } }
+            leg.sockets.forEach { runCatching { it.cancel() } }
+        }
         if (withTimeoutOrNull(STOP_GRACE_MS) { workers.joinAll() } == null) workers.forEach { it.cancel() }
         val latencies = withTimeoutOrNull(STOP_GRACE_MS) { loaded.await() } ?: emptyList()
         if (!loaded.isCompleted) loaded.cancel()
@@ -240,6 +317,7 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
     private class Leg(val deadline: Long) {
         val moved = AtomicLong()
         val open: MutableSet<HttpURLConnection> = ConcurrentHashMap.newKeySet()
+        val sockets: MutableSet<okhttp3.WebSocket> = ConcurrentHashMap.newKeySet()
 
         /** The download size asked for; halved each time the server answers 429. */
         val chunk = AtomicInteger(DOWNLOAD_CHUNK_START)
@@ -323,8 +401,20 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
         }
     }
 
-    /** A fresh TCP connection to the edge, in milliseconds. */
-    private fun connectMillis(network: Network): Int? = NetConnect.millis(network, HOST, 443, 3000)
+    /** Where the bytes go: Cloudflare's HTTP endpoints over several streams, or one ndt7 WebSocket each way. */
+    private sealed class Backend {
+        data object Cloudflare : Backend()
+        data class MLab(val server: MLabServer) : Backend()
+
+        val downloadStreams: Int get() = if (this is MLab) 1 else DOWNLOAD_STREAMS
+        val uploadStreams: Int get() = if (this is MLab) 1 else UPLOAD_STREAMS
+    }
+
+    /** A fresh TCP connection to the server, in milliseconds. */
+    private fun connectMillis(network: Network, backend: Backend = Backend.Cloudflare): Int? = when (backend) {
+        Backend.Cloudflare -> NetConnect.millis(network, HOST, 443, 3000)
+        is Backend.MLab -> NetConnect.millis(network, backend.server.host, 443, 3000)
+    }
 
     private fun text(network: Network, url: String): String? {
         val connection = open(network, url)
@@ -354,6 +444,7 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
         const val UPLOAD_STREAMS = 3
         const val HOST = "speed.cloudflare.com"
         private const val TAG = "SpectraSpeed"
+        private const val KEY_SERVER = "speedServer"
 
         /** The first download size: what Cloudflare's own test asks for at most. */
         const val DOWNLOAD_CHUNK_START = 25_000_000

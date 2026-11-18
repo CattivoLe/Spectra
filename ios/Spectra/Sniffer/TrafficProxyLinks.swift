@@ -11,7 +11,7 @@ import os
 final class TCPLink {
     private unowned let proxy: TrafficProxy
     private let key: String
-    private let flow: TrafficProxy.LiveFlow
+    let flow: TrafficProxy.LiveFlow
     private let src: [UInt8], dst: [UInt8]
     private let srcPort: Int, dstPort: Int
     private let v6: Bool
@@ -216,6 +216,10 @@ final class TCPLink {
         inspect = .tls
         guard let ca = proxy.authority() else { return false }
         let host = (sni?.isEmpty == false ? sni : nil) ?? IPCodec.text(dst)
+        // Refused once already, or decryption gave up for this run: straight through, no second failure.
+        guard proxy.mitmAllowed(host: host) else { return false }
+        proxy.phase("mitm \(host)")
+        defer { proxy.phase("packet") }
         do {
             let bridge = try TLSBridge(
                 host: host,
@@ -225,7 +229,12 @@ final class TCPLink {
                 onServerPlain: { [weak self] in self?.http.server($0); self?.applyHTTP() },
                 onServerClosed: { [weak self] in self?.http.serverClosed(); self?.applyHTTP() },
                 toClient: { [weak self] in self?.inbound.append($0); self?.pumpToClient() },
-                toServer: { [weak self] in self?.sendUpstream($0) }
+                toServer: { [weak self] in self?.sendUpstream($0) },
+                onPhoneVerdict: { [weak self] accepted in
+                    guard let self else { return }
+                    if !accepted { self.flow.refused = true }
+                    self.proxy.mitmVerdict(host: host, accepted: accepted)
+                }
             )
             mitm = bridge
             held = nil
@@ -344,6 +353,13 @@ final class TCPLink {
     private func windowField() -> Int { 65535 }
     private func mss() -> Int { v6 ? 1200 : 1360 }
 
+    /// Idle past `TrafficProxy.tcpIdle`, or still not connected upstream after `connectTimeout` (a connection the
+    /// server never answers sits in `.waiting` forever otherwise).
+    func isStale(now: Int64) -> Bool {
+        if !connected && now - flow.startedAt > Int64(TrafficProxy.connectTimeout * 1000) { return true }
+        return now - flow.lastAt > Int64(TrafficProxy.tcpIdle * 1000)
+    }
+
     func fail() {
         if !flow.closed { emit(seq: ourSeq, flags: IPCodec.RST | IPCodec.ACK, payload: [], advance: false) }
         close()
@@ -365,10 +381,12 @@ final class TCPLink {
 final class UDPLink {
     private unowned let proxy: TrafficProxy
     private let key: String
-    private let flow: TrafficProxy.LiveFlow
+    let flow: TrafficProxy.LiveFlow
     private let src: [UInt8], dst: [UInt8]
     private let srcPort: Int, dstPort: Int
     private var connection: NWConnection?
+
+    var isDNS: Bool { dstPort == 53 }
 
     init(proxy: TrafficProxy, key: String, flow: TrafficProxy.LiveFlow, src: [UInt8], dst: [UInt8],
          srcPort: Int, dstPort: Int) {

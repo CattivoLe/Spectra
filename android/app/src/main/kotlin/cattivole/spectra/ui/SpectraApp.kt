@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.SettingsInputAntenna
 import androidx.compose.material.icons.filled.Wifi
@@ -72,13 +74,34 @@ private enum class Tab(val graph: String, val start: String, val label: () -> St
     Lan("lan-tab", "lan", { "LAN" }, Icons.Filled.Lan, Icons.Outlined.Lan),
     Bluetooth("bluetooth-tab", "bluetooth", { "Bluetooth" }, Icons.Filled.Bluetooth, Icons.Outlined.Bluetooth),
     History("history-tab", "history", { tr("History") }, Icons.Filled.History, Icons.Outlined.History),
-    Sensor("sensor-tab", "sensor", { tr("Sensor") }, Icons.Filled.SettingsInputAntenna, Icons.Outlined.SettingsInputAntenna),
+    // As on iOS, the sensor is a screen of the Wi‑Fi tab and its place in the bar went to the assistant.
+    Assistant("assistant-tab", "assistant", { tr("Assistant") }, Icons.Filled.AutoAwesome, Icons.Outlined.AutoAwesome),
 }
 
 /** Where a screen goes next. One object so screens do not each take five lambdas. */
-class Navigator(private val nav: NavHostController) {
-    fun back() {
+class Navigator(private val nav: NavHostController) : cattivole.spectra.assistant.ui.AssistantNav {
+    override fun back() {
         nav.popBackStack()
+    }
+
+    override fun chat(id: java.util.UUID) = nav.navigate("assistant/chat/$id")
+
+    override fun models() = nav.navigate("assistant/models")
+
+    override fun internet() = nav.navigate("assistant/internet")
+
+    override fun dossier() = nav.navigate("assistant/dossier")
+
+    /** A ✨ button: a new chat about what this screen shows, asked as soon as the model is there. */
+    fun askAssistant(model: cattivole.spectra.SpectraModel, question: String) {
+        if (!cattivole.spectra.assistant.AssistantModel.isSupported) return
+        val assistant = model.assistant
+        assistant.ensureStarted()
+        kotlinx.coroutines.MainScope().launch {
+            val chat = assistant.store.createChat()
+            assistant.queue(question, chat.id)
+            chat(chat.id)
+        }
     }
 
     fun network(id: MacAddress, entry: String? = null) =
@@ -101,6 +124,8 @@ class Navigator(private val nav: NavHostController) {
     fun traffic() = nav.navigate("traffic")
 
     fun savedTraffic(id: String) = nav.navigate("traffic/saved/${Uri.encode(id)}")
+
+    fun savedTrafficList() = nav.navigate("traffic/sessions")
 
     fun trafficFlow(id: Long, exchange: Int? = null) =
         nav.navigate(if (exchange == null) "traffic/flow/$id" else "traffic/flow/$id/e/$exchange")
@@ -129,7 +154,7 @@ class Navigator(private val nav: NavHostController) {
     /** Decodes the sensor's last raw capture, shown under [name]. */
     fun decodeCapture(name: String) = nav.navigate("capture-pcap/${Uri.encode(name)}")
     fun history(id: String) = nav.navigate("history/${Uri.encode(id)}")
-    fun sensorTab() = openTab(nav, Tab.Sensor)
+    fun sensorTab() = nav.navigate("sensor")
 }
 
 @Composable
@@ -228,10 +253,17 @@ fun SpectraApp(model: SpectraModel) {
                     composable("network/{id}") { NetworkDetail(model, navigator, it.mac("id"), entryId = null) }
                     composable("client/{mac}") { ClientDetail(model, navigator, it.mac("mac"), entryId = null) }
                     composable("channels") { ChannelsScreen(model, navigator) }
+                    composable("pcap") {
+                        PcapScreen(navigator::back, onAsk = assistantAsk(model, navigator))
+                    }
+                    composable("sensor") {
+                        SensorScreen(model, onBack = navigator::back, onFlash = { nav.navigate("flash") })
+                    }
+                    composable("flash") { FlashScreen(model) { nav.popBackStack() } }
                     composable("capture-pcap/{name}") {
                         val label = it.text("name")
                         val capture = remember { "$label.pcap" to model.link.rawCapturePcap() }
-                        PcapScreen(navigator::back, capture, onSave = { sharePcap(context, capture.second, label) })
+                        PcapScreen(navigator::back, capture, onSave = { sharePcap(context, capture.second, label) }, onAsk = assistantAsk(model, navigator))
                     }
                 }
                 navigation(startDestination = Tab.Lan.start, route = Tab.Lan.graph) {
@@ -242,6 +274,7 @@ fun SpectraApp(model: SpectraModel) {
                     composable("speed-test") { SpeedTestScreen(model, navigator) }
                     composable("trace-route") { TraceScreen(model, navigator) }
                     composable("traffic") { SnifferScreen(model, navigator, sessionId = null) }
+                    composable("traffic/sessions") { SavedTrafficScreen(model, navigator) }
                     composable("traffic/saved/{id}") { SnifferScreen(model, navigator, sessionId = it.text("id")) }
                     composable("traffic/flow/{id}/e/{exchange}/json") {
                         TrafficJsonScreen(
@@ -293,7 +326,6 @@ fun SpectraApp(model: SpectraModel) {
                 }
                 navigation(startDestination = Tab.History.start, route = Tab.History.graph) {
                     composable(Tab.History.start) { HistoryScreen(model, navigator) }
-                    composable("pcap") { PcapScreen(navigator::back) }
                     composable("history/{id}") { HistoryDetail(model, navigator, it.text("id")) }
                     composable("saved/network/{entry}/{id}") { NetworkDetail(model, navigator, it.mac("id"), it.text("entry")) }
                     composable("saved/client/{entry}/{mac}") { ClientDetail(model, navigator, it.mac("mac"), it.text("entry")) }
@@ -303,16 +335,27 @@ fun SpectraApp(model: SpectraModel) {
                         SavedLinkScreen(model, navigator, it.text("entry"), it.arguments?.getString("at")?.toLongOrNull() ?: 0L)
                     }
                 }
-                navigation(startDestination = Tab.Sensor.start, route = Tab.Sensor.graph) {
-                    composable(Tab.Sensor.start) {
-                        SensorScreen(model, onFlash = { nav.navigate("flash") })
+                navigation(startDestination = Tab.Assistant.start, route = Tab.Assistant.graph) {
+                    composable(Tab.Assistant.start) { cattivole.spectra.assistant.ui.AssistantHomeScreen(model, navigator) }
+                    composable("assistant/chat/{id}") {
+                        val id = runCatching { java.util.UUID.fromString(it.text("id")) }.getOrNull()
+                        if (id != null) cattivole.spectra.assistant.ui.AssistantChatScreen(model, navigator, id)
                     }
-                    composable("flash") { FlashScreen(model) { nav.popBackStack() } }
+                    composable("assistant/models") { cattivole.spectra.assistant.ui.AssistantModelsScreen(model, navigator) }
+                    composable("assistant/internet") { cattivole.spectra.assistant.ui.AssistantInternetScreen(model, navigator) }
+                    composable("assistant/dossier") { cattivole.spectra.assistant.ui.AssistantDossierScreen(model, navigator) }
                 }
             }
         }
     }
 }
+
+/** The decode screen's ✨: the capture is kept for the assistant, then a chat about it opens. */
+private fun assistantAsk(model: SpectraModel, navigator: Navigator): ((String, cattivole.spectra.core.CaptureAnalysis, Boolean) -> Unit)? =
+    if (!cattivole.spectra.assistant.AssistantModel.isSupported) null else { name, analysis, fromSensor ->
+        model.captures.keep(name, analysis, fromSensor)
+        navigator.askAssistant(model, tr("Decode this traffic capture: what is in it, and is anything unusual?"))
+    }
 
 private fun NavBackStackEntry.text(key: String): String = Uri.decode(arguments?.getString(key).orEmpty())
 private fun NavBackStackEntry.mac(key: String): MacAddress? = MacAddress.parse(text(key).replace('-', ':'))
