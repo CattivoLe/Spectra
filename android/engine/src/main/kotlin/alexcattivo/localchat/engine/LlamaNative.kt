@@ -33,6 +33,8 @@ internal object LlamaNative {
     external fun decode(context: Long, tokens: IntArray, offset: Int, count: Int): Int
     external fun memoryClear(context: Long)
     external fun memoryRemoveFrom(context: Long, position: Int): Boolean
+    external fun stateSave(context: Long, path: String, tokens: IntArray): Boolean
+    external fun stateLoad(context: Long, path: String, tokens: IntArray): Boolean
     external fun newSampler(
         model: Long, temperature: Float, topP: Float, topK: Int, seed: Int, grammar: ByteArray?, triggers: Array<ByteArray>?,
     ): Long

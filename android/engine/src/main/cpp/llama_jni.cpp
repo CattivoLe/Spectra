@@ -12,6 +12,7 @@
 #include "json.h"
 #include "jinja/value.h"
 #include "jinja/runtime.h"
+#include "prompt_state.h"
 
 #define TAG "LocalChatEngine"
 
@@ -174,6 +175,20 @@ JNIEXPORT void JNICALL JNI(memoryClear)(JNIEnv *, jobject, jlong context) {
 
 JNIEXPORT jboolean JNICALL JNI(memoryRemoveFrom)(JNIEnv *, jobject, jlong context, jint position) {
     return llama_memory_seq_rm(llama_get_memory(as_context(context)), 0, position, -1);
+}
+
+/// Сохраняет кэш (в нём ровно `tokens`) в файл; формат и причины — в prompt_state.h.
+JNIEXPORT jboolean JNICALL JNI(stateSave)(JNIEnv * env, jobject, jlong context, jstring path, jintArray tokens) {
+    std::vector<llama_token> list(static_cast<size_t>(env->GetArrayLength(tokens)));
+    env->GetIntArrayRegion(tokens, 0, static_cast<jsize>(list.size()), list.data());
+    return prompt_state::save(as_context(context), to_string(env, path).c_str(), list.data(), list.size());
+}
+
+/// Загружает сохранённый кэш, только если файл целый и сохранён ровно для `tokens`.
+JNIEXPORT jboolean JNICALL JNI(stateLoad)(JNIEnv * env, jobject, jlong context, jstring path, jintArray tokens) {
+    std::vector<llama_token> list(static_cast<size_t>(env->GetArrayLength(tokens)));
+    env->GetIntArrayRegion(tokens, 0, static_cast<jsize>(list.size()), list.data());
+    return prompt_state::load(as_context(context), to_string(env, path).c_str(), list.data(), list.size());
 }
 
 JNIEXPORT jlong JNICALL JNI(newSampler)(JNIEnv * env, jobject, jlong model, jfloat temperature, jfloat topP, jint topK,

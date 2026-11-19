@@ -17,9 +17,11 @@ import kotlinx.coroutines.withContext
  *
  * Все вызовы llama.cpp идут через один поток: контекст не потокобезопасен, а вычисления блокирующие.
  * Логика повторяет LlamaEngine.swift: кэш промпта, обрезка старых реплик, служебный второй контекст,
- * продолжение начатого ответа и ленивая грамматика для вызова инструментов.
+ * продолжение начатого ответа, ленивая грамматика для вызова инструментов и сохранённый на диск системный промпт.
+ *
+ * @param promptCacheDir куда сохранять посчитанный системный промпт между чатами (см. [PromptCache]); `null` — не сохранять.
  */
-class LlamaEngine(private val nativeLibraryDir: String) : InferenceEngine {
+class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = null) : InferenceEngine {
     private val dispatcher = Executors.newSingleThreadExecutor { Thread(it, "LocalChat.LlamaEngine") }.asCoroutineDispatcher()
 
     // Состояние ниже меняется только в потоке движка.
@@ -36,6 +38,11 @@ class LlamaEngine(private val nativeLibraryDir: String) : InferenceEngine {
     private var cachedTokens = IntArray(0)
     /** Сообщения, уже выброшенные из начала текущего диалога: граница не «ползёт» с каждой репликой. */
     private var droppedHistory: List<ChatMessage> = emptyList()
+    private val promptCache = promptCacheDir?.let(::PromptCache)
+    /** От чего, кроме промпта, зависят сохранённые состояния: файл модели и настройки. */
+    private var cacheIdentity: Triple<String, Long, String>? = null
+    /** Системная часть последнего промпта в токенах, чтобы не рендерить её заново к каждой реплике. */
+    private var systemPrefix: Triple<List<ChatMessage>, Boolean, IntArray>? = null
 
     override suspend fun load(path: String, config: EngineConfig): ModelInfo = withContext(dispatcher) {
         LlamaNative.ensureLoaded(nativeLibraryDir)
@@ -66,6 +73,8 @@ class LlamaEngine(private val nativeLibraryDir: String) : InferenceEngine {
             }
         }
         fallbackFormat = if (chatTemplate == null) ChatFormat.detect(template) else null
+        cacheIdentity = Triple(File(path).name, File(path).length(), if (config.gpuLayers > 0) "gpu" else "cpu")
+        systemPrefix = null
         android.util.Log.i("LocalChatEngine", String.format(java.util.Locale.ROOT,
             "load: %s, ctx %d, %d threads, %.1fs; %s", File(path).name, LlamaNative.contextLength(loadedContext), threads,
             (System.nanoTime() - start) / 1e9, LlamaNative.systemInfo()))
@@ -97,6 +106,8 @@ class LlamaEngine(private val nativeLibraryDir: String) : InferenceEngine {
         fallbackFormat = null
         cachedTokens = IntArray(0)
         droppedHistory = emptyList()
+        cacheIdentity = null
+        systemPrefix = null
     }
 
     override fun generate(messages: List<ChatMessage>, params: GenerationParams): Flow<GenerationEvent> = callbackFlow {
@@ -181,12 +192,34 @@ class LlamaEngine(private val nativeLibraryDir: String) : InferenceEngine {
             }
             cachedTokens = tokens.copyOfRange(0, reused)
 
+            // Новый чат: системной части в кэше ещё нет. Если она уже считалась — загружаем с диска,
+            // иначе считаем её первой и по пути сохраняем.
+            var pendingSave: PromptCache.Key? = null
+            val key = systemPrefixKey(messages, tokens, params.thinking, contextLength)
+            if (key != null && reused < key.prefix.size) {
+                when (restore(key)) {
+                    Restore.Loaded -> {
+                        reused = key.prefix.size
+                        cachedTokens = key.prefix.copyOf()
+                    }
+                    // Кэш остаётся каким был: цикл ниже досчитает системную часть и сохранит её.
+                    Restore.Missing -> pendingSave = key
+                    Restore.Failed -> {
+                        reused = 0
+                        cachedTokens = IntArray(0)
+                        pendingSave = key
+                    }
+                }
+            }
+
             var offset = reused
             while (offset < tokens.size) {
                 if (cancelled.get()) {
                     return GenerationStats(tokens.size, reused, dropped, 0, seconds(start), 0.0, StopReason.Cancelled)
                 }
-                val count = minOf(BATCH, tokens.size - offset)
+                // Пакет кончается ровно на границе системной части: в сохранённом состоянии не будет ничего лишнего.
+                val stop = pendingSave?.let { if (offset < it.prefix.size) it.prefix.size else null } ?: tokens.size
+                val count = minOf(BATCH, stop - offset)
                 val code = LlamaNative.decode(context, tokens, offset, count)
                 if (code != 0) {
                     resetCache()
@@ -194,6 +227,10 @@ class LlamaEngine(private val nativeLibraryDir: String) : InferenceEngine {
                 }
                 offset += count
                 cachedTokens = tokens.copyOfRange(0, offset)
+                if (pendingSave != null && offset == pendingSave.prefix.size) {
+                    save(pendingSave)
+                    pendingSave = null
+                }
             }
 
             var generated = 0
@@ -272,6 +309,61 @@ class LlamaEngine(private val nativeLibraryDir: String) : InferenceEngine {
         }
         val triggers = if (wrapped != null) params.grammarTriggers.map { regexEscaped(it).toByteArray() }.toTypedArray() else null
         return LlamaNative.newSampler(model, params.temperature, params.topP, params.topK, params.seed, wrapped?.toByteArray(), triggers)
+    }
+
+    // MARK: - Сохранённый системный промпт
+
+    private enum class Restore { Loaded, Missing, Failed }
+
+    /** Ключ сохранённого состояния для системной части этого промпта или `null`, если сохранять нечего. */
+    private fun systemPrefixKey(messages: List<ChatMessage>, prompt: IntArray, thinking: Boolean, contextLength: Int): PromptCache.Key? {
+        val identity = cacheIdentity
+        if (promptCache == null || identity == null) return null
+        val system = messages.takeWhile { it.role == ChatMessage.Role.System }
+        if (system.isEmpty()) return null
+        val memo = systemPrefix
+        val tokens = if (memo != null && memo.first == system && memo.second == thinking) {
+            memo.third
+        } else {
+            // Те же системные сообщения перед двумя разными вопросами: их общее начало и есть системная часть.
+            val a = runCatching { tokenize(render(system + ChatMessage(ChatMessage.Role.User, "a"), thinking)) }.getOrNull() ?: return null
+            val b = runCatching { tokenize(render(system + ChatMessage(ChatMessage.Role.User, "b"), thinking)) }.getOrNull() ?: return null
+            a.copyOfRange(0, PromptCache.sharedPrefixLength(a, b)).also { systemPrefix = Triple(system.toList(), thinking, it) }
+        }
+        val prefix = PromptCache.usablePrefix(tokens, prompt) ?: return null
+        return PromptCache.Key(identity.first, identity.second, contextLength, identity.third, prefix)
+    }
+
+    /**
+     * Загружает сохранённую системную часть вместо того, что было в кэше. `Missing` кэш не трогает; `Failed` оставляет
+     * его пустым (и удаляет файл) — тогда промпт считается как раньше.
+     */
+    private fun restore(key: PromptCache.Key): Restore {
+        val cache = promptCache ?: return Restore.Missing
+        val file = cache.file(key)
+        if (!file.isFile) return Restore.Missing
+        val started = System.nanoTime()
+        LlamaNative.memoryClear(context)
+        val loaded = LlamaNative.stateLoad(context, file.path, key.prefix)
+        android.util.Log.i("LocalChatEngine", String.format(java.util.Locale.ROOT,
+            "prompt cache: %s %d tokens in %.2fs", if (loaded) "loaded" else "failed to load", key.prefix.size, seconds(started)))
+        if (loaded) return Restore.Loaded
+        LlamaNative.memoryClear(context)
+        cache.discard(key)
+        return Restore.Failed
+    }
+
+    /** Записывает кэш — в нём сейчас ровно системная часть — для следующего нового чата. Не вышло — не страшно. */
+    private fun save(key: PromptCache.Key) {
+        val cache = promptCache ?: return
+        if (!cache.prepareDirectory()) return
+        val started = System.nanoTime()
+        val temporary = cache.temporaryFile(key)
+        val saved = LlamaNative.stateSave(context, temporary.path, key.prefix) && cache.commit(key)
+        if (!saved) temporary.delete()
+        android.util.Log.i("LocalChatEngine", String.format(java.util.Locale.ROOT,
+            "prompt cache: %s %d tokens (%d MB) in %.2fs", if (saved) "saved" else "failed to save", key.prefix.size,
+            cache.file(key).length() / 1_048_576, seconds(started)))
     }
 
     // MARK: - Текст и токены

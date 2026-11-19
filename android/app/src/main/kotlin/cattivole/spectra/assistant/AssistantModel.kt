@@ -52,7 +52,8 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
     private val base = File(app.filesDir, "assistant").apply { mkdirs() }
     private val modelsDirectory = File(base, "models").apply { mkdirs() }
 
-    val controller = EngineController(LlamaEngine(app.applicationInfo.nativeLibraryDir))
+    // The computed system prompt is kept in the cache folder: a new chat loads it instead of reading it for ~30 s.
+    val controller = EngineController(LlamaEngine(app.applicationInfo.nativeLibraryDir, File(app.cacheDir, "prompt-cache")))
     val store: ChatStore
     val library: ModelLibrary
     val web = WebAccess(PreferencesSettings(prefs), KeystoreSecretStore(File(base, "secrets")))

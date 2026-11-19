@@ -28,6 +28,12 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
     /// Сообщения, уже выброшенные из начала текущего диалога. Пока диалог тот же, выбрасываем ровно их:
     /// граница не «ползёт» с каждой репликой, и кэш после обрезки продолжает работать.
     private var droppedHistory: [ChatMessage] = []
+    /// Saved KV states of the system part of the prompt (`nil` — never saved). See `PromptCache`.
+    private let promptCache: PromptCache?
+    /// What the saved states depend on besides the prompt: the loaded model file and settings.
+    private var cacheIdentity: (model: String, bytes: UInt64, backend: String)?
+    /// The system part of the last prompt in tokens, so it is not re-rendered for every reply.
+    private var systemPrefix: (messages: [ChatMessage], thinking: Bool, tokens: [llama_token])?
 
     private static let batchSize: Int32 = 512
 
@@ -41,7 +47,10 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
         llama_backend_init()
     }()
 
-    public init() {}
+    /// - Parameter promptCacheDirectory: where computed system prompts are kept between chats; `nil` turns that off.
+    public init(promptCacheDirectory: URL? = PromptCache.defaultDirectory) {
+        promptCache = promptCacheDirectory.map(PromptCache.init(directory:))
+    }
 
     /// Initializes llama.cpp once per process; the embedding engine needs it too.
     static func ensureBackend() { _ = backend }
@@ -217,6 +226,8 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
         llama_model_desc(model, &description, description.count)
 
         let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { UInt64($0) } ?? 0
+        cacheIdentity = (url.lastPathComponent, fileSize, config.useGPU ? "metal" : "cpu")
+        systemPrefix = nil
         let elapsed = clock.now - start
 
         return ModelInfo(
@@ -244,6 +255,8 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
         fallbackFormat = nil
         cachedTokens = []
         droppedHistory = []
+        cacheIdentity = nil
+        systemPrefix = nil
     }
 
     // MARK: - Генерация
@@ -279,6 +292,25 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
         }
         cachedTokens = Array(tokens[..<reused])
 
+        // A new chat: the system part is not in the cache yet. Load it from disk if it was computed before,
+        // otherwise compute it first and save it on the way.
+        var pendingSave: PromptCache.Key?
+        if let key = systemPrefixKey(messages, prompt: tokens, thinking: params.thinking, vocab: vocab, contextLength: contextLength),
+           reused < key.prefix.count {
+            switch restore(key, context: context) {
+            case .loaded:
+                reused = key.prefix.count
+                cachedTokens = key.prefix
+            case .missing:
+                // The cache keeps what it had; the loop below finishes the system part and saves it.
+                pendingSave = key
+            case .failed:
+                reused = 0
+                cachedTokens = []
+                pendingSave = key
+            }
+        }
+
         var offset = reused
         while offset < tokens.count {
             if cancelled.isSet {
@@ -286,7 +318,9 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
                                        generatedTokens: 0, timeToFirstTokenSeconds: (clock.now - start).seconds,
                                        generationSeconds: 0, stopReason: .cancelled)
             }
-            let count = min(Int(Self.batchSize), tokens.count - offset)
+            // The batch stops exactly at the end of the system part, so the state saved there holds nothing else.
+            let stop = pendingSave.map { offset < $0.prefix.count ? $0.prefix.count : tokens.count } ?? tokens.count
+            let count = min(Int(Self.batchSize), stop - offset)
             let code = tokens.withUnsafeBufferPointer { buffer in
                 llama_decode(context, llama_batch_get_one(UnsafeMutablePointer(mutating: buffer.baseAddress! + offset), Int32(count)))
             }
@@ -296,6 +330,10 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
             }
             offset += count
             cachedTokens = Array(tokens[..<offset])
+            if let key = pendingSave, offset == key.prefix.count {
+                save(key, context: context)
+                pendingSave = nil
+            }
         }
 
         var generated = 0
@@ -449,6 +487,81 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
             }
         }
         return false
+    }
+
+    // MARK: - Saved system prompt
+
+    /// The key of the saved state for this prompt's system part, or `nil` when there is nothing worth saving.
+    private func systemPrefixKey(
+        _ messages: [ChatMessage],
+        prompt: [llama_token],
+        thinking: Bool,
+        vocab: OpaquePointer,
+        contextLength: Int
+    ) -> PromptCache.Key? {
+        guard promptCache != nil, let cacheIdentity else { return nil }
+        let system = Array(messages.prefix { $0.role == .system })
+        guard !system.isEmpty else { return nil }
+        let tokens: [llama_token]
+        if let systemPrefix, systemPrefix.messages == system, systemPrefix.thinking == thinking {
+            tokens = systemPrefix.tokens
+        } else {
+            // The same system messages before two different questions: whatever they share is the system part.
+            guard let a = try? tokenize(try render(system + [ChatMessage(.user, "a")], thinking: thinking), vocab: vocab),
+                  let b = try? tokenize(try render(system + [ChatMessage(.user, "b")], thinking: thinking), vocab: vocab)
+            else { return nil }
+            tokens = Array(a[..<PromptCache.sharedPrefixLength(a, b)])
+            systemPrefix = (system, thinking, tokens)
+        }
+        guard let prefix = PromptCache.usablePrefix(tokens, of: prompt) else { return nil }
+        return PromptCache.Key(model: cacheIdentity.model, modelBytes: cacheIdentity.bytes, contextLength: contextLength,
+                               backend: cacheIdentity.backend, prefix: prefix)
+    }
+
+    private enum Restore { case loaded, missing, failed }
+
+    /// Loads a saved system part in place of whatever the cache held. `.missing` leaves the cache untouched;
+    /// `.failed` leaves it empty (and deletes the file): the caller then computes the prompt as before.
+    private func restore(_ key: PromptCache.Key, context: OpaquePointer) -> Restore {
+        guard let promptCache else { return .missing }
+        let url = promptCache.url(for: key)
+        guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
+        let memory = llama_get_memory(context)
+        llama_memory_clear(memory, true)
+        // Mapped, not read: the file is tens of megabytes and llama.cpp copies it into the cache anyway.
+        let loaded: Bool
+        if let file = try? Data(contentsOf: url, options: .alwaysMapped),
+           let range = PromptCache.payloadRange(in: file, prefix: key.prefix) {
+            let read = file.withUnsafeBytes { raw in
+                llama_state_seq_set_data(context, raw.baseAddress!.assumingMemoryBound(to: UInt8.self) + range.lowerBound, range.count, 0)
+            }
+            loaded = read == range.count
+        } else {
+            loaded = false
+        }
+        guard loaded else {
+            llama_memory_clear(memory, true)
+            promptCache.discard(key)
+            return .failed
+        }
+        return .loaded
+    }
+
+    /// Writes the cache, which holds exactly the system part right now, for the next new chat. Best effort.
+    private func save(_ key: PromptCache.Key, context: OpaquePointer) {
+        guard let promptCache, promptCache.prepareDirectory() else { return }
+        let size = llama_state_seq_get_size(context, 0)
+        guard size > 0 else { return }
+        let temporary = promptCache.temporaryURL(for: key)
+        let written = PromptCache.writeMapped(to: temporary, header: PromptCache.header(prefix: key.prefix, payloadBytes: size),
+                                              payloadBytes: size) { buffer in
+            llama_state_seq_get_data(context, buffer, size, 0) == size
+        }
+        if written {
+            promptCache.commit(key)
+        } else {
+            try? FileManager.default.removeItem(at: temporary)
+        }
     }
 
     // MARK: - Текст и токены
