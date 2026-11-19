@@ -3,6 +3,7 @@ package cattivole.spectra
 import cattivole.spectra.assistant.AssistantActions
 import cattivole.spectra.assistant.AssistantDigest
 import cattivole.spectra.assistant.AssistantMemory
+import cattivole.spectra.assistant.AssistantModel
 import cattivole.spectra.assistant.AssistantSnapshot
 import cattivole.spectra.assistant.AssistantStarters
 import cattivole.spectra.assistant.AssistantTopic
@@ -256,5 +257,12 @@ class AssistantTest {
         assertEquals(listOf("192.168.1.64"), HistoryDigest.searchWords("что было на 192.168.1.64 раньше"))
         assertTrue("Bluetooth" in HistoryDigest.kindsAsked("какие блютуз устройства были вчера"))
         assertTrue(HistoryDigest.text(emptyList(), "anything").startsWith("History is empty"))
+    }
+
+    /** ChatSession appends the registry's instructions itself: the prompt must not carry a second copy. */
+    @Test
+    fun toolInstructionsReachTheModelOnce() {
+        assertFalse(AssistantModel.SYSTEM_PROMPT.contains("<tool_call>"))
+        assertTrue(AssistantActions.INSTRUCTIONS.contains("<tool_call>"))
     }
 }

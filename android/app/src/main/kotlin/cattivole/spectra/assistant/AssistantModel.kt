@@ -249,9 +249,9 @@ Rules:
 - Help only with the user's own networks and devices, never with breaking into someone else's.
 - Put IPs, MACs, BSSIDs, device names and ports in `backticks`.
 - If you do not know, say so.
-
-@@ACTIONS@@
-        """.trimIndent().replace("@@ACTIONS@@", AssistantActions.INSTRUCTIONS)
+        """.trimIndent()
+        // The tool instructions are not part of this text: ChatSession appends the registry's own
+        // (AssistantActions.INSTRUCTIONS) after it. Both used to be included, so the model read them twice.
 
         /** The prompt and the answer length, carried as a persona so every chat gets the current one. */
         val PERSONA = Persona(
