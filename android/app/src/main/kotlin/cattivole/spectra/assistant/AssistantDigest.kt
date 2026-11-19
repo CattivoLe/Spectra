@@ -195,8 +195,11 @@ object AssistantStarters {
  * memory, so the text is capped and sorted by importance rather than dumped whole. Mirrors AssistantDigest.swift.
  */
 object AssistantDigest {
-    /** Upper bound for the whole attachment, in characters (about 1,000 tokens). */
-    const val BUDGET = 3600
+    /**
+     * Upper bound for the whole attachment, in characters (about 700 tokens). iOS keeps 3600: on Android the model
+     * runs on the CPU, where every token in the prompt slows both reading the question and writing the answer.
+     */
+    const val BUDGET = 2400
 
     private val overviewStems = listOf(
         "analy", "overview", "summary", "summar", "everything", "all my", "around me", "nearby", "what do you see", "what's around", "scan", "check", "audit", "review", "report", "status",

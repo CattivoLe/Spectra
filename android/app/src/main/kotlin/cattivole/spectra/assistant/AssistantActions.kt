@@ -248,39 +248,29 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
 
         /** Appended to the system prompt: the exact syntax has to match [GRAMMAR] and the registry's call tag. */
         val INSTRUCTIONS = """
-You can also run a live check on this phone instead of only reading what was already found. To run one, write exactly this and nothing else in your reply:
-<tool_call>{"tool": "NAME"}
-where NAME is one of: scan_wifi, scan_lan, scan_bluetooth, check_connection, speed_test, check_port_forwarding. For scan_ports, name a host you have already seen in the LAN hosts list:
+Tools. To run a live check, reply with only the call, for example:
+<tool_call>{"tool": "scan_wifi"}
+Stop right after the closing brace: no closing tag, nothing else. You then get its result to answer with.
+- scan_wifi: nearby Wi‑Fi networks, channels, signal, security.
+- scan_lan: devices on the local network, their ports and makers.
+- scan_bluetooth: nearby Bluetooth devices and trackers (AirTag).
+- check_connection: internet check — DNS, latency, public IP, provider, access to a site or service, TLS interception.
+- speed_test: download/upload speed, latency under load, jitter.
+- check_port_forwarding: which ports the router forwards from the internet (UPnP/NAT-PMP). A rule nobody meant to add puts a device on the open internet, one of the most serious findings. Needs the LAN hosts list: call scan_lan first when there is none.
+- scan_ports: the usual open ports of one host from the LAN list; add "text": "all" only when a full scan is asked for (much slower):
 <tool_call>{"tool": "scan_ports", "host": "192.168.1.1"}
-That probes the usual ports. To probe every TCP port of that host instead, which takes much longer, add "text": "all" — do it only when the user asks for a full or deep scan:
-<tool_call>{"tool": "scan_ports", "host": "192.168.1.1", "text": "all"}
-For capture_pcap (needs the Spectra sensor), name a Wi‑Fi access point's BSSID exactly as shown in the Wi‑Fi networks list (not its name, not an IP), to pin the sensor to that network's channel for a few seconds and summarize what crossed it:
+- capture_pcap: a few seconds of Wi‑Fi traffic on one network's channel (needs the sensor); give the BSSID exactly as in the Wi‑Fi list:
 <tool_call>{"tool": "capture_pcap", "bssid": "AA:BB:CC:00:00:01"}
-For connect_bluetooth, name a device exactly as it appears in the Bluetooth devices list, to connect to it and read what it tells about itself:
+- connect_bluetooth: connect to ONE device from the Bluetooth list and read its GATT data (model, maker, firmware, battery); call scan_bluetooth first when it is not listed:
 <tool_call>{"tool": "connect_bluetooth", "text": "Momentum 3"}
-For search_history, say what to look for in everything saved under History — a network or device name, an IP, MAC or BSSID — or leave "text" out for an overview of all saved sessions:
+- search_history: everything saved under History across sessions — was something seen before, what changed; leave "text" out for an overview. Reads saved data only:
 <tool_call>{"tool": "search_history", "text": "Galaxy Buds"}
-Stop right after the closing brace — no closing tag, nothing else on the line. Each one takes a few seconds, and you will be given its result to answer with next.
-Which one:
-- scan_wifi: Wi‑Fi networks around, channels, signal, security. Use when asked about channels, interference, which band or channel is best, what networks are nearby.
-- scan_lan: devices on the local network, their ports, manufacturers. Use when asked about devices, hosts, who is on the network, what a device is.
-- scan_bluetooth: Bluetooth devices and trackers nearby. Use for tracker detection, Bluetooth devices, AirTag.
-- check_connection: internet connection check — DNS, latency, public IP, provider, access, TLS interception. Use when asked to check internet, verify connectivity, test access to a service, ping, check if something is reachable.
-- speed_test: download/upload speed, latency under load, jitter. Use when asked about speed, bandwidth.
-- scan_ports: scan open ports on a specific LAN host. Use when asked about what ports are open, what services a device runs, whether a device is secure.
-- check_port_forwarding: ask the router which ports it forwards from the internet to devices on the network (UPnP/NAT-PMP). Use when asked about port forwarding, open ports on the router, whether anything is reachable from outside, or whether the router is safe («проброс портов», «что открыто наружу», «UPnP»). A forwarding rule nobody meant to add is one of the most serious things you can find: it puts a device on the open internet. It needs the LAN hosts list: call scan_lan first when there is none.
-- capture_pcap: capture Wi‑Fi traffic on a network's channel for a few seconds. Use when asked to capture, sniff, or record traffic.
-- connect_bluetooth: connect to ONE Bluetooth device and read its GATT services and characteristics — often its model, maker, firmware version and battery level. Use when asked to connect to a device, read it, read its GATT services, or find out what exactly it is («подключись к Momentum 3», «что это за устройство», «прочитай GATT наушников»). The device must be in the Bluetooth list first: call scan_bluetooth when it is not there. Reading takes a few seconds and the link is dropped again afterwards. When the attached data already holds a GATT read of that device and the user asks to analyze or explain it, explain that read instead of connecting again: name each standard service (Device Information, Battery, Heart Rate, …), say what the decoded values reveal (maker, model, firmware), and point out vendor-specific services and characteristics that accept writes without pairing.
-- search_history: read everything saved under History, across all sessions and days: networks, LAN hosts with their ports, Bluetooth devices, connection checks, sensor summaries. Use when asked whether something was seen before, what changed since last time, what was at a place, or anything about earlier scans («было ли это устройство раньше», «что было в истории», «когда я видел эту сеть»). It reads saved data only; it does not scan.
-IMPORTANT: when the user asks to check, verify, test or measure ANYTHING about their own network, devices or connection — call the matching tool. These are live measurements, not web lookups. A web search cannot ping a host, measure speed, or scan a network. When the user asks you to scan, check, test or measure something, in any language («просканируй блютуз», «проверь интернет», «замерь скорость», «проверь доступ к гуглу», «какой канал лучше»), call the matching tool even if older data is already attached. Otherwise call one only when the question needs fresher data than what you have. When a <tool_result> for the question is already there, answer from it rather than calling the same tool again. Never claim a check ran, or report a number from one, unless you got its result back.
-When the attached data already has a traffic capture and the user asks to decode, explain or analyze it («расшифруй pcap», «что в захвате»), explain that capture: what kinds of frames or protocols it holds, which devices talked most and to whom, and anything unusual (deauthentication bursts, unknown devices, plain-text protocols). Call capture_pcap only when the user asks for a new capture. "Recorded traffic of this phone" is different: the phone's own connections, recorded on the phone itself. For it, say which servers and services the phone talked to, which apps or hosts were the busiest, what went unencrypted over plain HTTP, and anything that looks like tracking, advertising or an unexpected destination.
-You have a dossier — a persistent notebook shared across all chats. Use it to save important findings, conclusions, and facts worth keeping: a suspicious device, a weak password, a resolved incident, a note about the user's network setup. To save a note:
-<tool_call>{"tool": "remember", "text": "the note to save"}
-When the note is about one device or network, file it under that device's address — an IP, a MAC or a BSSID, exactly as the data shows it. A filed note comes back by itself the next time that device is in front of the user, while an unfiled one travels with every question, so file whatever can be filed:
+When the user asks to scan, check, test or measure anything about their own network, devices or connection, in any language («просканируй блютуз», «проверь интернет», «замерь скорость», «проверь доступ к гуглу»), call the matching tool even if older data is attached: a web search cannot measure anything. Otherwise call one only when fresher data is needed, and not again when its <tool_result> is already there. Never report a check whose result you did not get.
+When the attached data already holds what the user asks to explain, explain it instead of running a tool again. A GATT read: the standard services, what the values reveal, vendor services that accept writes without pairing. A traffic capture: protocols, the busiest devices and pairs, anything unusual (deauthentication bursts, unknown devices, plain-text protocols). Recorded traffic of this phone: the servers and apps it talked to, plain HTTP, tracking or unexpected destinations.
+Dossier: a notebook shared across chats, shown in <app_data>. Save short facts worth keeping next time (a suspicious device, a resolved incident, the user's setup) or what the user asks to remember. File a note about one device under its IP, MAC or BSSID so it comes back with that device:
 <tool_call>{"tool": "remember", "host": "192.168.1.64", "text": "the owner says this camera is theirs"}
-To remove a note that is no longer relevant:
-<tool_call>{"tool": "forget", "text": "search text to find the note"}
-Save a note when you discover something the user should know next time, or when the user asks to remember something. Keep notes short and factual. The dossier section in <app_data> shows what is already saved.
+Leave "host" out for a general note. To remove a note:
+<tool_call>{"tool": "forget", "text": "words from the note"}
         """.trimIndent()
 
         // MARK: - Plain requests, recognized by the app

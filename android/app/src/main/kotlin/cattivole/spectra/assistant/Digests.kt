@@ -13,7 +13,8 @@ import java.util.Locale
  * Used both for a capture the user already has and for one the model takes itself (`capture_pcap`).
  */
 object CaptureDigest {
-    const val BUDGET = 2400
+    /** Smaller than iOS (2400): Android runs the model on the CPU. */
+    const val BUDGET = 1600
 
     fun text(analysis: CaptureAnalysis, name: String, origin: String, describe: (String) -> String? = { null }): String {
         val summary = analysis.summary
@@ -56,7 +57,8 @@ object CaptureDigest {
  * for the assistant. Hosts, paths and headers come from the network, so each is flattened before the model sees it.
  */
 object TrafficDigest {
-    const val BUDGET = 2400
+    /** Smaller than iOS (2400): Android runs the model on the CPU. */
+    const val BUDGET = 1600
 
     fun text(flows: List<TrafficFlow>, name: String, origin: String): String {
         val sent = flows.sumOf { it.sent }

@@ -137,7 +137,9 @@ class ChatSession(
 
     /** Пересчитывает заполнение контекста. Зовётся после загрузки диалога, ответа и смены модели. */
     suspend fun refreshContext() {
-        val total = controller.info?.contextLength
+        // With a soft history limit the engine starts dropping old exchanges there, not at the full context:
+        // the gauge fills up against the same number.
+        val total = controller.info?.contextLength?.let { full -> params.historyTokens?.coerceAtMost(full) ?: full }
         if (isGenerating || total == null) {
             if (controller.state == EngineController.State.Empty) context = null
             return

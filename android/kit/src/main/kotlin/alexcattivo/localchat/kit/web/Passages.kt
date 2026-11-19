@@ -204,6 +204,18 @@ object PassageSelector {
         return fused.indices.sortedByDescending { fused[it] }
     }
 
+    /**
+     * Номера не более `limit` кусков для дорогого отбора по смыслу: сначала лучшие по словам, остаток — по порядку
+     * на странице (кусок может подходить по смыслу без общих слов с вопросом). Если кусков мало — все.
+     */
+    fun shortlist(passages: List<Passage>, query: String, limit: Int): List<Int> {
+        if (passages.size <= limit) return passages.indices.toList()
+        val byWords = order(passages, query, RankingMethod.Words)
+        val ranked = byWords.toSet()
+        val rest = passages.indices.filter { it !in ranked }
+        return (byWords + rest).take(limit)
+    }
+
     /** Набирает куски в заданном порядке с ограничениями по объёму и числу кусков с одного сайта. */
     fun pack(passages: List<Passage>, order: List<Int>, budget: Int, perSource: Int = 2): List<Passage> {
         val chosen = mutableListOf<Passage>()

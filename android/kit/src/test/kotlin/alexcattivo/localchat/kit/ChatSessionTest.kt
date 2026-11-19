@@ -123,6 +123,19 @@ class ChatSessionTest {
         assertFalse(usage.isOverflowing)
     }
 
+    /** The gauge fills up against the soft history limit, where old exchanges start to go, not the whole context. */
+    @Test fun contextUsageCountsAgainstTheHistoryLimit() = runBlocking {
+        val (session, _) = makeSession(ScriptedEngine { "Короткий ответ" })
+        session.params = session.params.copy(historyTokens = 1000)
+        session.send("Привет")
+        session.waitUntilIdle()
+        assertEquals(1000, session.context!!.total)
+        // A limit above the context itself changes nothing.
+        session.params = session.params.copy(historyTokens = 100_000)
+        session.refreshContext()
+        assertEquals(4096, session.context!!.total)
+    }
+
     @Test fun retractLastQuestionRemovesItAndTheAnswer() = runBlocking {
         val engine = ScriptedEngine { "ответ" }
         val (session, store) = makeSession(engine)

@@ -66,6 +66,9 @@ class LlamaEngine(private val nativeLibraryDir: String) : InferenceEngine {
             }
         }
         fallbackFormat = if (chatTemplate == null) ChatFormat.detect(template) else null
+        android.util.Log.i("LocalChatEngine", String.format(java.util.Locale.ROOT,
+            "load: %s, ctx %d, %d threads, %.1fs; %s", File(path).name, LlamaNative.contextLength(loadedContext), threads,
+            (System.nanoTime() - start) / 1e9, LlamaNative.systemInfo()))
 
         ModelInfo(
             description = LlamaNative.modelDescription(loadedModel),
@@ -307,8 +310,9 @@ class LlamaEngine(private val nativeLibraryDir: String) : InferenceEngine {
         }
 
         var result = tokensFor(system + rest)
-        if (result.size > budget) {
-            val target = budget * 6 / 10
+        val soft = params.historyTokens?.coerceAtMost(budget) ?: budget
+        if (result.size > soft) {
+            val target = soft * 6 / 10
             while (result.size > target) {
                 // Первый обмен: от первой реплики до следующего вопроса пользователя.
                 val next = rest.drop(1).indexOfFirst { it.role == ChatMessage.Role.User }.takeIf { it >= 0 }?.plus(1) ?: break

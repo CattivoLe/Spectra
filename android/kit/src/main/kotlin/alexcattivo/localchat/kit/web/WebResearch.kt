@@ -37,15 +37,18 @@ class WebResearch(
     suspend fun select(passages: List<Passage>, question: String, query: String, method: RankingMethod? = null): List<Passage> {
         val text = "$question $query"
         val chosen = method ?: if (embedder == null) RankingMethod.Words else RankingMethod.Hybrid
-        var queryVector: FloatArray? = null
-        var passageVectors: List<FloatArray>? = null
         val embedder = embedder
-        if (chosen != RankingMethod.Words && embedder != null) {
-            queryVector = runCatching { embedder.embedQueries(listOf(question)).first() }.getOrNull()
-            passageVectors = runCatching { embedder.embedPassages(passages.map { (it.heading?.let { h -> "$h. " } ?: "") + it.text }) }.getOrNull()
+        if (chosen == RankingMethod.Words || embedder == null) {
+            return PassageSelector.pack(passages, PassageSelector.order(passages, text, RankingMethod.Words), budget)
         }
-        val order = PassageSelector.order(passages, text, chosen, queryVector, passageVectors)
-        return PassageSelector.pack(passages, order, budget)
+        // Три прочитанные страницы дают 200+ кусков, и эмбеддинги всех на процессоре телефона шли по две минуты.
+        // По смыслу переранжируются только лучшие по словам; в промпт всё равно попадает несколько кусков.
+        val candidates = PassageSelector.shortlist(passages, text, MAX_EMBEDDED)
+        val pool = candidates.map { passages[it] }
+        val queryVector = runCatching { embedder.embedQueries(listOf(question)).first() }.getOrNull()
+        val passageVectors = runCatching { embedder.embedPassages(pool.map { (it.heading?.let { h -> "$h. " } ?: "") + it.text }) }.getOrNull()
+        val order = PassageSelector.order(pool, text, chosen, queryVector, passageVectors)
+        return PassageSelector.pack(pool, order, budget)
     }
 
     /**
@@ -132,6 +135,9 @@ class WebResearch(
     }
 
     companion object {
+        /** Сколько кусков считать моделью эмбеддингов: на телефоне 200 кусков — около двух минут, 40 — секунд двадцать. */
+        const val MAX_EMBEDDED = 40
+
         fun sameQuery(a: String, b: String) = Terms.of(a).toSet() == Terms.of(b).toSet()
 
         /** Сливает две выдачи: одинаковые страницы не повторяются, номера источников второй сдвигаются. */

@@ -173,6 +173,26 @@ class WebResearchTest {
         assertTrue(WebResearch(FakeProvider(emptyList()), FakeFetcher(emptyMap()), embedder = broken).select(passages, "башня Париж", "башня").isNotEmpty())
     }
 
+    @Test fun onlyTheBestPassagesByWordsAreEmbedded() = runBlocking {
+        val filler = (0 until 200).map { Passage(it % 3, null, "Посторонний текст номер $it про погоду и котиков.", it) }
+        val answer = Passage(1, null, "Высота башни — 330 метров.", 500)
+        val passages = filler.take(120) + answer + filler.drop(120)
+        var embedded = 0
+        val embedder = object : PassageEmbedder {
+            override suspend fun embedQueries(queries: List<String>) = queries.map { floatArrayOf(1f, 0f) }
+            override suspend fun embedPassages(passages: List<String>): List<FloatArray> {
+                embedded += passages.size
+                return passages.map { if (it.contains("330")) floatArrayOf(1f, 0f) else floatArrayOf(0f, 1f) }
+            }
+        }
+        val research = WebResearch(FakeProvider(emptyList()), FakeFetcher(emptyMap()), embedder = embedder)
+        val chosen = research.select(passages, "Какая высота башни?", "высота башни")
+        assertEquals(WebResearch.MAX_EMBEDDED, embedded)
+        assertTrue(chosen.any { it.text.contains("330") })
+        // Короткий список уходит в эмбеддинги целиком: по смыслу может подойти кусок без общих слов с вопросом.
+        assertEquals(listOf(0, 1, 2), PassageSelector.shortlist(passages.take(3), "высота", 40))
+    }
+
     @Test fun mergeShiftsSourcesAndSkipsDuplicates() {
         val first = WebResearch.Gathered(results.take(2), listOf(Passage(1, null, "a", 0)), 1)
         val second = WebResearch.Gathered(listOf(results[1], results[2]), listOf(Passage(0, null, "dup", 0), Passage(1, null, "b", 0)), 2)

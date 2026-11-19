@@ -107,7 +107,8 @@ class WebAccess(private val settings: SettingsStore, private val secrets: Secret
         pagesToRead = if (!readPages) 0 else if (light) minOf(pagesToRead, 2) else pagesToRead,
         // Для чтения страниц полезно больше кандидатов: лишнее отсеет отбор кусков.
         resultCount = if (readPages) (if (light) 4 else 5) else resultCount,
-        budget = if (light) 2000 else 3600,
+        // Меньше, чем в iOS (3600): на Android модель считается на процессоре, и каждый токен промпта дорог.
+        budget = if (light) 2000 else 2400,
         embedder = if (useMeaning) embedder else null,
     )
 

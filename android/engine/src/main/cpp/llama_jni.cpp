@@ -63,6 +63,11 @@ JNIEXPORT void JNICALL JNI(initBackend)(JNIEnv * env, jobject, jstring libraryDi
     llama_backend_init();
 }
 
+/// Что включено в выбранном варианте процессорного бэкенда (NEON, DOTPROD, MATMUL_INT8, KLEIDIAI…): для замеров в logcat.
+JNIEXPORT jstring JNICALL JNI(systemInfo)(JNIEnv * env, jobject) {
+    return env->NewStringUTF(llama_print_system_info());
+}
+
 JNIEXPORT jlong JNICALL JNI(loadModel)(JNIEnv * env, jobject, jstring path, jint gpuLayers) {
     llama_model_params params = llama_model_default_params();
     params.n_gpu_layers = gpuLayers;

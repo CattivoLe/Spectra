@@ -14,6 +14,7 @@ internal object LlamaNative {
     }
 
     external fun initBackend(libraryDir: String)
+    external fun systemInfo(): String
     external fun loadModel(path: String, gpuLayers: Int): Long
     external fun freeModel(model: Long)
     external fun newContext(model: Long, contextLength: Int, batch: Int, threads: Int): Long

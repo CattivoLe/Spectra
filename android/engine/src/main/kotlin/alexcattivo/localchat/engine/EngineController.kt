@@ -5,10 +5,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Хозяин движка в приложении: один запрос за раз, выгрузка модели при нехватке памяти и загрузка обратно
@@ -37,7 +39,10 @@ class EngineController(private val engine: InferenceEngine) {
         modelPath = path
         this.config = config
         try {
-            info = engine.load(path, config)
+            // Загрузку не прервать: llama.cpp грузит файл в одном вызове. Если отменить вызывающую корутину
+            // (меню, из которого выбрали модель, закрылось), модель всё равно загрузится, а состояние без
+            // NonCancellable осталось бы Empty — и чат навсегда показывал бы «Загружаю модель…».
+            info = withContext(NonCancellable) { engine.load(path, config) }
             state = State.Ready
         } catch (error: Throwable) {
             modelPath = null

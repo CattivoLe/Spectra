@@ -358,7 +358,13 @@ private fun Starters(model: SpectraModel, assistant: AssistantModel, ready: Bool
             Text(tr("Download a model under Models to start."), color = MaterialTheme.colorScheme.onSurfaceVariant)
             return@Column
         }
-        if (!ready) BusyLine(tr("Loading the model…"))
+        // A failed load leaves the engine Empty: say so here instead of an endless "Loading…".
+        val failed = assistant.loadError?.takeIf { assistant.controller.state == EngineController.State.Empty }
+        if (failed != null) {
+            Text(tr("Could not load the model: %s", failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        } else if (!ready) {
+            BusyLine(tr("Loading the model…"))
+        }
         Text(tr("Try asking"), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         for (question in questions) {
             Surface(
