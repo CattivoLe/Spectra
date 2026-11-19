@@ -205,7 +205,7 @@ struct AssistantSessionTests {
 
         let sent = try #require(engine.received.first)
         #expect(sent.first?.role == .system)
-        #expect(sent.first?.content.contains("assistant built into Spectra") == true)
+        #expect(sent.first?.content.contains("assistant inside Spectra") == true)
         let question = try #require(sent.last)
         #expect(question.role == .user)
         #expect(question.content.hasPrefix("<app_data>"))
@@ -461,6 +461,50 @@ struct AssistantRequestTests {
     func otherQuestionsRunNothing(question: String) {
         #expect(AssistantActions.requested(in: question).isEmpty)
     }
+
+    /// Questions only a fresh check answers, asked without "check" — the model would answer them from the snapshot.
+    @Test(arguments: [
+        ("Открывается ли у меня сейчас YouTube?", ["check_connection"]),
+        ("доступен ли сайт example.com?", ["check_connection"]),
+        ("Is Instagram reachable?", ["check_connection"]),
+        ("Не открыл ли роутер какие-нибудь порты наружу без моего ведома?", ["check_port_forwarding"]),
+        ("есть ли у меня проброс портов", ["check_port_forwarding"]),
+        ("Сколько мегабит у меня сейчас реально выдаёт интернет?", ["speed_test"]),
+        ("how fast is my internet now", ["speed_test"]),
+    ])
+    func questionsOnlyACheckAnswersRunIt(question: String, expected: [String]) {
+        #expect(AssistantActions.requested(in: question).map(\.rawValue) == expected)
+    }
+
+    @Test(arguments: [
+        "Сколько мегабит нужно для 4K?", "почему ютуб открывается медленно?", "что такое проброс портов?",
+        "какие порты обычно открыты у роутеров?",
+    ])
+    func generalQuestionsAboutTheseRunNothing(question: String) {
+        #expect(AssistantActions.requested(in: question).isEmpty)
+    }
+
+    @Test func portsOfANamedHostAreScannedFirst() {
+        let hosts = [AssistantActions.PortTarget(ip: "192.168.1.1", isGateway: true), .init(ip: "192.168.1.64", isGateway: false)]
+        func calls(_ question: String) -> [String] { AssistantActions.preflightCalls(for: question, devices: [BLEDevice](), hosts: hosts) }
+        #expect(calls("Посмотри, какие порты открыты на 192.168.1.64") == [#"{"tool": "scan_ports", "host": "192.168.1.64"}"#])
+        #expect(calls("Сделай глубокое сканирование всех портов роутера") == [#"{"tool": "scan_ports", "host": "192.168.1.1", "text": "all"}"#])
+        #expect(calls("which ports are open on 192.168.1.1?") == [#"{"tool": "scan_ports", "host": "192.168.1.1"}"#])
+        // A prefix of a known address is a different host; an unknown one, a generic question and ports seen from
+        // outside are not a scan of a host.
+        #expect(calls("какие порты открыты на 192.168.1.10").isEmpty)
+        #expect(calls("какие порты обычно открыты у роутеров?").isEmpty)
+        #expect(calls("что за устройство 192.168.1.64?").isEmpty)
+        #expect(calls("какие порты роутер открыл наружу?") == ["check_port_forwarding"])
+    }
+
+    @Test func askingADeviceAboutItselfReadsIt() {
+        let device = BLEDevice(id: UUID(), rssi: -50, seen: .now)
+        device.absorb(BLEAdvertisement.parse(BLEFields(localName: "Momentum 3")), peripheralName: nil, rssi: -50, at: .now)
+        #expect(AssistantActions.preflightCalls(for: "Узнай, какая прошивка стоит на наушниках Momentum 3", devices: [device])
+            == [#"{"tool": "connect_bluetooth", "text": "Momentum 3"}"#])
+        #expect(AssistantActions.preflightCalls(for: "какая прошивка лучше для наушников?", devices: [device]).isEmpty)
+    }
 }
 
 // MARK: - Opening questions
@@ -480,7 +524,7 @@ struct AssistantStarterTests {
         ("Проверь интернет-соединение: DNS, задержки, провайдер", ["check_connection"], [.link]),
         ("Measure my internet speed", ["speed_test"], [.link]),
         ("Замерь скорость интернета", ["speed_test"], [.link]),
-    ])
+    ] as [(String, [String], [AssistantTopic])])
     func checkStartersRunTheirCheck(question: String, tools: [String], topics: [AssistantTopic]) {
         #expect(AssistantActions.requested(in: question).map(\.rawValue) == tools)
         #expect(AssistantDigest.topics(for: question) == topics)
@@ -492,7 +536,7 @@ struct AssistantStarterTests {
         ("Расшифруй последний захват трафика", [.capture]),
         ("Give me a security summary: network, internet, and what to fix", [.wifi, .threats, .lan, .bluetooth, .link]),
         ("Дай сводку по безопасности: сеть, интернет и что стоит исправить", [.wifi, .threats, .lan, .bluetooth, .link]),
-    ])
+    ] as [(String, [AssistantTopic])])
     func readingStartersRunNothing(question: String, topics: [AssistantTopic]) {
         #expect(AssistantActions.requested(in: question).isEmpty)
         #expect(AssistantDigest.topics(for: question) == topics)
@@ -544,7 +588,9 @@ struct AssistantCatalogTests {
     @Test func bundledCatalogDecodesWithShortUniqueNames() throws {
         let url = try #require(Bundle.main.url(forResource: "AssistantModels", withExtension: "json"))
         let catalog = try ModelCatalog.decode(Data(contentsOf: url))
-        #expect(catalog.count >= 5)
+        // One model for the assistant (chosen by tools/assistant-eval), plus the optional one for search by meaning.
+        #expect(catalog.filter { !$0.isEmbedding }.map(\.id) == ["ministral-3-3b"])
+        #expect(catalog.first { !$0.isEmbedding }?.recommended == true)
         #expect(Set(catalog.map(\.id)).count == catalog.count)
         #expect(Set(catalog.map(\.fileName)).count == catalog.count)
         for model in catalog {
@@ -554,7 +600,6 @@ struct AssistantCatalogTests {
             #expect(model.sha256.count == 64)
             #expect(model.url.lastPathComponent == model.fileName)
         }
-        #expect(catalog.contains { $0.id == "llama-3-2-3b-abliterated" && $0.notice != nil })
         // The search-by-meaning helper is catalogued but never offered as a model to chat with.
         #expect(catalog.filter(\.isEmbedding).map(\.id) == ["embeddinggemma-300m"])
     }

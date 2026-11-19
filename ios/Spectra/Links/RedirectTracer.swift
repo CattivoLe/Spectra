@@ -64,12 +64,15 @@ nonisolated enum RedirectTracer {
 private nonisolated final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     static let shared = NoRedirects()
 
+    // The completion-handler form, not the `async` one: Swift 6.4.2 (Xcode 27.2) crashes generating the
+    // Objective-C thunk for the async variant of this delegate method. Same effect: nil means "do not follow".
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
         willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest
-    ) async -> URLRequest? {
-        nil
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }

@@ -139,31 +139,16 @@ struct AssistantChatView: View {
         .padding(.top, 8)
     }
 
-    /// The chat title and the model under it. Tapping opens a quick model picker.
+    /// The chat title and, under it, the assistant's one model (or that it is still loading).
     private var titleMenu: some View {
         VStack(spacing: 0) {
             Text(session.chat.title.isEmpty ? String(localized: "New chat") : session.chat.title)
                 .font(.headline).lineLimit(1)
-            Menu {
-                Section("Model") {
-                    Picker("Model", selection: Binding(
-                        get: { model.selectedModel ?? "" },
-                        set: { file in Task { await model.select(file) } }
-                    )) {
-                        ForEach(model.library.chatModels) { item in
-                            Text(item.menuName).tag(item.fileName)
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "cpu")
-                    Text(modelLabel)
-                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
-                }
-                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 4) {
+                Image(systemName: "cpu")
+                Text(modelLabel)
             }
-            .disabled(session.isGenerating)
+            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
     }
 

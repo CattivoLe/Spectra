@@ -5,6 +5,7 @@ import cattivole.spectra.assistant.AssistantDigest
 import cattivole.spectra.assistant.AssistantModel
 import cattivole.spectra.assistant.AssistantSnapshot
 import cattivole.spectra.assistant.AssistantTopic
+import cattivole.spectra.core.BleDevice
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Test
@@ -96,6 +97,11 @@ class AssistantEvalFixtures {
     private fun single(id: String, group: String, question: String, snapshot: AssistantSnapshot = home, block: Builder.() -> Unit = {}) {
         val b = Builder().apply(block)
         scenario(id, group, listOf(msg("user", ask(question, snapshot))), b.tool, b.args, b.noTool, b.include, b.exclude, b.lang, b.note)
+        // What the app runs by itself before the model speaks (ChatSession preflight): the model then only answers.
+        val devices = snapshot.bluetooth.map { BleDevice("C4:00:00:00:00:%02X".format(it.name.length), "Random static", it.rssi, 0).apply { localName = it.name } }
+        val hosts = snapshot.hosts.map { AssistantActions.PortTarget(it.ip, it.isGateway) }
+        val preflight = AssistantActions.preflightCalls(question, devices, hosts)
+        scenarios.getJSONObject(scenarios.length() - 1).getJSONObject("expect").put("preflight", JSONArray(preflight))
     }
 
     private class Builder {

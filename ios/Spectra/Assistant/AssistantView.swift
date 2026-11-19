@@ -90,18 +90,8 @@ struct AssistantView: View {
 
     private var modelMenu: some View {
         Menu {
-            Section("Model") {
-                Picker("Model", selection: Binding(
-                    get: { model.selectedModel ?? "" },
-                    set: { file in Task { await model.select(file) } }
-                )) {
-                    ForEach(model.library.chatModels) { item in
-                        Text(item.menuName).tag(item.fileName)
-                    }
-                }
-                if model.modelFiles.isEmpty { Text("No models") }
-            }
-            Button("Manage models…", systemImage: "square.and.arrow.down") { showModels = true }
+            // One model, no picker: this only leads to its page (download, delete, free up space).
+            Button("Model…", systemImage: "cpu") { showModels = true }
             Button("Dossier…", systemImage: "doc.text.magnifyingglass") { showDossier = true }
             Button("Internet…", systemImage: "globe") { showWeb = true }
             Button("Privacy…", systemImage: "hand.raised") { showPrivacy = true }

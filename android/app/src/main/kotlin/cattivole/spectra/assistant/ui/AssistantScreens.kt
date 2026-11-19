@@ -144,7 +144,7 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
             nav.chat(chat.id)
         }
     }
-    val noModel = assistant.library.chatModels.isEmpty()
+    val noModel = assistant.assistantModelFile == null
     SpectraScreen(
         title = tr("Assistant"),
         subtitle = assistant.currentModelName,
@@ -153,7 +153,7 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("More")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text(tr("Models…")) }, leadingIcon = { Icon(Icons.Rounded.Memory, null) }, onClick = {
+                    DropdownMenuItem(text = { Text(tr("Model…")) }, leadingIcon = { Icon(Icons.Rounded.Memory, null) }, onClick = {
                         menu = false
                         nav.models()
                     })
@@ -184,8 +184,8 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                 noModel -> EmptyState(
                     Icons.Rounded.AutoAwesome,
                     tr("No model yet"),
-                    tr("The assistant runs a language model on this phone: nothing you ask leaves it. Download one to start; Gemma 4 E2B is the best place to start."),
-                    action = tr("Choose a model"),
+                    tr("The assistant runs a language model on this phone: nothing you ask leaves it. Download it once to start."),
+                    action = tr("Download the model"),
                     onAction = nav::models,
                 )
                 chats.isEmpty() -> EmptyState(
@@ -258,7 +258,7 @@ private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session:
         title = session.chat.title.ifEmpty { tr("New chat") },
         subtitle = when (engine) {
             EngineController.State.Loading -> tr("Loading the model…")
-            EngineController.State.Empty -> if (assistant.library.chatModels.isEmpty()) tr("No model yet") else null
+            EngineController.State.Empty -> if (assistant.assistantModelFile == null) tr("No model yet") else null
             else -> assistant.currentModelName
         } ?: assistant.currentModelName,
         onBack = nav::back,
@@ -354,8 +354,8 @@ private fun Starters(model: SpectraModel, assistant: AssistantModel, ready: Bool
         Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
     ) {
-        if (assistant.library.chatModels.isEmpty()) {
-            Text(tr("Download a model under Models to start."), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (assistant.assistantModelFile == null) {
+            Text(tr("Download the assistant's model under Model to start."), color = MaterialTheme.colorScheme.onSurfaceVariant)
             return@Column
         }
         // A failed load leaves the engine Empty: say so here instead of an endless "Loading…".
@@ -381,30 +381,10 @@ private fun Starters(model: SpectraModel, assistant: AssistantModel, ready: Bool
     }
 }
 
+/** The assistant has one model: no picker, only the way to its page (download, delete, free up space). */
 @Composable
 private fun ModelMenu(assistant: AssistantModel, nav: AssistantNav) {
-    var open by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    Box {
-        IconButton(onClick = { open = true }) { Icon(Icons.Rounded.Memory, contentDescription = tr("Model")) }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            for (installed in assistant.library.chatModels) {
-                DropdownMenuItem(
-                    text = { Text(installed.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    leadingIcon = { if (installed.fileName == assistant.selectedModel) Icon(Icons.Rounded.Check, null) else Box(Modifier.size(24.dp)) },
-                    onClick = {
-                        open = false
-                        scope.launch { assistant.select(installed.fileName) }
-                    },
-                )
-            }
-            HorizontalDivider()
-            DropdownMenuItem(text = { Text(tr("Models…")) }, onClick = {
-                open = false
-                nav.models()
-            })
-        }
-    }
+    IconButton(onClick = { nav.models() }) { Icon(Icons.Rounded.Memory, contentDescription = tr("Model")) }
 }
 
 @Composable
@@ -547,46 +527,16 @@ private fun copy(context: Context, text: String) {
 }
 
 /** Models to download and choose from. */
+/**
+ * The assistant's model: one, chosen with tools/assistant-eval. Download it (or delete it), optionally add the
+ * small model that helps web search rank pages by meaning, and clear out models left from before there was one.
+ */
 @Composable
 fun AssistantModelsScreen(model: SpectraModel, nav: AssistantNav) {
     val assistant = model.assistant
     val library = assistant.library
     val scope = rememberCoroutineScope()
     var confirmDownload by remember { mutableStateOf<alexcattivo.localchat.kit.CatalogModel?>(null) }
-    var importError by remember { mutableStateOf<String?>(null) }
-    val context = LocalContext.current
-    // Any GGUF file the reader has: copied into the models folder, then it shows up like a downloaded one.
-    val importer = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
-    ) { uri: android.net.Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        var name = "model.gguf"
-        var size = 0L
-        runCatching {
-            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    cursor.getString(0)?.let { name = it }
-                    if (!cursor.isNull(1)) size = cursor.getLong(1)
-                }
-            }
-        }
-        if (!name.lowercase().endsWith(".gguf")) name += ".gguf"
-        importError = null
-        scope.launch {
-            try {
-                val installed = library.importFile(name, size) {
-                    context.contentResolver.openInputStream(uri) ?: throw java.io.FileNotFoundException(name)
-                }
-                if (assistant.selectedModel == null) assistant.select(installed)
-            } catch (error: alexcattivo.localchat.kit.ModelLibrary.NotGgufException) {
-                importError = tr("This is not a model file: GGUF format expected.")
-            } catch (error: alexcattivo.localchat.kit.ModelLibrary.NotEnoughSpaceException) {
-                importError = tr("Not enough space: %s needed, %s free.", byteSize(error.needed), byteSize(error.available))
-            } catch (error: Throwable) {
-                importError = tr("Could not import the file: %s", error.localizedMessage ?: error.javaClass.simpleName)
-            }
-        }
-    }
     confirmDownload?.let { item ->
         AlertDialog(
             onDismissRequest = { confirmDownload = null },
@@ -602,84 +552,103 @@ fun AssistantModelsScreen(model: SpectraModel, nav: AssistantNav) {
             dismissButton = { TextButton(onClick = { confirmDownload = null }) { Text(tr("Cancel")) } },
         )
     }
-    SpectraScreen(tr("Models"), onBack = nav::back) {
-        if (library.chatModels.isNotEmpty() || library.embeddingModel != null) {
-            cardSection(library.installed, header = tr("On this phone"), key = { it.fileName }, sectionKey = "installed", dividerInset = 70.dp) { installed ->
-                val selected = installed.fileName == assistant.selectedModel
+
+    /** A downloaded file: its size, and a way to delete it. */
+    fun installedRow(installed: alexcattivo.localchat.kit.InstalledModel, subtitle: String?): @Composable () -> Unit = {
+        ListRow(
+            title = installed.displayName,
+            subtitle = subtitle,
+            detail = byteSize(installed.sizeBytes),
+            leading = { IconTile(Icons.Rounded.Check, Spectra.colors.success) },
+            trailing = {
+                IconButton(onClick = { scope.launch { assistant.delete(installed) } }) {
+                    Icon(Icons.Rounded.Delete, tr("Delete"), tint = MaterialTheme.colorScheme.error)
+                }
+            },
+        )
+    }
+
+    /** A catalog entry not on the phone yet: what it is and its download, with pause, cancel and the checksum step. */
+    fun downloadRow(item: alexcattivo.localchat.kit.CatalogModel): @Composable () -> Unit = {
+        val state = library.downloads[item.id]
+        val fit = alexcattivo.localchat.kit.ModelCatalog.fit(item.sizeBytes, assistant.physicalMemoryBytes)
+        ListRow(
+            title = item.localizedName,
+            subtitle = tr(item.summary),
+            detail = when (state) {
+                is alexcattivo.localchat.kit.DownloadState.Downloading ->
+                    tr("Downloading: %s of %s", byteSize(state.received), byteSize(state.total))
+                is alexcattivo.localchat.kit.DownloadState.Paused -> tr("Paused at %s", byteSize(state.received))
+                is alexcattivo.localchat.kit.DownloadState.Failed -> tr("Download failed: %s", state.reason.toString())
+                alexcattivo.localchat.kit.DownloadState.Verifying -> tr("Checking the file…")
+                else -> byteSize(item.sizeBytes) + when (fit) {
+                    alexcattivo.localchat.kit.ModelFit.Comfortable -> ""
+                    alexcattivo.localchat.kit.ModelFit.Tight -> " · " + tr("tight on this phone's memory")
+                    alexcattivo.localchat.kit.ModelFit.TooBig -> " · " + tr("too big for this phone")
+                }
+            },
+            leading = { IconTile(Icons.Rounded.Download, MaterialTheme.colorScheme.secondary) },
+            trailing = {
+                when (state) {
+                    is alexcattivo.localchat.kit.DownloadState.Downloading -> Row {
+                        IconButton(onClick = { library.pause(item) }) { Icon(Icons.Rounded.Pause, tr("Pause")) }
+                        IconButton(onClick = { library.cancel(item) }) { Icon(Icons.Rounded.Close, tr("Cancel")) }
+                    }
+                    alexcattivo.localchat.kit.DownloadState.Verifying -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    else -> IconButton(onClick = {
+                        if (item.localizedNotice != null) confirmDownload = item else library.download(item)
+                    }) { Icon(Icons.Rounded.Download, tr("Download")) }
+                }
+            },
+        )
+    }
+
+    SpectraScreen(tr("Model"), onBack = nav::back) {
+        val chat = assistant.assistantCatalogModel
+        if (chat != null) {
+            val installed = assistant.assistantModelFile
+            card(
+                header = tr("Assistant"),
+                footer = tr("Downloaded once from Hugging Face, then it works on this phone without the internet. The file is checked against its checksum."),
+                key = "assistant",
+                dividerInset = 70.dp,
+                rows = listOf(if (installed != null) installedRow(installed, tr(chat.summary)) else downloadRow(chat)),
+            )
+        }
+        library.catalog.firstOrNull { it.isEmbedding }?.let { helper ->
+            val installed = library.installed.firstOrNull { it.catalog?.id == helper.id }
+            card(
+                header = tr("Search by meaning (optional)"),
+                key = "embedding",
+                dividerInset = 70.dp,
+                rows = listOf(if (installed != null) installedRow(installed, tr(helper.summary)) else downloadRow(helper)),
+            )
+        }
+        val others = assistant.otherModels
+        if (others.isNotEmpty()) {
+            cardSection(
+                others,
+                header = tr("Other models on this phone"),
+                footer = tr("The assistant no longer uses them. Delete them to free up space."),
+                key = { it.fileName },
+                sectionKey = "others",
+                dividerInset = 70.dp,
+            ) { other ->
                 ListRow(
-                    title = installed.displayName,
-                    subtitle = if (installed.isEmbedding) tr("%s · for search by meaning", byteSize(installed.sizeBytes)) else byteSize(installed.sizeBytes),
-                    leading = { IconTile(if (selected) Icons.Rounded.Check else Icons.Rounded.Memory, if (selected) Spectra.colors.success else MaterialTheme.colorScheme.primary) },
+                    title = other.displayName,
+                    detail = byteSize(other.sizeBytes),
+                    leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.outline) },
                     trailing = {
-                        IconButton(onClick = { scope.launch { assistant.delete(installed) } }) {
+                        IconButton(onClick = { scope.launch { assistant.delete(other) } }) {
                             Icon(Icons.Rounded.Delete, tr("Delete"), tint = MaterialTheme.colorScheme.error)
                         }
                     },
-                    onClick = if (installed.isEmbedding) null else ({ scope.launch { assistant.select(installed.fileName) } }),
                 )
             }
-        }
-        val available = library.catalog.filter { !library.isInstalled(it) }
-        cardSection(
-            available,
-            header = tr("Catalog"),
-            footer = tr("Models are downloaded from Hugging Face and run on this phone. Larger ones answer better but need more memory and are slower."),
-            key = { it.id },
-            sectionKey = "catalog",
-            dividerInset = 70.dp,
-        ) { item ->
-            val state = library.downloads[item.id]
-            val fit = alexcattivo.localchat.kit.ModelCatalog.fit(item.sizeBytes, assistant.physicalMemoryBytes)
-            ListRow(
-                title = item.localizedName + if (item.recommended) " ★" else "",
-                subtitle = tr(item.summary),
-                detail = when (state) {
-                    is alexcattivo.localchat.kit.DownloadState.Downloading ->
-                        tr("Downloading: %s of %s", byteSize(state.received), byteSize(state.total))
-                    is alexcattivo.localchat.kit.DownloadState.Paused -> tr("Paused at %s", byteSize(state.received))
-                    is alexcattivo.localchat.kit.DownloadState.Failed -> tr("Download failed: %s", state.reason.toString())
-                    alexcattivo.localchat.kit.DownloadState.Verifying -> tr("Checking the file…")
-                    else -> byteSize(item.sizeBytes) + when (fit) {
-                        alexcattivo.localchat.kit.ModelFit.Comfortable -> ""
-                        alexcattivo.localchat.kit.ModelFit.Tight -> " · " + tr("tight on this phone's memory")
-                        alexcattivo.localchat.kit.ModelFit.TooBig -> " · " + tr("too big for this phone")
-                    }
-                },
-                leading = { IconTile(Icons.Rounded.Download, MaterialTheme.colorScheme.secondary) },
-                trailing = {
-                    when (state) {
-                        is alexcattivo.localchat.kit.DownloadState.Downloading -> Row {
-                            IconButton(onClick = { library.pause(item) }) { Icon(Icons.Rounded.Pause, tr("Pause")) }
-                            IconButton(onClick = { library.cancel(item) }) { Icon(Icons.Rounded.Close, tr("Cancel")) }
-                        }
-                        alexcattivo.localchat.kit.DownloadState.Verifying -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else -> IconButton(onClick = {
-                            if (item.localizedNotice != null) confirmDownload = item else library.download(item)
-                        }) { Icon(Icons.Rounded.Download, tr("Download")) }
-                    }
-                },
-            )
         }
         card(key = "wifi-only", footer = tr("A model is several gigabytes: on mobile data the download waits for Wi‑Fi unless this is off."), rows = listOf {
             SwitchLine(tr("Download over Wi‑Fi only"), assistant.wifiOnly) { assistant.setWifiOnly(it) }
         })
-        card(
-            key = "import",
-            footer = tr("Any file in GGUF format will do."),
-            rows = buildList {
-                val copying = library.importing
-                if (copying != null) {
-                    add { ProgressRow(tr("Copying %s…", copying), null) }
-                } else {
-                    add {
-                        ActionRow(tr("Import from a file…"), Icons.Rounded.FolderOpen, onClick = {
-                            importer.launch(arrayOf("application/octet-stream", "*/*"))
-                        })
-                    }
-                }
-                importError?.let { error -> add { NoteRow(error, warning = true) } }
-            },
-        )
     }
 }
 

@@ -1,90 +1,17 @@
 {
   "models": [
     {
-      "id": "gemma-4-e2b",
-      "name": "Gemma 4 E2B",
-      "summary": "Fast and writes well in many languages, Russian included: about 27 words per second on iPhone 16. The best place to start.",
-      "fileName": "gemma-4-E2B-it-Q4_K_M.gguf",
-      "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
-      "sizeBytes": 3106738272,
-      "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
-      "licenseName": "Apache 2.0",
-      "licenseURL": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF",
-      "recommended": true
-    },
-    {
-      "id": "gemma-4-e4b",
-      "name": "Gemma 4 E4B",
-      "summary": "Larger and more thoughtful, but slower: about 15 words per second on iPhone 16. Needs a phone with 8 GB of memory.",
-      "fileName": "gemma-4-E4B-it-Q4_K_M.gguf",
-      "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
-      "sizeBytes": 4977171584,
-      "sha256": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
-      "licenseName": "Apache 2.0",
-      "licenseURL": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF",
-      "recommended": false
-    },
-    {
-      "id": "qwen3-5-4b",
-      "name": "Qwen 3.5 4B",
-      "summary": "About 15 words per second on iPhone 16. Noticeably weaker than Gemma in Russian in our tests.",
-      "fileName": "Qwen3.5-4B-Q4_K_M.gguf",
-      "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
-      "sizeBytes": 2740937888,
-      "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
-      "licenseName": "Apache 2.0",
-      "licenseURL": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF",
-      "recommended": false
-    },
-    {
-      "id": "qvikhr-3-4b",
-      "name": "QVikhr 3 4B",
-      "summary": "Qwen 3 retrained for Russian by the Vikhr team: writes natural Russian and calls checks reliably. In our tests it sometimes misread numbers (it called a strong signal weak). Not yet measured on iPhone.",
-      "fileName": "QVikhr-3-4B-Instruction-Q4_K_M.gguf",
-      "url": "https://huggingface.co/Vikhrmodels/QVikhr-3-4B-Instruction-GGUF/resolve/main/QVikhr-3-4B-Instruction-Q4_K_M.gguf",
-      "sizeBytes": 2497281088,
-      "sha256": "9d131e93d5c4841346a6965610daebb698218a1cec83c36f6b1d4829c25d6425",
-      "licenseName": "Apache 2.0",
-      "licenseURL": "https://huggingface.co/Vikhrmodels/QVikhr-3-4B-Instruction-GGUF",
-      "recommended": false
-    },
-    {
       "id": "ministral-3-3b",
       "name": "Ministral 3 3B",
-      "summary": "Mistral's small model: good at calling checks and fairly fluent in Russian, although Russian is not officially supported. Tends to answer at length. Not yet measured on iPhone.",
+      "summary": "The assistant's model, chosen after comparing four small models on Spectra's own scenarios: it calls checks reliably and answers from what the app found. Fluent in Russian, although Russian is not officially supported.",
       "fileName": "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
       "url": "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
       "sizeBytes": 2147023008,
       "sha256": "9ed150d4367e68df0ac8e1540f6ddc65b42d0ee26378329d1ecbca60f93fc5f8",
       "licenseName": "Apache 2.0",
       "licenseURL": "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF",
-      "recommended": false
-    },
-    {
-      "id": "lfm3-1-7b",
-      "name": "LFM3 1.7B",
-      "summary": "The lightest and fastest (about 42 words per second), good for older phones. Its Russian is clumsy.",
-      "fileName": "LFM3-1.7B-Q4_K_M.gguf",
-      "url": "https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/resolve/main/LFM3-1.7B-Q4_K_M.gguf",
-      "sizeBytes": 1099627808,
-      "sha256": "3793e1e6e2266919d6e015287221b41100175a98eddaba92e111aed3b05c93c4",
-      "licenseName": "Лицензия Liquid AI (LFM Open License)",
-      "licenseURL": "https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF",
-      "recommended": false
-    },
-    {
-      "id": "llama-3-2-3b-abliterated",
-      "name": "Llama 3.2 3B Abliterated",
-      "shortName": "Llama 3.2 3B",
-      "summary": "A version of Llama 3.2 with its built-in refusals removed: it answers what ordinary models decline. About 24 tokens per second on iPhone 16. Russian is not officially supported: it writes it clumsily and slips into English words, so it suits English better.",
-      "fileName": "Llama-3.2-3B-Instruct-abliterated.Q4_K_M.gguf",
-      "url": "https://huggingface.co/QuantFactory/Llama-3.2-3B-Instruct-abliterated-GGUF/resolve/main/Llama-3.2-3B-Instruct-abliterated.Q4_K_M.gguf",
-      "sizeBytes": 2019377472,
-      "sha256": "e1f2b428e316d8bd1cb5ca13e9649329e299d951fbcee6b3cd0e9f1d646c9fa7",
-      "licenseName": "Llama 3.2 Community License",
-      "licenseURL": "https://www.llama.com/llama3_2/license/",
-      "recommended": false,
-      "notice": "Built with Llama. The model's safety limits have been removed: it may give inaccurate, rude or inappropriate answers. Use at your own risk; not for children."
+      "recommended": true,
+      "shortName": "Ministral 3B"
     },
     {
       "id": "embeddinggemma-300m",

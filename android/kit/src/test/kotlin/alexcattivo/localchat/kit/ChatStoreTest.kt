@@ -31,7 +31,9 @@ class ChatStoreTest {
         // In Spectra the catalog is the iOS app's AssistantModels.json.
         val json =java.io.File("../../ios/Spectra/Assistant/AssistantModels.json").readText()
         val models = ModelCatalog.decode(json)
-        assertTrue(models.any { it.id == "gemma-4-e2b" && it.recommended })
+        // One model for the assistant (chosen by tools/assistant-eval), plus the optional one for search by meaning.
+        assertEquals(listOf("ministral-3-3b"), models.filter { !it.isEmbedding }.map { it.id })
+        assertTrue(models.single { !it.isEmbedding }.recommended)
         assertTrue(models.any { it.isEmbedding })
         assertEquals(ModelFit.Comfortable, ModelCatalog.fit(3_000_000_000, 8_000_000_000))
         assertEquals(ModelFit.TooBig, ModelCatalog.fit(5_500_000_000, 8_000_000_000))

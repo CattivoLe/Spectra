@@ -1,82 +1,72 @@
 import SwiftUI
-import UniformTypeIdentifiers
 import LocalChatEngine
 import LocalChatKit
 
-/// Model management: what is installed, what can be downloaded, import from Files.
+/// The assistant's model: one, chosen with tools/assistant-eval. Download it (or delete it), optionally add the small
+/// model that helps web search rank pages by meaning, and clear out models left from before there was only one.
 struct AssistantModelsView: View {
     @Environment(AssistantModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
     @State private var pending: CatalogModel?
-    @State private var showImporter = false
     @State private var errorText: String?
 
     private var library: ModelLibrary { model.library }
 
-    private var available: [CatalogModel] {
-        library.catalog.filter { !library.isInstalled($0) }
-    }
-
     var body: some View {
         NavigationStack {
             List {
-                Section("Installed") {
-                    if library.installed.isEmpty { Text("Nothing yet").foregroundStyle(.secondary) }
-                    ForEach(library.installed) { item in
-                        Button {
-                            // The embedding model only helps the web search: there is nothing to chat with.
-                            if !item.isEmbedding { Task { await model.select(item.fileName) } }
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.displayName).foregroundStyle(.primary)
-                                    Text(item.isEmbedding
-                                         ? String(localized: "\(Self.size(item.sizeBytes)) · for search by meaning")
-                                         : Self.size(item.sizeBytes))
-                                        .font(.footnote).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if item.fileName == model.selectedModel { Image(systemName: "checkmark").foregroundStyle(.tint) }
-                            }
+                if let chat = model.assistantCatalogModel {
+                    Section {
+                        if let installed = model.assistantModelFile {
+                            installedRow(installed, summary: chat.summary)
+                        } else {
+                            AssistantCatalogRow(item: chat, state: library.downloads[chat.id], startsExpanded: true) { pending = chat }
                         }
-                        .swipeActions {
-                            Button("Delete", role: .destructive) { remove(item) }
-                        }
-                    }
-                    if let name = library.importing {
-                        HStack { ProgressView(); Text("Copying \(name)…").font(.footnote) }
+                    } header: {
+                        Text("Assistant")
+                    } footer: {
+                        Text("Downloaded once from Hugging Face, then it works on this phone without the internet. The file is checked against its checksum.")
                     }
                 }
 
-                Section {
-                    ForEach(available) { item in
-                        AssistantCatalogRow(item: item, state: library.downloads[item.id], onDownload: { pending = item })
+                if let helper = library.catalog.first(where: \.isEmbedding) {
+                    Section("Search by meaning (optional)") {
+                        if let installed = library.installed.first(where: { $0.catalog?.id == helper.id }) {
+                            installedRow(installed, summary: helper.summary)
+                        } else {
+                            AssistantCatalogRow(item: helper, state: library.downloads[helper.id]) { pending = helper }
+                        }
                     }
-                    if available.isEmpty { Text("Everything in the catalog is installed").foregroundStyle(.secondary) }
-                } header: {
-                    Text("Catalog")
-                } footer: {
-                    Text("Models are downloaded once and then work without the internet. Each file is checked against its checksum.")
+                }
+
+                if !model.otherModels.isEmpty {
+                    Section {
+                        ForEach(model.otherModels) { item in
+                            HStack {
+                                Text(item.displayName)
+                                Spacer()
+                                Text(Self.size(item.sizeBytes)).font(.footnote).foregroundStyle(.secondary)
+                                Button("Delete", systemImage: "trash", role: .destructive) { remove(item) }
+                                    .labelStyle(.iconOnly).buttonStyle(.borderless)
+                            }
+                            .swipeActions { Button("Delete", role: .destructive) { remove(item) } }
+                        }
+                    } header: {
+                        Text("Other models on this phone")
+                    } footer: {
+                        Text("The assistant no longer uses them. Delete them to free up space.")
+                    }
                 }
 
                 Section {
                     Toggle("Download over Wi‑Fi only", isOn: Binding(get: { library.wifiOnly }, set: { model.setWifiOnly($0) }))
-                    Button("Import from Files…", systemImage: "folder") { showImporter = true }
-                } footer: {
-                    Text("Any file in GGUF format will do.")
                 }
             }
-            .navigationTitle("Models")
+            .navigationTitle("Model")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.data]) { result in
-                guard case .success(let url) = result else { return }
-                Task {
-                    do { try await library.importFile(from: url) } catch { errorText = error.localizedDescription }
-                }
-            }
             .confirmationDialog(
                 "License: \(pending?.licenseName ?? "")",
                 isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
@@ -92,6 +82,20 @@ struct AssistantModelsView: View {
                 Button("OK") { errorText = nil }
             } message: { Text(errorText ?? "") }
         }
+    }
+
+    /// A downloaded file: what it is and its size. Swipe to delete.
+    private func installedRow(_ item: InstalledModel, summary: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text(item.displayName).font(.headline)
+                Spacer()
+                Text(Self.size(item.sizeBytes)).font(.footnote).foregroundStyle(.secondary)
+            }
+            Text(LocalizedStringKey(summary)).font(.footnote).foregroundStyle(.secondary)
+        }
+        .swipeActions { Button("Delete", role: .destructive) { remove(item) } }
     }
 
     private func remove(_ item: InstalledModel) {
@@ -111,13 +115,20 @@ private struct AssistantCatalogRow: View {
     let state: DownloadState?
     let onDownload: () -> Void
 
+    init(item: CatalogModel, state: DownloadState?, startsExpanded: Bool = false, onDownload: @escaping () -> Void) {
+        self.item = item
+        self.state = state
+        self.onDownload = onDownload
+        _expanded = State(initialValue: startsExpanded)
+    }
+
     private var fit: ModelFit {
         ModelCatalog.fit(fileSizeBytes: item.sizeBytes, physicalMemoryBytes: DeviceMetrics.physicalMemoryBytes)
     }
 
     /// Collapsed: one line with the name, size and download state. Tapping the row opens the rest — what the model
     /// is good at, whether it fits this phone, its warning and license — and only then offers to download it.
-    @State private var expanded = false
+    @State private var expanded: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

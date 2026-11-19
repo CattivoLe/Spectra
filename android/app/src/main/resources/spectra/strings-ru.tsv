@@ -1328,7 +1328,7 @@ Fast and writes well in many languages, Russian included: about 27 words per sec
 Larger and more thoughtful, but slower: about 15 words per second on iPhone 16. Needs a phone with 8 GB of memory.	Крупнее и вдумчивее, но медленнее: около 15 слов в секунду на iPhone 16. Нужен телефон с 8 ГБ памяти.
 About 15 words per second on iPhone 16. Noticeably weaker than Gemma in Russian in our tests.	Около 15 слов в секунду на iPhone 16. По-русски в наших пробах заметно слабее Gemma.
 Qwen 3 retrained for Russian by the Vikhr team: writes natural Russian and calls checks reliably. In our tests it sometimes misread numbers (it called a strong signal weak). Not yet measured on iPhone.	Qwen 3, дообученная командой Vikhr для русского: пишет по-русски естественно и уверенно вызывает проверки. В наших пробах иногда путала цифры (назвала сильный сигнал слабым). Скорость на iPhone ещё не замеряли.
-Mistral's small model: good at calling checks and fairly fluent in Russian, although Russian is not officially supported. Tends to answer at length. Not yet measured on iPhone.	Маленькая модель Mistral: хорошо вызывает проверки и довольно бегло пишет по-русски, хотя официально русский не поддерживает. Склонна отвечать длинно. Скорость на iPhone ещё не замеряли.
+The assistant's model, chosen after comparing four small models on Spectra's own scenarios: it calls checks reliably and answers from what the app found. Fluent in Russian, although Russian is not officially supported.	Модель ассистента, выбранная после сравнения четырёх небольших моделей на сценариях Spectra: надёжно вызывает проверки и отвечает по тому, что нашло приложение. Бегло пишет по-русски, хотя официально русский не поддерживает.
 The lightest and fastest (about 42 words per second), good for older phones. Its Russian is clumsy.	Самая лёгкая и быстрая (около 42 слов в секунду), подойдёт слабым телефонам. По-русски пишет неуклюже.
 A version of Llama 3.2 with its built-in refusals removed: it answers what ordinary models decline. About 24 tokens per second on iPhone 16. Russian is not officially supported: it writes it clumsily and slips into English words, so it suits English better.	Версия Llama 3.2 без встроенных отказов: отвечает на то, на что обычные модели не соглашаются. Около 24 токенов в секунду на iPhone 16. Русский официально не поддерживается: пишет неуклюже и вставляет английские слова, лучше подходит для английского.
 Built with Llama. The model's safety limits have been removed: it may give inaccurate, rude or inappropriate answers. Use at your own risk; not for children.	Built with Llama. Из модели убраны защитные ограничения: она может выдавать неточные, грубые или неприемлемые ответы. Используйте на свою ответственность; не для детей.
@@ -1339,3 +1339,11 @@ Any file in GGUF format will do.	Подойдёт любой файл в фор�
 Copying %s…	Копирую %s…
 Import from a file…	Импорт из файла…
 Could not import the file: %s	Не удалось импортировать файл: %s
+Model…	Модель…
+Download the model	Скачать модель
+The assistant runs a language model on this phone: nothing you ask leaves it. Download it once to start.	Ассистент работает на языковой модели прямо на телефоне: ничего из того, что вы спрашиваете, его не покидает. Чтобы начать, скачайте её один раз.
+Download the assistant's model under Model to start.	Чтобы начать, скачайте модель ассистента в разделе «Модель».
+Downloaded once from Hugging Face, then it works on this phone without the internet. The file is checked against its checksum.	Скачивается один раз с Hugging Face, дальше работает на телефоне без интернета. Файл сверяется с контрольной суммой.
+Search by meaning (optional)	Поиск по смыслу (необязательно)
+Other models on this phone	Другие модели на телефоне
+The assistant no longer uses them. Delete them to free up space.	Ассистент их больше не использует. Удалите, чтобы освободить место.

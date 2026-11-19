@@ -171,8 +171,9 @@ def score(scenario, reply):
         elif call.get("tool") != expect["tool"]:
             problems.append("called %s instead of %s" % (call.get("tool"), expect["tool"]))
         else:
+            keys = {str(k).lower(): v for k, v in call.items()}  # the app reads keys without case too
             for key, wanted in expect.get("args", {}).items():
-                value = str(call.get(key, ""))
+                value = str(keys.get(key.lower(), ""))
                 if wanted.lower() not in value.lower():
                     problems.append('%s=%r, wanted %r' % (key, value, wanted))
     else:
@@ -193,6 +194,15 @@ def score(scenario, reply):
         if not call and not visible.strip():
             problems.append("empty answer")
     return problems, call
+
+
+def preflight_tools(scenario):
+    """Tools the app runs by itself before the model speaks (entries are a bare name or a JSON call)."""
+    names = []
+    for entry in scenario["expect"].get("preflight", []):
+        call = first_json_object(entry) if entry.startswith("{") else None
+        names.append(call.get("tool") if call else entry)
+    return names
 
 
 def post(port, body, timeout=600):
@@ -245,8 +255,11 @@ def run_model(args, model, scenarios):
             message = answer["choices"][0]["message"]
             reply = native_reply(message) if args.native else (message.get("content") or "")
             problems, call = score(scenario, reply)
+            # The user gets the check either way when the app's preflight already runs it.
+            covered = bool(scenario["expect"].get("tool")) and scenario["expect"]["tool"] in preflight_tools(scenario)
             return {
                 "id": scenario["id"], "group": scenario["group"], "seed": seed, "ok": not problems,
+                "app_ok": not problems or covered, "preflight": preflight_tools(scenario),
                 "problems": problems, "call": call, "tokens": answer.get("usage", {}).get("completion_tokens"),
                 "finish": answer["choices"][0].get("finish_reason"), "seconds": round(time.time() - started, 1),
                 "reply": reply,
@@ -274,13 +287,17 @@ def summarize(name, results):
     print("\n== %s: %d/%d passed (%.0f%%), answers avg %d tokens, %d hit the 1024 cap" % (
         name, total, len(results), 100.0 * total / len(results), sum(tokens) / max(1, len(tokens)), capped))
     print("   " + "  ".join("%s %d/%d" % (g, sum(v), len(v)) for g, v in sorted(groups.items())))
+    app_total = sum(r["app_ok"] for r in results)
+    print("   with the app's own preflight: %d/%d (%.0f%%)" % (app_total, len(results), 100.0 * app_total / len(results)))
     by_id = {}
     for row in results:
         by_id.setdefault(row["id"], []).append(row)
     for scenario_id, rows in by_id.items():
         failed = [r for r in rows if not r["ok"]]
         if failed:
-            print("   ✗ %-18s %d/%d  %s" % (scenario_id, len(rows) - len(failed), len(rows), "; ".join(failed[0]["problems"])))
+            mark = "≈" if all(r["app_ok"] for r in rows) else "✗"
+            extra = "  [app runs %s itself]" % ",".join(rows[0]["preflight"]) if rows[0]["preflight"] else ""
+            print("   %s %-18s %d/%d  %s%s" % (mark, scenario_id, len(rows) - len(failed), len(rows), "; ".join(failed[0]["problems"]), extra))
 
 
 def main():
@@ -293,10 +310,15 @@ def main():
     parser.add_argument("--port", type=int, default=18080)
     parser.add_argument("--only", help="comma-separated scenario ids")
     parser.add_argument("--native", action="store_true", help="tools in each model's own format via its chat template")
+    parser.add_argument("--system", help="file whose text replaces the system prompt, to try a wording before it goes into the app")
     parser.add_argument("models", nargs="+")
     args = parser.parse_args()
     os.makedirs(args.out, exist_ok=True)
     scenarios = json.load(open(args.scenarios))
+    if args.system:
+        text = open(args.system).read().strip()
+        for scenario in scenarios:
+            scenario["messages"][0]["content"] = text
     if args.only:
         wanted = set(args.only.split(","))
         scenarios = [s for s in scenarios if s["id"] in wanted]

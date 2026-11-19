@@ -147,6 +147,54 @@ class AssistantTest {
         }
     }
 
+    /** Questions only a fresh check answers, asked without "check" — the model would answer them from the snapshot. */
+    @Test
+    fun questionsOnlyACheckAnswersRunIt() {
+        val cases = listOf(
+            "Открывается ли у меня сейчас YouTube?" to listOf("check_connection"),
+            "доступен ли сайт example.com?" to listOf("check_connection"),
+            "Is Instagram reachable?" to listOf("check_connection"),
+            "Не открыл ли роутер какие-нибудь порты наружу без моего ведома?" to listOf("check_port_forwarding"),
+            "есть ли у меня проброс портов" to listOf("check_port_forwarding"),
+            "Сколько мегабит у меня сейчас реально выдаёт интернет?" to listOf("speed_test"),
+            "how fast is my internet now" to listOf("speed_test"),
+        )
+        for ((question, expected) in cases) {
+            assertEquals(question, expected, AssistantActions.requested(question).map { it.raw })
+        }
+        for (question in listOf(
+            "Сколько мегабит нужно для 4K?", "почему ютуб открывается медленно?", "что такое проброс портов?",
+            "какие порты обычно открыты у роутеров?",
+        )) {
+            assertTrue(question, AssistantActions.requested(question).isEmpty())
+        }
+    }
+
+    @Test
+    fun portsOfANamedHostAreScannedFirst() {
+        val hosts = listOf(AssistantActions.PortTarget("192.168.1.1", true), AssistantActions.PortTarget("192.168.1.64", false))
+        fun calls(question: String) = AssistantActions.preflightCalls(question, emptyList(), hosts)
+        assertEquals(listOf("{\"tool\": \"scan_ports\", \"host\": \"192.168.1.64\"}"), calls("Посмотри, какие порты открыты на 192.168.1.64"))
+        assertEquals(listOf("{\"tool\": \"scan_ports\", \"host\": \"192.168.1.1\", \"text\": \"all\"}"), calls("Сделай глубокое сканирование всех портов роутера"))
+        assertEquals(listOf("{\"tool\": \"scan_ports\", \"host\": \"192.168.1.1\"}"), calls("which ports are open on 192.168.1.1?"))
+        // A prefix of a known address is a different host; an unknown one, a generic question and ports seen from
+        // outside are not a scan of a host.
+        assertTrue(calls("какие порты открыты на 192.168.1.10").isEmpty())
+        assertTrue(calls("какие порты обычно открыты у роутеров?").isEmpty())
+        assertTrue(calls("что за устройство 192.168.1.64?").isEmpty())
+        assertEquals(listOf("check_port_forwarding"), calls("какие порты роутер открыл наружу?"))
+    }
+
+    @Test
+    fun askingADeviceAboutItselfReadsIt() {
+        val devices = listOf(device("Momentum 3"))
+        assertEquals(
+            listOf("{\"tool\": \"connect_bluetooth\", \"text\": \"Momentum 3\"}"),
+            AssistantActions.preflightCalls("Узнай, какая прошивка стоит на наушниках Momentum 3", devices),
+        )
+        assertTrue(AssistantActions.preflightCalls("какая прошивка лучше для наушников?", devices).isEmpty())
+    }
+
     @Test
     fun everyPortOnlyWhenAsked() {
         assertTrue(AssistantActions.asksForEveryPort("all"))
