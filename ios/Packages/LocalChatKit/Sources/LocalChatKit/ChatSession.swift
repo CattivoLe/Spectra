@@ -241,7 +241,7 @@ public final class ChatSession {
               let index = messages.indices.last, messages[index].role == .user, messages[index].search == nil else { return }
         let question = messages[index].content
         // A plain request to run a check is answered from that check, not from the web.
-        if let tools, !tools.preflight(question).isEmpty { return }
+        if let tools, !tools.preflight(question).isEmpty || tools.skipsWebSearch(question) { return }
 
         isSearching = true
         defer {

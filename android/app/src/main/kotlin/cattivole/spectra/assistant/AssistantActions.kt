@@ -49,6 +49,8 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
             preflight = { question ->
                 preflightCalls(question, sources.model.ble.devices.values, sources.model.lan.devices.map { PortTarget(it.ipAddress, it.isGateway) })
             },
+            // Questions about the user's own network are answered from the app; the web adds nothing but a wait.
+            skipsWebSearch = AssistantDigest::answersFromApp,
             runningLabel = ::runningLabel,
             run = { name, args -> run(name, args) },
         )

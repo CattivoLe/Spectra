@@ -473,6 +473,13 @@ struct AssistantPlannerTests {
         #expect(QueryPlanner.parse("**высота   башни**") == .search("высота башни"))
         #expect(QueryPlanner.parse("NO") == .notNeeded)
         #expect(QueryPlanner.parse("нет.") == .notNeeded)
+        // A refusal with a reason, the way Spectra's planner note shows it: not a query «NO (security_summary_network)».
+        #expect(QueryPlanner.parse("NO (security_summary_network)") == .notNeeded)
+        #expect(QueryPlanner.parse("НЕТ — это вопрос о сети пользователя") == .notNeeded)
+        #expect(QueryPlanner.parse("No, the app has this.") == .notNeeded)
+        // A query that merely starts with the word stays a query.
+        #expect(QueryPlanner.parse("нет интернета на телефоне") == .search("нет интернета на телефоне"))
+        #expect(QueryPlanner.parse("No-IP DDNS уязвимости") == .search("No-IP DDNS уязвимости"))
         #expect(QueryPlanner.parse("курс евро\nExplanation: because…") == .search("курс евро"), "only the first line counts")
         #expect(QueryPlanner.parse("") == nil)
         #expect(QueryPlanner.parse(String(repeating: "слово ", count: 60)) == nil, "too long to be a query")
@@ -785,5 +792,43 @@ struct SearchCacheSimilarityTests {
         #expect(!SearchCache.isSimilar("высота Эйфелевой башни", "вес Эйфелевой башни"))
         #expect(!SearchCache.isSimilar("wifi 6 router price", "wifi 7 router"))
         #expect(!SearchCache.isSimilar("что", "как"), "nothing meaningful to compare")
+    }
+}
+
+// MARK: - Questions the app answers itself, without the web
+
+struct AssistantOwnQuestionTests {
+    @Test(arguments: [
+        "Дай сводку по безопасности: сеть, интернет и что стоит исправить",
+        "Which Wi-Fi channel is the busiest now?",
+        "Какой канал Wi-Fi сейчас самый загруженный?",
+        "Что за устройства в моей сети?",
+        "Есть ли рядом чужой трекер?",
+        "Почему у меня медленный интернет?",
+        "Безопасна ли моя сеть?",
+        "Какой канал лучше выбрать для моего роутера?",
+        "Кто подключён к моему роутеру?",
+        "Give me a security summary of my network",
+        "Is my home network safe?",
+        "Какие открытые порты у камеры 192.168.1.64?",
+        "Что Spectra нашла?",
+    ] as [String])
+    func ownThingsSkipTheWeb(_ question: String) {
+        #expect(AssistantDigest.answersFromApp(question))
+    }
+
+    @Test(arguments: [
+        "Что такое WPS и почему он опасен?",
+        "Какие уязвимости у роутера TP-Link Archer C6?",
+        "Что такое WPA3?",
+        "Есть ли CVE для прошивки Hikvision 5.5?",
+        "What is a deauthentication attack?",
+        "Как работает Evil Twin?",
+        "Есть ли уязвимости у моего роутера?",
+        "Какая погода завтра?",
+        "Привет!",
+    ] as [String])
+    func knowledgeStillGoesToThePlanner(_ question: String) {
+        #expect(!AssistantDigest.answersFromApp(question))
     }
 }

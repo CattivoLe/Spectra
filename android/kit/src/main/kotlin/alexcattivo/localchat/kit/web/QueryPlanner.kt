@@ -48,6 +48,12 @@ object QueryPlanner {
         return listOf(ChatMessage(ChatMessage.Role.System, system), ChatMessage(ChatMessage.Role.User, body))
     }
 
+    /**
+     * «NO (scan_lan has this)», «НЕТ — это вопрос о сети»: отказ с пояснением, как в примерах заметки приложения.
+     * Запрос, который начинается со слова «нет» («нет интернета на телефоне»), сюда не попадает.
+     */
+    private val declined = Regex("^(?:нет|no|none)\\s*[(\\[—–:,.;]", RegexOption.IGNORE_CASE)
+
     /** Разбирает ответ модели. `null` — ответ негодный, нужен запасной способ. */
     fun parse(raw: String): QueryPlan? {
         var line = raw.lines().map { it.trim() }.firstOrNull { it.isNotEmpty() } ?: return null
@@ -56,7 +62,7 @@ object QueryPlanner {
         }
         line = line.trim(' ', '\t', '«', '»', '"', '\'', '`', '*', '.', ',', ':', ';', '!', '?')
         line = line.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
-        if (line.lowercase() in setOf("нет", "no", "none")) return QueryPlan.NotNeeded
+        if (line.lowercase() in setOf("нет", "no", "none") || declined.containsMatchIn(line)) return QueryPlan.NotNeeded
         if (line.isEmpty() || line.length > 150) return null
         return QueryPlan.Search(line)
     }

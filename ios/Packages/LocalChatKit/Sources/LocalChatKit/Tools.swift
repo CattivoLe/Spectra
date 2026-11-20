@@ -21,12 +21,15 @@ public struct ToolRegistry: Sendable {
     /// Each entry is a tool name, sent as `{"tool": "<name>"}`, or a whole call object (`{"tool": …, "text": …}`)
     /// for a tool that needs an argument the app already found in the question.
     public var preflight: @MainActor (_ question: String) -> [String]
+    /// Questions the app answers from its own data, so the web is not searched even if the planner would.
+    public var skipsWebSearch: @MainActor (_ question: String) -> Bool
 
     public init(
         grammar: String,
         callTag: String = "<tool_call>",
         maxSteps: Int = 4,
         preflight: @escaping @MainActor (_ question: String) -> [String] = { _ in [] },
+        skipsWebSearch: @escaping @MainActor (_ question: String) -> Bool = { _ in false },
         runningLabel: @escaping @Sendable (_ name: String) -> String,
         run: @escaping @MainActor (_ name: String, _ argsJSON: String) async -> String
     ) {
@@ -34,6 +37,7 @@ public struct ToolRegistry: Sendable {
         self.callTag = callTag
         self.maxSteps = maxSteps
         self.preflight = preflight
+        self.skipsWebSearch = skipsWebSearch
         self.runningLabel = runningLabel
         self.run = run
     }

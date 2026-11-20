@@ -46,6 +46,10 @@ public enum QueryPlanner {
     }
 
     /// Разбирает ответ модели. `nil` — ответ негодный, нужен запасной способ.
+    /// «NO (scan_lan has this)», «НЕТ — это вопрос о сети»: a refusal with a reason, the way the host app's note shows
+    /// it. A query that starts with the word («нет интернета на телефоне») is not one.
+    nonisolated(unsafe) private static let declined = /(?i)(?:нет|no|none)\s*[(\[—–:,.;].*/
+
     public static func parse(_ raw: String) -> QueryPlan? {
         guard var line = raw.split(whereSeparator: \.isNewline).map({ $0.trimmingCharacters(in: .whitespaces) }).first(where: { !$0.isEmpty }) else {
             return nil
@@ -55,7 +59,7 @@ public enum QueryPlanner {
         }
         line = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t«»\"'`*.,:;!?"))
         line = line.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        if ["нет", "no", "none"].contains(line.lowercased()) { return .notNeeded }
+        if ["нет", "no", "none"].contains(line.lowercased()) || line.wholeMatch(of: declined) != nil { return .notNeeded }
         guard !line.isEmpty, line.count <= 150 else { return nil }
         return .search(line)
     }

@@ -205,6 +205,13 @@ class WebResearchTest {
     @Test fun plannerAndCheckParseTypicalAnswers() {
         assertEquals(QueryPlan.Search("высота Эвереста"), QueryPlanner.parse("Запрос: «высота Эвереста».\nпояснение"))
         assertEquals(QueryPlan.NotNeeded, QueryPlanner.parse("НЕТ"))
+        // A refusal with a reason, the way the host app's note shows it: not a query «NO (security_summary_network)».
+        assertEquals(QueryPlan.NotNeeded, QueryPlanner.parse("NO (security_summary_network)"))
+        assertEquals(QueryPlan.NotNeeded, QueryPlanner.parse("НЕТ — это вопрос о сети пользователя"))
+        assertEquals(QueryPlan.NotNeeded, QueryPlanner.parse("No, the app has this."))
+        // A query that merely starts with the word stays a query.
+        assertEquals(QueryPlan.Search("нет интернета на телефоне"), QueryPlanner.parse("нет интернета на телефоне"))
+        assertEquals(QueryPlan.Search("No-IP DDNS уязвимости"), QueryPlanner.parse("No-IP DDNS уязвимости"))
         assertNull(QueryPlanner.parse("   "))
         assertEquals(AnswerCheck.Reply.Yes("8849 метров"), AnswerCheck.parse("ДА: 8849 метров"))
         assertEquals(AnswerCheck.Reply.No("высота Эвереста в метрах"), AnswerCheck.parse("**НЕТ:** высота Эвереста в метрах"))

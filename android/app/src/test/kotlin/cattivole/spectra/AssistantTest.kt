@@ -26,6 +26,38 @@ class AssistantTest {
     // MARK: - Routing
 
     @Test
+    fun questionsAboutTheUsersOwnThingsSkipTheWeb() {
+        val own = listOf(
+            "Дай сводку по безопасности: сеть, интернет и что стоит исправить",
+            "Which Wi-Fi channel is the busiest now?",
+            "Какой канал Wi-Fi сейчас самый загруженный?",
+            "Что за устройства в моей сети?",
+            "Есть ли рядом чужой трекер?",
+            "Почему у меня медленный интернет?",
+            "Безопасна ли моя сеть?",
+            "Какой канал лучше выбрать для моего роутера?",
+            "Кто подключён к моему роутеру?",
+            "Give me a security summary of my network",
+            "Is my home network safe?",
+            "Какие открытые порты у камеры 192.168.1.64?",
+            "Что Spectra нашла?",
+        )
+        for (question in own) assertTrue(question, AssistantDigest.answersFromApp(question))
+        val knowledge = listOf(
+            "Что такое WPS и почему он опасен?",
+            "Какие уязвимости у роутера TP-Link Archer C6?",
+            "Что такое WPA3?",
+            "Есть ли CVE для прошивки Hikvision 5.5?",
+            "What is a deauthentication attack?",
+            "Как работает Evil Twin?",
+            "Есть ли уязвимости у моего роутера?",
+            "Какая погода завтра?",
+            "Привет!",
+        )
+        for (question in knowledge) assertFalse(question, AssistantDigest.answersFromApp(question))
+    }
+
+    @Test
     fun questionsRouteToTheirTopics() {
         assertEquals(listOf(AssistantTopic.BLUETOOTH), AssistantDigest.topics("Which Bluetooth devices are near me?"))
         assertEquals(listOf(AssistantTopic.LINK), AssistantDigest.topics("Почему тормозит интернет?"))

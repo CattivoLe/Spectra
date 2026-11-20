@@ -91,6 +91,8 @@ struct AssistantActions {
                     hosts: sources.lan.devices.values.map { PortTarget(ip: $0.ipAddress, isGateway: $0.isGateway) }
                 )
             },
+            // Questions about the user's own network are answered from the app; the web adds nothing but a wait.
+            skipsWebSearch: { AssistantDigest.answersFromApp($0) },
             runningLabel: Self.runningLabel
         ) { [sources, memory] name, argsJSON in
             await Self.run(name, argsJSON: argsJSON, sources: sources, memory: memory)

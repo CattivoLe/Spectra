@@ -220,6 +220,45 @@ nonisolated enum AssistantDigest {
     /// «Bluetooth devices» is about Bluetooth.
     private static let genericDeviceStems = ["device", "devices", "устройств"]
 
+    /// A question asks about knowledge rather than the user's own things: what something is, CVEs, news.
+    private static let knowledgeStems = [
+        "what is", "what's a", "what are", "what does", "how does", "how do ", "explain what", "cve", "vulnerabilit", "exploit",
+        "news", "advisor", "standard", "rfc", "specification",
+        "что такое", "что значит", "что означает", "как работает", "как устроен", "объясни, что", "уязвимост", "эксплойт", "эксплоит",
+        "новост", "бюллетен", "стандарт", "спецификац",
+    ]
+
+    /// Words that make a question about the user's own surroundings now («у меня», «рядом», "my", "now").
+    private static let ownWords: Set<String> = [
+        "мой", "моя", "моё", "мое", "мои", "моего", "моей", "моему", "моим", "моих", "мою", "наш", "наша", "наше", "наши", "нашей",
+        "нашего", "сейчас", "здесь", "тут", "дома", "рядом", "вокруг", "поблизости",
+        "my", "mine", "our", "now", "here", "home", "nearby", "currently",
+    ]
+    private static let ownPhrases = ["у меня", "у нас", "around me", "at home", "right now"]
+
+    /// A request to look at the user's own things as a whole, or to run a check on them.
+    private static let lookStems = [
+        "summary", "summar", "overview", "audit", "report", "status", "scan", "check",
+        "сводк", "обзор", "аудит", "отчёт", "отчет", "состояни", "просканир", "провер",
+    ]
+
+    nonisolated(unsafe) private static let address = /\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b/
+
+    /// Whether a question is about the user's own network, devices or connection, so the answer comes from the app's
+    /// data and live checks and a web search would only add half a minute and unrelated pages. The model asked to
+    /// decide this («NO for the user's own network») sent most such questions online anyway. A question that asks
+    /// what something is, or about CVEs and vulnerabilities, still goes to the planner. Mirrors AssistantDigest.kt.
+    static func answersFromApp(_ question: String) -> Bool {
+        let text = question.lowercased()
+        if matches(knowledgeStems, in: text) { return false }
+        if text.contains("spectra") || text.contains("спектр") || text.contains(address) { return true }
+        let topic = AssistantTopic.allCases.contains { matches($0.stems, in: text) } || matches(genericDeviceStems, in: text)
+        guard topic else { return false }
+        let words = text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        let own = words.contains { ownWords.contains($0) } || ownPhrases.contains { text.contains($0) }
+        return own || matches(lookStems, in: text)
+    }
+
     /// Topics a question is about. A question that names none, or asks for an overview, gets all of them.
     static func topics(for question: String) -> [AssistantTopic] {
         let text = question.lowercased()
