@@ -26,6 +26,25 @@ class AssistantTest {
     // MARK: - Routing
 
     @Test
+    fun everyOfferedCheckRunsWhenTapped() {
+        val original = java.util.Locale.getDefault()
+        try {
+            for (locale in listOf(java.util.Locale.ENGLISH, java.util.Locale.forLanguageTag("ru"))) {
+                java.util.Locale.setDefault(locale)
+                val offered = AssistantActions.Name.entries.mapNotNull { AssistantActions.offer(it.raw) }.filter { it.request != null }
+                assertEquals(6, offered.size)
+                for (offer in offered) {
+                    val runs = AssistantActions.requested(offer.request!!).map { it.raw }
+                    assertTrue("${locale.language}: «${offer.request}» runs $runs", offer.name in runs)
+                    assertTrue(offer.button!!.endsWith("?"))
+                }
+            }
+        } finally {
+            java.util.Locale.setDefault(original)
+        }
+    }
+
+    @Test
     fun questionsAboutTheUsersOwnThingsSkipTheWeb() {
         val own = listOf(
             "Дай сводку по безопасности: сеть, интернет и что стоит исправить",

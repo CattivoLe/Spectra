@@ -6,6 +6,7 @@ import alexcattivo.localchat.engine.GenerationEvent
 import alexcattivo.localchat.engine.GenerationParams
 import alexcattivo.localchat.engine.StopReason
 import alexcattivo.localchat.kit.tools.ToolCalls
+import alexcattivo.localchat.kit.tools.ToolOffer
 import alexcattivo.localchat.kit.tools.ToolRegistry
 import alexcattivo.localchat.kit.web.AnswerCheck
 import alexcattivo.localchat.kit.web.AnswerVerdict
@@ -91,6 +92,8 @@ class ChatSession(
         private set
     /** Какие действия понадобились каждому ответу: подписываются под ним. */
     val toolRuns = androidx.compose.runtime.mutableStateMapOf<java.util.UUID, List<String>>()
+    /** Проверки, которые ответ предложил словами («выполни check_connection»): под ним они становятся кнопками. */
+    val offers = androidx.compose.runtime.mutableStateMapOf<java.util.UUID, List<ToolOffer>>()
     /** Что из других диалогов подмешано к вопросу (по id вопроса): видно под ответом. */
     val recollections = androidx.compose.runtime.mutableStateMapOf<java.util.UUID, List<Recollection>>()
 
@@ -473,7 +476,7 @@ class ChatSession(
                             text.append(event.piece)
                             // Вызов действия не показываем и не озвучиваем: это служебный текст.
                             val visible = ToolCalls.visiblePart(text.toString(), tag)
-                            messages[index] = messages[index].copy(content = prefix + visible)
+                            messages[index] = messages[index].copy(content = registry?.let { ToolCalls.humanize(prefix + visible, it.offer).first } ?: (prefix + visible))
                             if (visible.length > spoken) {
                                 onPiece?.invoke(visible.substring(spoken))
                                 spoken = visible.length
@@ -524,6 +527,10 @@ class ChatSession(
             break
         }
 
+        // Служебные имена действий — словами, а сами действия — предложением под ответом.
+        val offered = registry?.let { ToolCalls.humanize(finalText, it.offer, toolsUsed) }
+        if (offered != null) finalText = offered.first
+
         if (finalText.isBlank()) {
             // Ничего не получено: пустое сообщение не оставляем.
             store.deleteMessages(chat.id, assistant.seq)
@@ -533,6 +540,7 @@ class ChatSession(
             assistant = assistant.copy(content = finalText, interrupted = !complete)
             messages[index] = assistant
             if (toolsUsed.isNotEmpty()) toolRuns[assistant.id] = (toolRuns[assistant.id] ?: emptyList()) + toolsUsed
+            offered?.second?.takeIf { it.isNotEmpty() }?.let { offers[assistant.id] = it.take(3) }
             store.update(assistant.id, finalText, interrupted = !complete)
         }
         failure?.let { throw it }

@@ -22,6 +22,11 @@ class ToolRegistry(
     val preflight: (String) -> List<String> = { emptyList() },
     /** Вопросы о самих действиях («сохрани в заметки»): интернет для них не нужен, даже если планировщик решит иначе. */
     val skipsWebSearch: (String) -> Boolean = { false },
+    /**
+     * Действие, которое модель назвала в ответе служебным именем («выполни check_connection»): как сказать о нём словами
+     * и можно ли предложить его кнопкой. `null` — имя не из этого набора, текст не трогается.
+     */
+    val offer: (String) -> ToolOffer? = { null },
     /** Код действия для подписи на экране, пока оно выполняется. */
     val runningLabel: (String) -> String = { it },
     /** Выполняет вызов и возвращает текст для модели. Не бросает ошибок: неудача — тоже текст для модели. */
@@ -29,6 +34,12 @@ class ToolRegistry(
 )
 
 data class ParsedToolCall(val name: String, val argsJSON: String)
+
+/**
+ * Служебное имя действия в ответе модели и чем его заменить. [mention] встаёт в текст вместо имени. Если есть [button]
+ * и [request], под ответом появляется предложение: нажатие отправляет [request] как вопрос пользователя.
+ */
+data class ToolOffer(val name: String, val mention: String, val button: String? = null, val request: String? = null)
 
 object ToolCalls {
     /** Ищет `<tag>{...}` и возвращает имя действия и объект JSON, если скобки сошлись и действие названо. */
@@ -50,6 +61,22 @@ object ToolCalls {
         val json = text.substring(open, end)
         val name = runCatching { JSONObject(json).getString("tool") }.getOrNull() ?: return null
         return ParsedToolCall(name, json)
+    }
+
+    private val toolName = Regex("`?\\*{0,2}\\b([a-z]+(?:_[a-z]+)+)\\b\\*{0,2}`?")
+
+    /**
+     * Заменяет служебные имена действий в тексте ответа словами и собирает то, что можно предложить кнопкой (без
+     * повторов и без уже выполненных в этом ответе действий). Человеку «запусти scan_lan» ничего не говорит.
+     */
+    fun humanize(text: String, offer: (String) -> ToolOffer?, ran: Collection<String> = emptyList()): Pair<String, List<ToolOffer>> {
+        val offers = linkedMapOf<String, ToolOffer>()
+        val shown = toolName.replace(text) { match ->
+            val found = offer(match.groupValues[1]) ?: return@replace match.value
+            if (found.button != null && found.request != null && found.name !in ran) offers.putIfAbsent(found.name, found)
+            found.mention
+        }
+        return shown to offers.values.toList()
     }
 
     /** Что модель видит после вызова: результат, явно помеченный как данные, а не новые указания. */

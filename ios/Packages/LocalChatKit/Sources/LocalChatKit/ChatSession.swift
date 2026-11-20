@@ -55,6 +55,8 @@ public final class ChatSession {
     public var tools: ToolRegistry?
     /// Which tools ran for each assistant answer, by that message's id. In memory only, like `attachments`.
     public private(set) var toolRuns: [UUID: [String]] = [:]
+    /// Checks an answer suggested in words («выполни check_connection»), shown under it as buttons. In memory only.
+    public private(set) var offers: [UUID: [ToolOffer]] = [:]
 
     private let store: ChatStore
     private let controller: EngineController
@@ -435,7 +437,7 @@ public final class ChatSession {
                     switch event {
                     case .text(let piece):
                         text += piece
-                        messages[index].content = prefix + text
+                        messages[index].content = tools.map { ToolOffer.humanize(prefix + text, offer: $0.offer).text } ?? prefix + text
                         if ContinuousClock.now - lastSave > .seconds(1) {
                             try? await store.update(assistant.id, content: prefix + text, interrupted: true)
                             lastSave = .now
@@ -481,6 +483,13 @@ public final class ChatSession {
             break toolLoop
         }
 
+        // Tools' internal names in words, and the tools themselves as an offer under the answer.
+        let offered = tools.map { ToolOffer.humanize(finalText, offer: $0.offer, ran: toolsUsed) }
+        if let offered {
+            finalText = offered.text
+            if !finalText.isEmpty { messages[index].content = finalText }
+        }
+
         if finalText.isEmpty {
             // Ничего не получено: пустое сообщение не оставляем.
             try? await store.deleteMessages(in: chat.id, fromSeq: assistant.seq)
@@ -490,6 +499,7 @@ public final class ChatSession {
             let complete = finalStopReason == .endOfTurn
             messages[index].interrupted = !complete
             if !toolsUsed.isEmpty { toolRuns[assistant.id] = toolsUsed }
+            if let found = offered?.offers, !found.isEmpty { offers[assistant.id] = Array(found.prefix(3)) }
             try await store.update(assistant.id, content: finalText, interrupted: !complete)
         }
         if let failure { throw failure }

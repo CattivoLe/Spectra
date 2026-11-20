@@ -1,5 +1,6 @@
 package cattivole.spectra.assistant
 
+import alexcattivo.localchat.kit.tools.ToolOffer
 import alexcattivo.localchat.kit.tools.ToolRegistry
 import cattivole.spectra.core.BleDevice
 import cattivole.spectra.core.MacAddress
@@ -51,6 +52,7 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
             },
             // Questions about the user's own network are answered from the app; the web adds nothing but a wait.
             skipsWebSearch = AssistantDigest::answersFromApp,
+            offer = ::offer,
             runningLabel = ::runningLabel,
             run = { name, args -> run(name, args) },
         )
@@ -392,6 +394,42 @@ Leave "host" out for a general note. To remove a note:
             return devices.filter {
                 it.displayName.contains(needle, ignoreCase = true) || needle.contains(it.displayName, ignoreCase = true)
             }.maxByOrNull { it.rssi }
+        }
+
+        /**
+         * What a tool is called in words, for an answer that names it («выполни check_connection»), and — for the
+         * checks that need no argument — the offer shown under that answer. The request is worded so that
+         * [requested] runs the check itself, like the starters in an empty chat.
+         */
+        fun offer(name: String): ToolOffer? = when (Name.of(name)) {
+            Name.SCAN_WIFI -> ToolOffer(name, tr("a Wi‑Fi scan"), tr("Scan Wi‑Fi?"), tr("Scan the Wi‑Fi around me: which channel is freer?"))
+            Name.SCAN_LAN -> ToolOffer(name, tr("a network scan"), tr("Scan the local network?"), tr("Scan my local network and show me what these devices are"))
+            Name.SCAN_BLUETOOTH -> ToolOffer(name, tr("a Bluetooth scan"), tr("Scan Bluetooth?"), tr("Scan Bluetooth nearby: is there someone else's tracker?"))
+            Name.CHECK_CONNECTION -> ToolOffer(name, tr("a connection check"), tr("Check the connection?"), tr("Check my internet connection: DNS, latency, provider"))
+            Name.SPEED_TEST -> ToolOffer(name, tr("a speed test"), tr("Measure the speed?"), tr("Measure my internet speed"))
+            Name.CHECK_PORT_FORWARDING -> ToolOffer(name, tr("a port forwarding check"), tr("Check port forwarding?"), tr("Check which ports my router forwards to the internet"))
+            Name.SCAN_PORTS -> ToolOffer(name, tr("a port scan"))
+            Name.CAPTURE_PCAP -> ToolOffer(name, tr("a traffic capture"))
+            Name.CONNECT_BLUETOOTH -> ToolOffer(name, tr("a connection to the device"))
+            Name.SEARCH_HISTORY -> ToolOffer(name, tr("a search through History"))
+            Name.REMEMBER, Name.FORGET, null -> null
+        }
+
+        /** A tool that ran, in words, for the note under the answer: «Ran: network scan», not «scan_lan». */
+        fun title(name: String): String = when (Name.of(name)) {
+            Name.SCAN_WIFI -> tr("Wi‑Fi scan")
+            Name.SCAN_LAN -> tr("network scan")
+            Name.SCAN_BLUETOOTH -> tr("Bluetooth scan")
+            Name.CHECK_CONNECTION -> tr("connection check")
+            Name.SPEED_TEST -> tr("speed test")
+            Name.SCAN_PORTS -> tr("port scan")
+            Name.CHECK_PORT_FORWARDING -> tr("port forwarding check")
+            Name.CAPTURE_PCAP -> tr("traffic capture")
+            Name.CONNECT_BLUETOOTH -> tr("device connection")
+            Name.SEARCH_HISTORY -> tr("History search")
+            Name.REMEMBER -> tr("saving a note")
+            Name.FORGET -> tr("removing a note")
+            null -> name
         }
 
         fun runningLabel(name: String): String = when (Name.of(name)) {

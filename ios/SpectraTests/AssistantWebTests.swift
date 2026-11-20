@@ -832,3 +832,47 @@ struct AssistantOwnQuestionTests {
         #expect(!AssistantDigest.answersFromApp(question))
     }
 }
+
+// MARK: - Tools named in an answer: words in the text, a question to tap under it
+
+@MainActor
+struct AssistantToolOfferTests {
+    private func offer(_ name: String) -> ToolOffer? {
+        switch name {
+        case "check_connection": ToolOffer(name: name, mention: "проверку соединения", button: "Проверить соединение?", request: "Проверь интернет-соединение")
+        case "scan_lan": ToolOffer(name: name, mention: "сканирование сети", button: "Просканировать сеть?", request: "Просканируй сеть")
+        case "capture_pcap": ToolOffer(name: name, mention: "запись трафика")
+        default: nil
+        }
+    }
+
+    @Test func toolNamesBecomeWordsAndOffers() {
+        let result = ToolOffer.humanize(
+            "Интернет: без данных (выполни `check_connection`). Устройств нет — запусти **scan_lan**, потом снова scan_lan; "
+                + "при необходимости capture_pcap. Поле wifi_name не трогать.",
+            offer: offer
+        )
+        #expect(result.text == "Интернет: без данных (выполни проверку соединения). Устройств нет — запусти сканирование сети, потом снова "
+            + "сканирование сети; при необходимости запись трафика. Поле wifi_name не трогать.")
+        // One offer per check, in the order mentioned; a tool without a request is only reworded.
+        #expect(result.offers.map(\.name) == ["check_connection", "scan_lan"])
+    }
+
+    @Test func aCheckThatAlreadyRanIsNotOfferedAgain() {
+        let result = ToolOffer.humanize("Сканирование готово; для деталей снова запусти scan_lan.", offer: offer, ran: ["scan_lan"])
+        #expect(result.text == "Сканирование готово; для деталей снова запусти сканирование сети.")
+        #expect(result.offers.isEmpty)
+    }
+
+    /// The tap sends the request as a question: it must run the very check it offers, in the app's language.
+    @Test func everyOfferedCheckRunsWhenTapped() throws {
+        let offered = AssistantActions.Name.allCases.compactMap { AssistantActions.offer(for: $0.rawValue) }.filter { $0.request != nil }
+        #expect(offered.count == 6)
+        for offer in offered {
+            let request = try #require(offer.request)
+            let runs = AssistantActions.requested(in: request).map(\.rawValue)
+            #expect(runs.contains(offer.name), "«\(request)» runs \(runs)")
+            #expect(offer.button?.hasSuffix("?") == true)
+        }
+    }
+}

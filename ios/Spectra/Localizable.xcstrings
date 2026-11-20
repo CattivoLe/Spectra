@@ -744,6 +744,28 @@
         }
       }
     },
+    "a Bluetooth scan": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сканирование Bluetooth"
+          }
+        }
+      }
+    },
+    "a connection check": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "проверку соединения"
+          }
+        }
+      }
+    },
     "A connection to port 443. A miss can be this network filtering the site, or the site being down.": {
       "localizations": {
         "ru": {
@@ -760,6 +782,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Соединение с портом 443. Промах может быть фильтром сети или недоступностью самого сайта. Нажмите на строку, чтобы измерить снова."
+          }
+        }
+      }
+    },
+    "a connection to the device": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "подключение к устройству"
           }
         }
       }
@@ -792,6 +825,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Несколько секунд трафика до Cloudflare. Это снимок, а не полный тест."
+          }
+        }
+      }
+    },
+    "a network scan": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сканирование сети"
           }
         }
       }
@@ -837,12 +881,45 @@
         }
       }
     },
+    "a port forwarding check": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "проверку проброса портов"
+          }
+        }
+      }
+    },
+    "a port scan": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сканирование портов"
+          }
+        }
+      }
+    },
     "A question searched in the last 24 hours, or one worded almost the same, is answered from what that search found: nothing is sent again. The pages are kept on the phone, encrypted with the chats.": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Если такой же или почти так же сформулированный запрос уже искали за последние 24 часа, ответ берётся из найденного тогда — повторно ничего не отправляется. Страницы хранятся на телефоне, зашифрованными вместе с чатами."
+          }
+        }
+      }
+    },
+    "a search through History": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "поиск по истории"
           }
         }
       }
@@ -868,6 +945,17 @@
         }
       }
     },
+    "a speed test": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "замер скорости"
+          }
+        }
+      }
+    },
     "A tag away from its owner has stayed near you for a while. Move somewhere else and check whether it is still here.": {
       "extractionState": "manual",
       "localizations": {
@@ -879,6 +967,17 @@
         }
       }
     },
+    "a traffic capture": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "запись трафика"
+          }
+        }
+      }
+    },
     "A version of Llama 3.2 with its built-in refusals removed: it answers what ordinary models decline. About 24 tokens per second on iPhone 16. Russian is not officially supported: it writes it clumsily and slips into English words, so it suits English better.": {
       "extractionState": "manual",
       "localizations": {
@@ -886,6 +985,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Версия Llama 3.2 без встроенных отказов: отвечает на то, на что обычные модели не соглашаются. Около 24 токенов в секунду на iPhone 16. Русский официально не поддерживается: пишет неуклюже и вставляет английские слова, лучше подходит для английского."
+          }
+        }
+      }
+    },
+    "a Wi‑Fi scan": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сканирование Wi‑Fi"
           }
         }
       }
@@ -1642,6 +1752,17 @@
         }
       }
     },
+    "Bluetooth scan": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сканирование Bluetooth"
+          }
+        }
+      }
+    },
     "BSSID": {
       "localizations": {
         "ru": {
@@ -2363,6 +2484,17 @@
         }
       }
     },
+    "Check port forwarding?": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить проброс портов?"
+          }
+        }
+      }
+    },
     "Check ports from the internet": {
       "extractionState": "manual",
       "localizations": {
@@ -2370,6 +2502,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Проверить порты из интернета"
+          }
+        }
+      }
+    },
+    "Check the connection?": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить соединение?"
           }
         }
       }
@@ -2391,6 +2534,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Проверять через VPN"
+          }
+        }
+      }
+    },
+    "Check which ports my router forwards to the internet": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверь, какие порты роутер пробрасывает в интернет"
           }
         }
       }
@@ -2876,6 +3030,17 @@
         }
       }
     },
+    "connection check": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "проверка соединения"
+          }
+        }
+      }
+    },
     "Connection check and speed test": {
       "extractionState": "stale",
       "localizations": {
@@ -3277,6 +3442,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Страна"
+          }
+        }
+      }
+    },
+    "device connection": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "подключение к устройству"
           }
         }
       }
@@ -4598,6 +4774,17 @@
         }
       }
     },
+    "History search": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "поиск по истории"
+          }
+        }
+      }
+    },
     "HTTP": {
       "comment": "A section title for HTTP exchanges in a flow detail view.",
       "isCommentAutoGenerated": true
@@ -5771,6 +5958,17 @@
         }
       }
     },
+    "Measure the speed?": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Замерить скорость?"
+          }
+        }
+      }
+    },
     "MQTT broker": {
       "extractionState": "manual",
       "localizations": {
@@ -6008,6 +6206,105 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пропущенные сканы"
+          }
+        }
+      }
+    },
+    "network scan": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сканирование сети"
+          }
+        }
+      }
+    },
+    "port forwarding check": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "проверка проброса портов"
+          }
+        }
+      }
+    },
+    "port scan": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сканирование портов"
+          }
+        }
+      }
+    },
+    "removing a note": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "удаление заметки"
+          }
+        }
+      }
+    },
+    "saving a note": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сохранение заметки"
+          }
+        }
+      }
+    },
+    "Scan Bluetooth?": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Просканировать Bluetooth?"
+          }
+        }
+      }
+    },
+    "Scan the local network?": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Просканировать локальную сеть?"
+          }
+        }
+      }
+    },
+    "Scan Wi‑Fi?": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Просканировать Wi‑Fi?"
+          }
+        }
+      }
+    },
+    "speed test": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "замер скорости"
           }
         }
       }
@@ -10012,6 +10309,17 @@
         }
       }
     },
+    "traffic capture": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "запись трафика"
+          }
+        }
+      }
+    },
     "TX power": {
       "localizations": {
         "ru": {
@@ -12248,6 +12556,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "WARP включён"
+          }
+        }
+      }
+    },
+    "Wi‑Fi scan": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сканирование Wi‑Fi"
           }
         }
       }

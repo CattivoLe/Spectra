@@ -50,6 +50,7 @@ struct AssistantChatView: View {
                         onContinue: { session.continueGenerating() }
                     )
                 }
+                offersList
                 if session.isSearching {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.mini)
@@ -112,6 +113,33 @@ struct AssistantChatView: View {
                 session.continueGenerating()
             }
         }
+    }
+
+    /// Checks the last answer suggested («выполни check_connection»), offered as a question to tap.
+    @ViewBuilder private var offersList: some View {
+        if !session.isGenerating, let last = session.messages.last, last.role == .assistant,
+           let offers = session.offers[last.id], !offers.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(offers, id: \.name) { offer in
+                    if let button = offer.button, let request = offer.request {
+                        Button {
+                            session.send(request)
+                        } label: {
+                            Label(button, systemImage: "sparkles")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 14).padding(.vertical, 10)
+                                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canAsk)
+                    }
+                }
+            }
+        }
+    }
+
+    private var canAsk: Bool {
+        model.controller.state != .loading && model.controller.state != .empty
     }
 
     private var startersList: some View {
@@ -230,6 +258,12 @@ private struct AssistantMessageRow: View {
     let appData: AppDataAttachment?
     /// Live checks the model ran itself before this answer, in the order they ran.
     let toolsUsed: [String]?
+
+    /// The checks that ran, in words and once each: «network scan», not «scan_lan».
+    static func ranTitles(_ names: [String]) -> String {
+        var seen = Set<String>()
+        return names.filter { seen.insert($0).inserted }.map { AssistantActions.title(for: $0) }.joined(separator: ", ")
+    }
     let showModel: Bool
     let isLast: Bool
     let isGenerating: Bool
@@ -264,7 +298,7 @@ private struct AssistantMessageRow: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if let toolsUsed, !toolsUsed.isEmpty, !message.content.isEmpty {
-                    Label("Ran: \(toolsUsed.joined(separator: ", "))", systemImage: "bolt.horizontal")
+                    Label("Ran: \(Self.ranTitles(toolsUsed))", systemImage: "bolt.horizontal")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if let sources, !message.content.isEmpty {

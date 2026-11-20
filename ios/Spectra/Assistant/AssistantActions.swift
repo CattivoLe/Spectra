@@ -93,6 +93,7 @@ struct AssistantActions {
             },
             // Questions about the user's own network are answered from the app; the web adds nothing but a wait.
             skipsWebSearch: { AssistantDigest.answersFromApp($0) },
+            offer: { Self.offer(for: $0) },
             runningLabel: Self.runningLabel
         ) { [sources, memory] name, argsJSON in
             await Self.run(name, argsJSON: argsJSON, sources: sources, memory: memory)
@@ -302,6 +303,56 @@ struct AssistantActions {
         /// Devices or networks in general: see the fallback in `requested(in:)`.
         static let devices = ["device", "устройств", "девайс"]
         static let networks = ["network", "сет"]
+    }
+
+    /// What a tool is called in words, for an answer that names it («выполни check_connection»), and — for the checks
+    /// that need no argument — the offer shown under that answer. The request is worded so that `requested(in:)`
+    /// runs the check itself, like the starters in an empty chat.
+    static func offer(for name: String) -> ToolOffer? {
+        switch Name(rawValue: name) {
+        case .scanWifi:
+            ToolOffer(name: name, mention: String(localized: "a Wi‑Fi scan"), button: String(localized: "Scan Wi‑Fi?"),
+                      request: String(localized: "Scan the Wi‑Fi around me: which channel is freer?"))
+        case .scanLAN:
+            ToolOffer(name: name, mention: String(localized: "a network scan"), button: String(localized: "Scan the local network?"),
+                      request: String(localized: "Scan my local network and show me what these devices are"))
+        case .scanBluetooth:
+            ToolOffer(name: name, mention: String(localized: "a Bluetooth scan"), button: String(localized: "Scan Bluetooth?"),
+                      request: String(localized: "Scan Bluetooth nearby: is there someone else's tracker?"))
+        case .checkConnection:
+            ToolOffer(name: name, mention: String(localized: "a connection check"), button: String(localized: "Check the connection?"),
+                      request: String(localized: "Check my internet connection: DNS, latency, provider"))
+        case .speedTest:
+            ToolOffer(name: name, mention: String(localized: "a speed test"), button: String(localized: "Measure the speed?"),
+                      request: String(localized: "Measure my internet speed"))
+        case .checkPortForwarding:
+            ToolOffer(name: name, mention: String(localized: "a port forwarding check"), button: String(localized: "Check port forwarding?"),
+                      request: String(localized: "Check which ports my router forwards to the internet"))
+        case .scanPorts: ToolOffer(name: name, mention: String(localized: "a port scan"))
+        case .capturePcap: ToolOffer(name: name, mention: String(localized: "a traffic capture"))
+        case .connectBluetooth: ToolOffer(name: name, mention: String(localized: "a connection to the device"))
+        case .searchHistory: ToolOffer(name: name, mention: String(localized: "a search through History"))
+        case .remember, .forget, nil: nil
+        }
+    }
+
+    /// A tool that ran, in words, for the note under the answer: «Ran: network scan», not «scan_lan».
+    static func title(for name: String) -> String {
+        switch Name(rawValue: name) {
+        case .scanWifi: String(localized: "Wi‑Fi scan")
+        case .scanLAN: String(localized: "network scan")
+        case .scanBluetooth: String(localized: "Bluetooth scan")
+        case .checkConnection: String(localized: "connection check")
+        case .speedTest: String(localized: "speed test")
+        case .scanPorts: String(localized: "port scan")
+        case .checkPortForwarding: String(localized: "port forwarding check")
+        case .capturePcap: String(localized: "traffic capture")
+        case .connectBluetooth: String(localized: "device connection")
+        case .searchHistory: String(localized: "History search")
+        case .remember: String(localized: "saving a note")
+        case .forget: String(localized: "removing a note")
+        case nil: name
+        }
     }
 
     static func runningLabel(for name: String) -> String {

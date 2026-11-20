@@ -321,6 +321,8 @@ private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session:
                                     },
                                     onRegenerate = session::regenerate,
                                     onContinue = session::continueGenerating,
+                                    offers = if (ready) session.offers[message.id].orEmpty() else emptyList(),
+                                    onOffer = session::send,
                                 )
                             }
                         }
@@ -411,6 +413,8 @@ private fun MessageRow(
     onEdit: () -> Unit,
     onRegenerate: () -> Unit,
     onContinue: () -> Unit,
+    offers: List<alexcattivo.localchat.kit.tools.ToolOffer> = emptyList(),
+    onOffer: (String) -> Unit = {},
 ) {
     if (message.role == ChatMessage.Role.User) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -433,12 +437,28 @@ private fun MessageRow(
         }
         val notes = buildList {
             if (readFrom.isNotEmpty()) add(tr("Read from Spectra: %s", readFrom.joinToString(", ")))
-            if (tools.isNotEmpty()) add(tr("Ran: %s", tools.joinToString(", ")))
+            if (tools.isNotEmpty()) add(tr("Ran: %s", tools.distinct().joinToString(", ", transform = cattivole.spectra.assistant.AssistantActions::title)))
             sources?.let { add(tr("Web: %d sources for «%s»", it.results.size, it.query)) }
             message.modelName?.let(::add)
         }
         if (notes.isNotEmpty()) {
             Text(notes.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        // The answer suggested a check: offered as a question to tap instead of a tool name to type.
+        if (isLast && !isGenerating) {
+            for (offer in offers) {
+                val request = offer.request ?: continue
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    modifier = Modifier.clickable { onOffer(request) },
+                ) {
+                    Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Rounded.AutoAwesome, null, tint = Spectra.colors.revealed, modifier = Modifier.size(16.dp))
+                        Text(offer.button.orEmpty(), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
         }
         if (!(isLast && isGenerating) && message.content.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
