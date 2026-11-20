@@ -691,6 +691,7 @@ fun ProgressRow(label: String, fraction: Float?, detail: String? = null) {
             LinearProgressIndicator(
                 progress = { fraction.coerceIn(0f, 1f) },
                 modifier = Modifier.fillMaxWidth().clip(CircleShape),
+                gapSize = 0.dp,
                 drawStopIndicator = {},
             )
         }

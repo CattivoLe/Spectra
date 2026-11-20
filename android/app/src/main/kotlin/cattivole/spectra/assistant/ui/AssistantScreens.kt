@@ -271,6 +271,9 @@ private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session:
                         progress = { fraction },
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                         color = if (usage.isOverflowing) Spectra.colors.danger else MaterialTheme.colorScheme.primary,
+                        // One solid bar: Material 3's default gap at the indicator and dot at the end read as glitches here.
+                        gapSize = 0.dp,
+                        drawStopIndicator = {},
                     )
                 }
                 Box(Modifier.weight(1f).fillMaxWidth()) {

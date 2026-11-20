@@ -591,7 +591,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.firmwareCard(update: 
                     )
                 }
                 Spacer(Modifier.height(10.dp))
-                androidx.compose.material3.LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+                androidx.compose.material3.LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth(), gapSize = 0.dp, drawStopIndicator = {})
             }
             FirmwareUpdateProgress.Stage.Finishing -> StageLine(tr("Checking the image…"), busy = true)
             FirmwareUpdateProgress.Stage.Rebooting -> StageLine(tr("Waiting for the sensor to reboot…"), busy = true)
