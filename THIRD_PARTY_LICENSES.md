@@ -79,13 +79,8 @@ Each model has its own license, which the user accepts by downloading it:
 
 | Model | License |
 |-------|---------|
-| Gemma 4 E2B / E4B | Apache-2.0 |
-| Qwen 3.5 4B | Apache-2.0 |
-| QVikhr-3 4B | Apache-2.0 |
-| Ministral 3 3B (Android default) | Apache-2.0 |
-| LFM3 1.7B | LFM Open License (Liquid AI) |
-| Llama 3.2 3B Instruct (abliterated) | Llama 3.2 Community License and Acceptable Use Policy |
-| EmbeddingGemma 300M | Gemma Terms of Use |
+| Ministral 3 3B Instruct (the chat model) | Apache-2.0 |
+| EmbeddingGemma 300M (ranks web search results) | Gemma Terms of Use |
 
 ## Artwork
 
