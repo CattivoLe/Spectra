@@ -210,7 +210,33 @@ class LanScanner(
         return { listeners.remove(listener) }
     }
 
+    /** Screenshot demo ([cattivole.spectra.DemoMode]): the made-up network and hosts shown instead of a sweep. */
+    private var demoHosts: Pair<SubnetInfo, List<LanDevice>>? = null
+
+    /** Lists [hosts] as if a sweep of [info] had found them. Nothing is sent; a rescan shows them again. */
+    fun showDemo(info: SubnetInfo, hosts: List<LanDevice>) {
+        job?.cancel()
+        portJob?.cancel()
+        demoHosts = info to hosts
+        scanning = false
+        noNetwork = false
+        ipv6Only = false
+        widePrefix = false
+        subnet = info
+        known.clear()
+        hosts.forEach { known[it.ipAddress] = it }
+        devices = hosts
+        fraction = 1f
+        progress = "${hosts.size} devices"
+        lastScanDate = System.currentTimeMillis()
+        publish()
+    }
+
     fun scan() {
+        demoHosts?.let { (info, hosts) ->
+            showDemo(info, hosts)
+            return
+        }
         if (scanning) return
         portJob?.cancel()
         known.values.forEach { it.portScanFraction = null }
@@ -309,6 +335,7 @@ class LanScanner(
      * Banners and Windows names are read again from what turns up.
      */
     fun scanHostPorts(ip: String, all: Boolean = false) {
+        if (demoHosts != null) return
         val device = known[ip] ?: return
         if (scanning || device.portScanFraction != null) return
         portJob?.cancel()
