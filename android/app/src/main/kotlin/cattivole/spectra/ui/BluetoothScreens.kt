@@ -149,6 +149,7 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
     SpectraScreen(
         title = "Bluetooth",
         actions = {
+            HistoryButton(nav, cattivole.spectra.core.HistoryArea.BLUETOOTH)
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {

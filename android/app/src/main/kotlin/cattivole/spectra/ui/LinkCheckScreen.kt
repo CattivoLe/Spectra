@@ -72,7 +72,7 @@ private fun scanQr(context: android.content.Context, onRead: (String) -> Unit, o
     }
 }
 
-/** The LAN tab's way in to the link check. */
+/** The Internet tab's way in to the link check, the speed test and the traceroute. */
 fun LazyListScope.linkCheckEntry(model: cattivole.spectra.SpectraModel, nav: Navigator) {
     card(
         header = tr("Checks"),

@@ -185,6 +185,7 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
         title = "Wi‑Fi",
         actions = {
             var menu by remember { mutableStateOf(false) }
+            HistoryButton(nav, cattivole.spectra.core.HistoryArea.WIFI)
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("More")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {

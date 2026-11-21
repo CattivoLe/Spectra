@@ -279,12 +279,13 @@ private fun PinCard(title: String, entries: List<HistoryEntry>, onOpen: (String)
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             )
             for (entry in entries) {
+                val kind = entry.shownKinds().first()
                 ListRow(
-                    title = entry.kindTitle,
+                    title = tr(entry.rowTitle),
                     subtitle = "${ago(entry.savedAt)} · ${sourceName(entry.source)}",
                     subtitleLines = 1,
-                    leading = { IconTile(kindIcon(entry.kind), kindTint(entry.kind)) },
-                    trailing = { Pill("${entry.itemCount}", kindTint(entry.kind)) },
+                    leading = { IconTile(kindIcon(kind), kindTint(kind)) },
+                    trailing = { Pill("${entry.itemCount}", kindTint(kind)) },
                     onClick = { onOpen(entry.id) },
                 )
             }

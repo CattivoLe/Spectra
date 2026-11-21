@@ -43,7 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import java.util.Locale
 
-/** The LAN tab's way in to the full speed test. */
+/** The Internet tab's way in to the full speed test. */
 fun LazyListScope.speedTestRow(model: SpectraModel, nav: Navigator): @Composable () -> Unit = {
     val tester = model.speed
     val result = tester.result

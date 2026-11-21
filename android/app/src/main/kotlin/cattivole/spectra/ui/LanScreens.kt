@@ -162,6 +162,7 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
             if (lan.devices.isNotEmpty()) {
                 AskAssistantButton(model, nav, subject = { cattivole.spectra.assistant.CardSubject.Lan })
             }
+            HistoryButton(nav, cattivole.spectra.core.HistoryArea.LAN)
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -230,7 +231,7 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
                 lan.devices.isEmpty() && !lan.scanning && lan.noNetwork && lan.ipv6Only -> EmptyState(
                     Icons.Rounded.Lan,
                     tr("IPv6-only network"),
-                    tr("This Wi-Fi gives the phone no IPv4 address. The device scan walks an IPv4 subnet, so there is nothing to sweep here. Connection, speed and link checks still work."),
+                    tr("This Wi-Fi gives the phone no IPv4 address. The device scan walks an IPv4 subnet, so there is nothing to sweep here. Connection, speed and link checks on the Internet tab still work."),
                     action = tr("Scan again"),
                     onAction = lan::scan,
                 )
@@ -289,9 +290,6 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
         if (lan.widePrefix) {
             card(key = "wide", rows = listOf { NoteRow(tr("The prefix is wider than /20, so only the local /24 is walked."), warning = false) })
         }
-        trafficEntry(model, nav)
-        connectionEntry(model, nav)
-        linkCheckEntry(model, nav)
         if (!lan.scanning && lan.devices.isNotEmpty() && needle.isEmpty()) {
             val worst = atRisk.mapNotNull { it.riskLevel }.maxOrNull()
             card(key = "risk", rows = listOf {

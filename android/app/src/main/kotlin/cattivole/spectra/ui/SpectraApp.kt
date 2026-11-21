@@ -17,16 +17,14 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Lan
-import androidx.compose.material.icons.filled.SettingsInputAntenna
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.outlined.Bluetooth
-import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Lan
-import androidx.compose.material.icons.outlined.SettingsInputAntenna
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -36,17 +34,22 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableFloatState
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,21 +67,43 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
 import cattivole.spectra.SpectraModel
+import cattivole.spectra.core.HistoryArea
 import cattivole.spectra.core.MacAddress
 import cattivole.spectra.platform.Permissions
 import kotlinx.coroutines.launch
 
-/** Each tab is its own graph, so it keeps its back stack while another tab is open. */
-private enum class Tab(val graph: String, val start: String, val label: () -> String, val selected: ImageVector, val idle: ImageVector) {
-    Networks("wifi-tab", "networks", { "Wi‑Fi" }, Icons.Filled.Wifi, Icons.Outlined.Wifi),
-    Lan("lan-tab", "lan", { "LAN" }, Icons.Filled.Lan, Icons.Outlined.Lan),
-    Bluetooth("bluetooth-tab", "bluetooth", { "Bluetooth" }, Icons.Filled.Bluetooth, Icons.Outlined.Bluetooth),
-    History("history-tab", "history", { tr("History") }, Icons.Filled.History, Icons.Outlined.History),
+/**
+ * Each tab is its own graph, so it keeps its back stack while another tab is open.
+ * There is no shared History tab: each tab with saved scans opens its own history ([area]).
+ */
+private enum class Tab(
+    val graph: String,
+    val start: String,
+    val label: () -> String,
+    val selected: ImageVector,
+    val idle: ImageVector,
+    val area: HistoryArea? = null,
+) {
+    Networks("wifi-tab", "networks", { "Wi‑Fi" }, Icons.Filled.Wifi, Icons.Outlined.Wifi, HistoryArea.WIFI),
+    Lan("lan-tab", "lan", { "LAN" }, Icons.Filled.Lan, Icons.Outlined.Lan, HistoryArea.LAN),
+    // Checks of the way out: connection, link, speed, route and the phone's own traffic.
+    Internet("internet-tab", "internet", { tr("Internet") }, Icons.Filled.Public, Icons.Outlined.Public, HistoryArea.INTERNET),
+    Bluetooth("bluetooth-tab", "bluetooth", { "Bluetooth" }, Icons.Filled.Bluetooth, Icons.Outlined.Bluetooth, HistoryArea.BLUETOOTH),
     // As on iOS, the sensor is a screen of the Wi‑Fi tab and its place in the bar went to the assistant.
     Assistant("assistant-tab", "assistant", { tr("Assistant") }, Icons.Filled.AutoAwesome, Icons.Outlined.AutoAwesome);
 
     /** Where this tab shows a summary card: each tab has its own copy of the screen (see [Navigator.card]). */
     val cardRoute: String get() = "$start/card"
+
+    /** This tab's history list; a session opens under it at `historyRoute/{id}`. */
+    val historyRoute: String get() = "$start/history"
+
+    /** The licenses, opened from this tab's history menu. */
+    val licensesRoute: String get() = "$start/licenses"
+
+    companion object {
+        fun of(area: HistoryArea): Tab = entries.first { it.area == area }
+    }
 }
 
 /** Where a screen goes next. One object so screens do not each take five lambdas. */
@@ -157,10 +182,20 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
 
     /** Decodes the sensor's last raw capture, shown under [name]. */
     fun decodeCapture(name: String) = nav.navigate("capture-pcap/${Uri.encode(name)}")
-    fun history(id: String) = nav.navigate("history/${Uri.encode(id)}")
+    /** The saved sessions of [area]'s tab. */
+    fun history(area: HistoryArea) = nav.navigate(Tab.of(area).historyRoute)
+
+    /** One saved session, as [area]'s tab shows it. */
+    fun history(area: HistoryArea, id: String) = nav.navigate("${Tab.of(area).historyRoute}/${Uri.encode(id)}")
     fun sensorTab() = nav.navigate("sensor")
-    fun licenses() = nav.navigate("licenses")
-    fun license(index: Int) = nav.navigate("licenses/$index")
+    /** The licenses open inside the tab whose history menu asked for them. */
+    fun licenses() = nav.navigate(currentTab().licensesRoute)
+    fun license(index: Int) = nav.navigate("${currentTab().licensesRoute}/$index")
+
+    private fun currentTab(): Tab {
+        val hierarchy = nav.currentBackStackEntry?.destination?.hierarchy?.mapNotNull { it.route }?.toList().orEmpty()
+        return Tab.entries.firstOrNull { it.graph in hierarchy } ?: Tab.Networks
+    }
 }
 
 @Composable
@@ -228,13 +263,15 @@ fun SpectraApp(model: SpectraModel) {
             snackbarHost = { SnackbarHost(snackbar) },
             bottomBar = {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp) {
+                    // One scale for every label, so they stay the same size when the narrow cover screen shrinks them.
+                    val labelScale = remember(LocalConfiguration.current.screenWidthDp) { mutableFloatStateOf(1f) }
                     Tab.entries.forEach { tab ->
                         val selected = currentTab == tab
                         NavigationBarItem(
                             selected = selected,
                             onClick = { openTab(nav, tab) },
                             icon = { Icon(if (selected) tab.selected else tab.idle, contentDescription = null) },
-                            label = { Text(tab.label(), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            label = { TabLabel(tab.label(), labelScale) },
                             colors = NavigationBarItemDefaults.colors(
                                 indicatorColor = MaterialTheme.colorScheme.primaryContainer,
                                 selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -259,6 +296,9 @@ fun SpectraApp(model: SpectraModel) {
                     composable("${Tab.Networks.cardRoute}/{id}") { summaryCard(model, navigator, it) }
                     composable("network/{id}") { NetworkDetail(model, navigator, it.mac("id"), entryId = null) }
                     composable("client/{mac}") { ClientDetail(model, navigator, it.mac("mac"), entryId = null) }
+                    historyScreens(model, navigator, Tab.Networks)
+                    composable("saved/network/{entry}/{id}") { NetworkDetail(model, navigator, it.mac("id"), it.text("entry")) }
+                    composable("saved/client/{entry}/{mac}") { ClientDetail(model, navigator, it.mac("mac"), it.text("entry")) }
                     composable("channels") { ChannelsScreen(model, navigator) }
                     composable("pcap") {
                         PcapScreen(navigator::back, onAsk = assistantAsk(model, navigator))
@@ -277,6 +317,16 @@ fun SpectraApp(model: SpectraModel) {
                     composable(Tab.Lan.start) { LanScreen(model, navigator) }
                     composable("${Tab.Lan.cardRoute}/{id}") { summaryCard(model, navigator, it) }
                     composable("host/{ip}") { LanDetail(model, navigator, it.text("ip"), entryId = null) }
+                    historyScreens(model, navigator, Tab.Lan)
+                    composable("saved/host/{entry}/{ip}") { LanDetail(model, navigator, it.text("ip"), it.text("entry")) }
+                }
+                navigation(startDestination = Tab.Internet.start, route = Tab.Internet.graph) {
+                    composable(Tab.Internet.start) { InternetScreen(model, navigator) }
+                    composable("${Tab.Internet.cardRoute}/{id}") { summaryCard(model, navigator, it) }
+                    historyScreens(model, navigator, Tab.Internet)
+                    composable("saved/connection/{entry}/{at}") {
+                        SavedLinkScreen(model, navigator, it.text("entry"), it.arguments?.getString("at")?.toLongOrNull() ?: 0L)
+                    }
                     composable("connection") { LinkScreen(model, navigator) }
                     composable("link-check") { LinkCheckScreen(navigator) }
                     composable("speed-test") { SpeedTestScreen(model, navigator) }
@@ -332,20 +382,8 @@ fun SpectraApp(model: SpectraModel) {
                     composable(Tab.Bluetooth.start) { BluetoothScreen(model, navigator) }
                     composable("${Tab.Bluetooth.cardRoute}/{id}") { summaryCard(model, navigator, it) }
                     composable("ble/{address}") { BleDetail(model, navigator, it.text("address"), entryId = null) }
-                }
-                navigation(startDestination = Tab.History.start, route = Tab.History.graph) {
-                    composable(Tab.History.start) { HistoryScreen(model, navigator) }
-                    composable("${Tab.History.cardRoute}/{id}") { summaryCard(model, navigator, it) }
-                    composable("history/{id}") { HistoryDetail(model, navigator, it.text("id")) }
-                    composable("licenses") { LicensesScreen(navigator) }
-                    composable("licenses/{index}") { LicenseDetail(navigator, it.arguments?.getString("index")?.toIntOrNull() ?: -1) }
-                    composable("saved/network/{entry}/{id}") { NetworkDetail(model, navigator, it.mac("id"), it.text("entry")) }
-                    composable("saved/client/{entry}/{mac}") { ClientDetail(model, navigator, it.mac("mac"), it.text("entry")) }
-                    composable("saved/host/{entry}/{ip}") { LanDetail(model, navigator, it.text("ip"), it.text("entry")) }
+                    historyScreens(model, navigator, Tab.Bluetooth)
                     composable("saved/ble/{entry}/{address}") { BleDetail(model, navigator, it.text("address"), it.text("entry")) }
-                    composable("saved/connection/{entry}/{at}") {
-                        SavedLinkScreen(model, navigator, it.text("entry"), it.arguments?.getString("at")?.toLongOrNull() ?: 0L)
-                    }
                 }
                 navigation(startDestination = Tab.Assistant.start, route = Tab.Assistant.graph) {
                     composable(Tab.Assistant.start) { cattivole.spectra.assistant.ui.AssistantHomeScreen(model, navigator) }
@@ -363,12 +401,49 @@ fun SpectraApp(model: SpectraModel) {
     }
 }
 
+/**
+ * A tab's name on one line. A name too wide for its slot shrinks the shared [scale] a step at a time,
+ * down to [MIN_LABEL_SCALE]; past that it ends in an ellipsis. It is drawn only once it fits.
+ */
+@Composable
+private fun TabLabel(text: String, scale: MutableFloatState) {
+    val style = LocalTextStyle.current
+    var fits by remember(text) { mutableStateOf(false) }
+    Text(
+        text,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
+        style = style.copy(fontSize = style.fontSize * scale.floatValue),
+        modifier = Modifier.drawWithContent { if (fits) drawContent() },
+        onTextLayout = { layout ->
+            val over = layout.hasVisualOverflow
+            if (over && scale.floatValue > MIN_LABEL_SCALE) {
+                scale.floatValue = (scale.floatValue - 0.05f).coerceAtLeast(MIN_LABEL_SCALE)
+            } else {
+                fits = true
+            }
+        },
+    )
+}
+
+private const val MIN_LABEL_SCALE = 0.75f
+
 /** The decode screen's ✨: the capture is kept for the assistant, then a summary card about it opens. */
 private fun assistantAsk(model: SpectraModel, navigator: Navigator): ((String, cattivole.spectra.core.CaptureAnalysis, Boolean) -> Unit)? =
     if (!cattivole.spectra.assistant.AssistantModel.isSupported) null else { name, analysis, fromSensor ->
         model.captures.keep(name, analysis, fromSensor)
         navigator.summary(model, cattivole.spectra.assistant.CardSubject.Capture)
     }
+
+/** A tab's own history: the list of its sessions and one session, inside that tab's graph. */
+private fun androidx.navigation.NavGraphBuilder.historyScreens(model: SpectraModel, navigator: Navigator, tab: Tab) {
+    val area = tab.area ?: return
+    composable(tab.historyRoute) { HistoryScreen(model, navigator, area) }
+    composable("${tab.historyRoute}/{id}") { HistoryDetail(model, navigator, it.text("id"), area) }
+    composable(tab.licensesRoute) { LicensesScreen(navigator) }
+    composable("${tab.licensesRoute}/{index}") { LicenseDetail(navigator, it.arguments?.getString("index")?.toIntOrNull() ?: -1) }
+}
 
 @Composable
 private fun summaryCard(model: SpectraModel, navigator: Navigator, entry: NavBackStackEntry) {
