@@ -182,5 +182,5 @@ check the app against byte layouts written out from the document.
 - Patches and issues: [CONTRIBUTING.md](CONTRIBUTING.md).
 - Third-party code, data and the downloadable models:
   [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
-- License: _not chosen yet_. Until a `LICENSE` file is added, no rights are
-  granted to use, copy or redistribute this code.
+- License: [MIT](LICENSE). Third-party components keep their own licenses;
+  a binary you build and ship has to carry their notices too.

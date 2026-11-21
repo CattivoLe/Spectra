@@ -44,6 +44,7 @@ and run the `Spectra` scheme's tests in Xcode for iOS changes.
 
 ## License of contributions
 
-Until the project has a `LICENSE` file, please do not send code: there is no
-license yet under which it could be accepted. Once one is chosen, your
-contributions are accepted under that license.
+Spectra is released under the [MIT License](LICENSE). By sending a pull
+request you agree that your contribution is licensed under the same terms.
+Do not submit code you cannot license that way (for example, code copied
+from a GPL project).

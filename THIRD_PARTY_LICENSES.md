@@ -1,7 +1,7 @@
 # Third-party components
 
-Spectra builds on the code, data and models listed here. Each keeps its own
-license. Anyone who ships a binary (an APK, an IPA, a firmware image) has to
+Spectra's own code is under the [MIT License](LICENSE). It builds on the
+code, data and models listed here, and each of them keeps its own license. Anyone who ships a binary (an APK, an IPA, a firmware image) has to
 pass on the notices that the right-hand column asks for, usually by including
 the license text in the app's "About" or "Licenses" screen.
 
