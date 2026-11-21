@@ -1506,3 +1506,14 @@ Read over GATT: %d services, %d characteristics; nothing was written.	Прочи
 Fold	Свернуть
 All %d	Все %d
 Trackers: %d, all near their owners	Трекеры: %d, все рядом с владельцами
+Licenses	Лицензии
+Licenses…	Лицензии…
+Open the project page	Открыть страницу проекта
+Version %s	Версия %s
+Notice	Уведомление
+This app	Это приложение
+Libraries	Библиотеки
+Sensor firmware	Прошивка сенсора
+Data	Данные
+Spectra is open source: github.com/CattivoLe/Spectra	У Spectra открытый исходный код: github.com/CattivoLe/Spectra
+The app carries firmware images for flashing the sensor; these are the parts built into them.	В приложении есть образы прошивки для сенсора; вот что в них входит.

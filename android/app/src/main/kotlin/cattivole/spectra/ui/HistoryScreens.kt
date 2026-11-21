@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Place
 import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Gavel
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
@@ -220,6 +221,14 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
                         onClick = {
                             menu = false
                             showSettings = true
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(tr("Licenses…")) },
+                        leadingIcon = { Icon(Icons.Rounded.Gavel, null) },
+                        onClick = {
+                            menu = false
+                            nav.licenses()
                         },
                     )
                     if (shown.isNotEmpty()) {

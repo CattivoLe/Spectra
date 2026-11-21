@@ -503,6 +503,13 @@ private struct HistorySettingsView: View {
                 } footer: {
                     Text("When on, Wi‑Fi, LAN and Bluetooth scans are kept in History on their own. Scans of the same kind, on the same day, in the same place are merged into one session instead of piling up.")
                 }
+                Section {
+                    NavigationLink {
+                        LicensesView()
+                    } label: {
+                        Label("Licenses", systemImage: "doc.text")
+                    }
+                }
             }
             .navigationTitle("History settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -512,7 +519,7 @@ private struct HistorySettingsView: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 }
 

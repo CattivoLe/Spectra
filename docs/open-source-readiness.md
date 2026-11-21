@@ -320,7 +320,10 @@ AndroidKeyStore); на устройстве миграцию не проверя
    - подпись OSM → «© OpenStreetMap contributors»;
    - закрепить версию M5Cardputer в `platformio.ini`;
    - добавить скрипт или заметку, откуда и когда взяты `ble-*.tsv`;
-   - экран «Лицензии» в приложениях (MIT/BSD требуют атрибуции в бинарях);
+   - ~~экран «Лицензии» в приложениях~~ — сделан 2026-11-21 (Android: История
+     → ⋮ → Лицензии; iOS: История → Настройки → Лицензии), данные в
+     `data/spectra/licenses.json`. Полный текст лицензии BoringSSL не встроен,
+     только NOTICE SwiftNIO SSL со ссылкой на него;
    - app group и bundle id расширения зашиты как `cattivole.Spectra…`
      (entitlements, `TrafficSniffer.swift`, `PacketTunnelProvider.swift`,
      pbxproj) — форку приходится править 5 мест; можно вынести в xcconfig.

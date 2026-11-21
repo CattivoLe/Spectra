@@ -159,6 +159,8 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
     fun decodeCapture(name: String) = nav.navigate("capture-pcap/${Uri.encode(name)}")
     fun history(id: String) = nav.navigate("history/${Uri.encode(id)}")
     fun sensorTab() = nav.navigate("sensor")
+    fun licenses() = nav.navigate("licenses")
+    fun license(index: Int) = nav.navigate("licenses/$index")
 }
 
 @Composable
@@ -335,6 +337,8 @@ fun SpectraApp(model: SpectraModel) {
                     composable(Tab.History.start) { HistoryScreen(model, navigator) }
                     composable("${Tab.History.cardRoute}/{id}") { summaryCard(model, navigator, it) }
                     composable("history/{id}") { HistoryDetail(model, navigator, it.text("id")) }
+                    composable("licenses") { LicensesScreen(navigator) }
+                    composable("licenses/{index}") { LicenseDetail(navigator, it.arguments?.getString("index")?.toIntOrNull() ?: -1) }
                     composable("saved/network/{entry}/{id}") { NetworkDetail(model, navigator, it.mac("id"), it.text("entry")) }
                     composable("saved/client/{entry}/{mac}") { ClientDetail(model, navigator, it.mac("mac"), it.text("entry")) }
                     composable("saved/host/{entry}/{ip}") { LanDetail(model, navigator, it.text("ip"), it.text("entry")) }

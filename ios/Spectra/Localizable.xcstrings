@@ -13625,6 +13625,116 @@
           }
         }
       }
+    },
+    "Licenses": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Лицензии"
+          }
+        }
+      }
+    },
+    "Version": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Версия"
+          }
+        }
+      }
+    },
+    "License": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Лицензия"
+          }
+        }
+      }
+    },
+    "Project page": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Страница проекта"
+          }
+        }
+      }
+    },
+    "Notice": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Уведомление"
+          }
+        }
+      }
+    },
+    "This app": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Это приложение"
+          }
+        }
+      }
+    },
+    "Libraries": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Библиотеки"
+          }
+        }
+      }
+    },
+    "Sensor firmware": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Прошивка сенсора"
+          }
+        }
+      }
+    },
+    "Data": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Данные"
+          }
+        }
+      }
+    },
+    "Spectra is open source: github.com/CattivoLe/Spectra": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "У Spectra открытый исходный код: github.com/CattivoLe/Spectra"
+          }
+        }
+      }
+    },
+    "The app carries firmware images for flashing the sensor; these are the parts built into them.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В приложении есть образы прошивки для сенсора; вот что в них входит."
+          }
+        }
+      }
     }
   },
   "version": "1.1"

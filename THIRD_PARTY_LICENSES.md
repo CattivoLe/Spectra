@@ -5,6 +5,13 @@ code, data and models listed here, and each of them keeps its own license. Anyon
 pass on the notices that the right-hand column asks for, usually by including
 the license text in the app's "About" or "Licenses" screen.
 
+Both apps have that screen (Android: History → ⋮ → Licenses; iOS: History →
+Settings → Licenses). It reads `data/spectra/licenses.json`: one entry per
+component with its copyright line, any NOTICE it asks for and the platforms it
+ships on, plus the full license texts, taken from the components' own license
+files. When a dependency is added or updated, update that file together with
+this table.
+
 "In repo" means the source is committed here. "Fetched" means a build script
 or a package manager downloads it. "Downloaded by the app" means the user's
 phone fetches it at run time; it is never part of this repository or of a
