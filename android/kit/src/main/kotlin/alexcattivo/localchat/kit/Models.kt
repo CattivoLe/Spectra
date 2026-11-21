@@ -15,11 +15,16 @@ data class Chat(
     val personaID: UUID? = null,
     /** Название модели, с которой диалог вёлся в последний раз. */
     val modelName: String? = null,
+    /** The folder the chat was put in; `null` — not in any. */
+    val folderID: UUID? = null,
 ) {
     companion object {
         const val DEFAULT_SYSTEM_PROMPT = ""
     }
 }
+
+/** A folder of chats, made by the user. */
+data class ChatFolder(val id: UUID, val name: String, val createdAt: Long)
 
 /** Одно сообщение диалога. */
 data class StoredMessage(

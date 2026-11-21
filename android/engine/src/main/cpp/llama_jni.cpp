@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <atomic>
 
 #include "llama.h"
 #include "ggml-backend.h"
@@ -79,6 +80,16 @@ JNIEXPORT void JNICALL JNI(freeModel)(JNIEnv *, jobject, jlong model) {
     if (model) llama_model_free(as_model(model));
 }
 
+// Stop requested: llama.cpp checks this between the nodes of a graph, so a 512-token batch of the prompt stops within
+// a fraction of a second instead of finishing first (tens of seconds deep into a chat on a phone CPU).
+static std::atomic<bool> g_abort{false};
+
+static bool abort_requested(void *) { return g_abort.load(std::memory_order_relaxed); }
+
+JNIEXPORT void JNICALL JNI(setAbort)(JNIEnv *, jobject, jboolean value) {
+    g_abort.store(value == JNI_TRUE, std::memory_order_relaxed);
+}
+
 JNIEXPORT jlong JNICALL JNI(newContext)(JNIEnv *, jobject, jlong model, jint contextLength, jint batch, jint threads) {
     llama_context_params params = llama_context_default_params();
     params.n_ctx = static_cast<uint32_t>(contextLength);
@@ -86,6 +97,8 @@ JNIEXPORT jlong JNICALL JNI(newContext)(JNIEnv *, jobject, jlong model, jint con
     params.n_ubatch = static_cast<uint32_t>(batch);
     params.n_threads = threads;
     params.n_threads_batch = threads;
+    params.abort_callback = abort_requested;
+    params.abort_callback_data = nullptr;
     return reinterpret_cast<jlong>(llama_init_from_model(as_model(model), params));
 }
 

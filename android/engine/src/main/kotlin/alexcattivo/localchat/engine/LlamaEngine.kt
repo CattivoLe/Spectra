@@ -121,8 +121,18 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
                 close(error)
             }
         }
-        // Остановка — флаг, который движок проверяет перед каждым токеном: прервать вызов llama.cpp посреди нельзя.
-        awaitClose { cancelled.set(true); job.cancel() }
+        // Остановка — флаг перед каждым токеном и пакетом, а посреди пакета — abort-callback llama.cpp.
+        awaitClose {
+            if (job.isActive) {
+                cancelled.set(true)
+                LlamaNative.setAbort(true)
+            }
+            job.cancel()
+        }
+    }
+
+    override fun abort() {
+        if (model != 0L) LlamaNative.setAbort(true)
     }
 
     override suspend fun countTokens(messages: List<ChatMessage>, thinking: Boolean): Int? = withContext(dispatcher) {
@@ -137,6 +147,7 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
             if (utilityContext == 0L) throw EngineException.ContextCreationFailed()
         }
         val ctx = utilityContext
+        LlamaNative.setAbort(false)
         LlamaNative.memoryClear(ctx)
         val started = System.nanoTime()
         val tokens = tokenize(render(messages, false))
@@ -152,6 +163,7 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
                 if (LlamaNative.isEndOfGeneration(model, token)) return@withContext bytes.toByteArray().decodeToString()
                 bytes.write(LlamaNative.tokenPiece(model, token))
                 val code = LlamaNative.decode(ctx, intArrayOf(token), 0, 1)
+                if (code == ABORTED) throw kotlinx.coroutines.CancellationException("stopped")
                 if (code != 0) throw EngineException.DecodeFailed(code)
             }
             bytes.toByteArray().decodeToString()
@@ -173,6 +185,8 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
         emit: (String) -> Unit,
     ): GenerationStats {
         if (model == 0L || context == 0L) throw EngineException.NoModelLoaded()
+        if (cancelled.get()) return GenerationStats(0, 0, 0, 0, 0.0, 0.0, StopReason.Cancelled)
+        LlamaNative.setAbort(false)
         val contextLength = LlamaNative.contextLength(context)
         val (tokens, dropped) = preparePrompt(messages, params, contextLength)
 
@@ -221,6 +235,11 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
                 val stop = pendingSave?.let { if (offset < it.prefix.size) it.prefix.size else null } ?: tokens.size
                 val count = minOf(BATCH, stop - offset)
                 val code = LlamaNative.decode(context, tokens, offset, count)
+                if (code == ABORTED) {
+                    // llama.cpp already dropped the unfinished batch; what was computed before it stays for "Continue".
+                    if (!LlamaNative.memoryRemoveFrom(context, offset)) resetCache()
+                    return GenerationStats(tokens.size, reused, dropped, 0, seconds(start), 0.0, StopReason.Cancelled)
+                }
                 if (code != 0) {
                     resetCache()
                     throw EngineException.DecodeFailed(code)
@@ -271,6 +290,11 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
                     break
                 }
                 val code = LlamaNative.decode(context, intArrayOf(token), 0, 1)
+                if (code == ABORTED) {
+                    if (!LlamaNative.memoryRemoveFrom(context, cache.size)) resetCache()
+                    stopReason = StopReason.Cancelled
+                    break
+                }
                 if (code != 0) {
                     resetCache()
                     throw EngineException.DecodeFailed(code)
@@ -428,6 +452,7 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
         while (offset < tokens.size) {
             val count = minOf(BATCH, tokens.size - offset)
             val code = LlamaNative.decode(ctx, tokens, offset, count)
+            if (code == ABORTED) throw kotlinx.coroutines.CancellationException("stopped")
             if (code != 0) throw EngineException.DecodeFailed(code)
             offset += count
         }
@@ -437,6 +462,8 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
 
     companion object {
         private const val BATCH = 512
+        /** What llama_decode returns when the abort callback broke the batch off. */
+        private const val ABORTED = 2
         private const val UTILITY_CONTEXT = 3072
         const val TRIGGERED_ROOT = "triggered-root"
 

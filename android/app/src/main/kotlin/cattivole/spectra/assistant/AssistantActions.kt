@@ -53,6 +53,9 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
             // Questions about the user's own network are answered from the app; the web adds nothing but a wait.
             skipsWebSearch = AssistantDigest::answersFromApp,
             offer = ::offer,
+            suggest = { answer, ran ->
+                suggestedOffers(answer, ran, sources.model.ble.devices.values, sources.model.lan.devices.map { PortTarget(it.ipAddress, it.isGateway) })
+            },
             runningLabel = ::runningLabel,
             run = { name, args -> run(name, args) },
         )
@@ -415,6 +418,69 @@ Leave "host" out for a general note. To remove a note:
             Name.REMEMBER, Name.FORGET, null -> null
         }
 
+        /**
+         * Next steps the answer put in plain words, as buttons: «Проверьте открытые порты на `192.168.1.1`» offers a
+         * port scan of that host. Only sentences that advise or offer something are read — «сканирование показало…»
+         * reports, it does not suggest — and checks that already ran for this answer are left out.
+         */
+        fun suggestedOffers(
+            answer: String,
+            ran: Collection<String>,
+            devices: Collection<BleDevice>,
+            hosts: Collection<PortTarget>,
+        ): List<ToolOffer> {
+            val found = linkedMapOf<String, ToolOffer>()
+            // Last sentences first: the closing «хотите, проверю…» is the step the answer leads to, and only three
+            // buttons are shown.
+            for (sentence in answer.split(SENTENCE_BREAK).asReversed()) {
+                val text = sentence.trim().trim('*', '-', '•', ' ').replace("`", "")
+                if (text.length < 6 || !advises(text)) continue
+                for (call in preflightCalls(text, devices, hosts)) {
+                    val offer = offerFor(call) ?: continue
+                    if (offer.name in ran) continue
+                    found.putIfAbsent(offer.request ?: offer.name, offer)
+                }
+            }
+            return found.values.toList()
+        }
+
+        private val SENTENCE_BREAK = Regex("""(?<=[.!?…])\s+|\n+""")
+        // No (?U): Android's regex engine rejects it, so letters are spelled as \p{L}.
+        private val IMPERATIVE = Regex("""(?<![\p{L}\p{N}_])\p{L}{3,}(?:йте|ите|ьте)(?![\p{L}\p{N}_])""")
+        private val ENGLISH_IMPERATIVES = setOf("scan", "rescan", "check", "run", "test", "measure", "try", "consider", "connect", "read")
+
+        /** Whether a sentence advises the user or offers a step, rather than reporting what was found. */
+        fun advises(sentence: String): Boolean {
+            val text = sentence.lowercase()
+            if (AssistantDigest.matches(Stems.advice, text) || IMPERATIVE.containsMatchIn(text)) return true
+            // A question in an answer is an offer: «Проверить подключение к интернету?»
+            if (text.trimEnd().endsWith("?")) return true
+            // English imperative: «Run a speed test», «Check the router's ports».
+            return text.split(Regex("""\s+""")).firstOrNull().orEmpty() in ENGLISH_IMPERATIVES
+        }
+
+        /** A preflight call (a bare name or a whole JSON object) as a button with the question that runs it. */
+        private fun offerFor(call: String): ToolOffer? {
+            if (!call.startsWith("{")) return offer(call)?.takeIf { it.request != null }
+            val json = runCatching { JSONObject(call) }.getOrNull() ?: return null
+            val name = json.optString("tool")
+            return when (Name.of(name)) {
+                Name.SCAN_PORTS -> {
+                    val host = json.optString("host").takeIf { it.isNotEmpty() } ?: return null
+                    if (json.optString("text") == "all") {
+                        ToolOffer(name, tr("a port scan"), tr("Scan every port of %s?", host), tr("Scan all ports of %s", host))
+                    } else {
+                        ToolOffer(name, tr("a port scan"), tr("Scan the ports of %s?", host), tr("Scan the ports of %s", host))
+                    }
+                }
+                Name.CONNECT_BLUETOOTH -> {
+                    val device = json.optString("text").takeIf { it.isNotEmpty() } ?: return null
+                    ToolOffer(name, tr("a connection to the device"), tr("Read “%s” over Bluetooth?", device), tr("Connect to %s and read its data", device))
+                }
+                else -> offer(name)?.takeIf { it.request != null }
+            }
+        }
+
         /** A tool that ran, in words, for the note under the answer: «Ran: network scan», not «scan_lan». */
         fun title(name: String): String = when (Name.of(name)) {
             Name.SCAN_WIFI -> tr("Wi‑Fi scan")
@@ -467,6 +533,12 @@ Leave "host" out for a general note. To remove a note:
     }
 
     private object Stems {
+        /** Words of advice and offers: «рекомендую», «стоит», «можно», «хотите, я…», «I suggest». */
+        val advice = listOf(
+            "recommend", "suggest", "should", "you can", "you could", "you may", "worth", "next step", "want me", "i can", "let me",
+            "рекоменд", "совет", "стоит", "можно", "имеет смысл", "предлага", "следует", "нужно", "надо", "хотите", "давайте",
+            "следующий шаг", "дальше", "далее", "могу", "например",
+        )
         /** Asking about what was saved earlier rather than what is around now. */
         val history = listOf(
             "history", "earlier", "previously", "last time", "last week", "yesterday", "saved session", "seen before",

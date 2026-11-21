@@ -141,13 +141,44 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
     }
 
     /** Questions another screen asked to put to a new chat as soon as it opens, by chat id. */
-    private val queued = mutableMapOf<UUID, String>()
+    private val queued = androidx.compose.runtime.mutableStateMapOf<UUID, String>()
 
     fun queue(question: String, chat: UUID) {
         queued[chat] = question
     }
 
     fun takeQueuedQuestion(chat: UUID): String? = queued.remove(chat)
+
+    /** The question waiting for the model in this chat: shown instead of the starters, which it would make moot. */
+    fun queuedQuestion(chat: UUID): String? = queued[chat]
+
+    /** A new chat (in [folder]) with [question] asked as soon as the model is there. Returns its id to open. */
+    suspend fun ask(question: String, folder: UUID? = null): UUID {
+        ensureStarted()
+        val chat = store.createChat(folderID = folder)
+        queue(question, chat.id)
+        return chat.id
+    }
+
+    /**
+     * Open chats, kept while the app runs: leaving a chat pauses its answer, and coming back finds the same session —
+     * with the checks it ran, its offers and what was attached — so "Continue" picks up instead of starting over.
+     */
+    private val sessions = mutableMapOf<UUID, ChatSession>()
+
+    suspend fun openSession(id: UUID): ChatSession? {
+        sessions[id]?.let { return it }
+        val chat = store.chat(id) ?: return null
+        return session(chat).also {
+            it.load()
+            sessions[id] = it
+        }
+    }
+
+    suspend fun deleteChat(id: UUID) {
+        sessions.remove(id)?.stop()
+        store.deleteChat(id)
+    }
 
     fun refreshModels() {
         library.refreshInstalled()
@@ -211,11 +242,18 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
         session.tools = actions.registry
         session.recallsPastChats = true
         session.earlierChatsTopic = tr("Earlier chats")
+        session.polish = AssistantText::polish
+        session.asksForImages = AssistantText::asksForPicture
+        session.showsImagesToo = AssistantText::asksWhatDeviceIs
         return session
     }
 
     /** Erases every chat. Models and settings stay. */
-    suspend fun eraseChats() = store.deleteEverything()
+    suspend fun eraseChats() {
+        sessions.values.forEach { it.stop() }
+        sessions.clear()
+        store.deleteEverything()
+    }
 
     fun handleMemoryWarning() {
         scope.launch { controller.handleMemoryWarning() }

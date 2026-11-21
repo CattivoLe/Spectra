@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -105,6 +106,24 @@ data class FlashTarget(
     val asset: String,
 )
 
+/**
+ * Where pio put a board's build. `firmware/.pio` is not in git, so a worktree has none of its own: there the main
+ * checkout's builds are used, otherwise an APK built in a worktree carried no firmware at all.
+ */
+fun firmwareBuild(env: String): File {
+    val own = rootProject.file("../firmware/.pio/build/$env")
+    if (own.resolve("firmware.bin").isFile) return own
+    val dotGit = rootProject.file("../.git")
+    if (dotGit.isFile) {
+        // "gitdir: <main>/.git/worktrees/<name>"
+        val gitDir = dotGit.readText().lineSequence().firstOrNull { it.startsWith("gitdir:") }?.removePrefix("gitdir:")?.trim()
+        val main = gitDir?.let { File(it).parentFile?.parentFile?.parentFile }
+        val shared = main?.resolve("firmware/.pio/build/$env")
+        if (shared != null && shared.resolve("firmware.bin").isFile) return shared
+    }
+    return own
+}
+
 val flashTargets = listOf(
     FlashTarget("m5stack-cardputer-adv", "esp32s3", 8L * 1024 * 1024, 0L, "spectra-flash-esp32s3.zip"),
     FlashTarget("esp32-c5-n4", "esp32c5", 4L * 1024 * 1024, 0x2000L, "spectra-flash-esp32c5.zip"),
@@ -113,7 +132,7 @@ val flashTargets = listOf(
 
 tasks.register("packFlashBundle") {
     flashTargets.forEach { target ->
-        val built = rootProject.file("../firmware/.pio/build/${target.env}")
+        val built = firmwareBuild(target.env)
         inputs.files(
             built.resolve("bootloader.bin"),
             built.resolve("partitions.bin"),
@@ -125,14 +144,14 @@ tasks.register("packFlashBundle") {
         val dir = flashAssets.get().asFile
         dir.mkdirs()
         val otadata = listOf(
-            rootProject.file("../firmware/.pio/build/m5stack-cardputer-adv/boot_app0.bin"),
-            rootProject.file("../firmware/.pio/build/esp32-c5-n4/boot_app0.bin"),
-            rootProject.file("../firmware/.pio/build/esp32-wroom32-ch340/boot_app0.bin"),
+            firmwareBuild("m5stack-cardputer-adv").resolve("boot_app0.bin"),
+            firmwareBuild("esp32-c5-n4").resolve("boot_app0.bin"),
+            firmwareBuild("esp32-wroom32-ch340").resolve("boot_app0.bin"),
             file("${System.getProperty("user.home")}/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"),
         ).firstOrNull { it.isFile }
         var cardputer: java.io.File? = null
         for (target in flashTargets) {
-            val built = rootProject.file("../firmware/.pio/build/${target.env}")
+            val built = firmwareBuild(target.env)
             val zipFile = dir.resolve(target.asset)
             val bootloader = built.resolve("bootloader.bin")
             val partitions = built.resolve("partitions.bin")

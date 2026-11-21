@@ -19,6 +19,8 @@ internal object LlamaNative {
     external fun freeModel(model: Long)
     external fun newContext(model: Long, contextLength: Int, batch: Int, threads: Int): Long
     external fun freeContext(context: Long)
+    /** Asks llama.cpp to drop the batch it is computing; decode then returns 2. Cleared before each new job. */
+    external fun setAbort(value: Boolean)
     external fun contextLength(context: Long): Int
     external fun modelDescription(model: Long): String
     external fun parameterCount(model: Long): Long

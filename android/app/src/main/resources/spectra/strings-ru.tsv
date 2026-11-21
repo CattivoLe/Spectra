@@ -1376,3 +1376,28 @@ device connection	подключение к устройству
 History search	поиск по истории
 saving a note	сохранение заметки
 removing a note	удаление заметки
+Scan every port of %s?	Просканировать все порты %s?
+Scan all ports of %s	Просканируй все порты %s
+Scan the ports of %s?	Просканировать порты %s?
+Scan the ports of %s	Просканируй порты %s
+Read “%s” over Bluetooth?	Прочитать «%s» по Bluetooth?
+Connect to %s and read its data	Подключись к %s и прочитай его данные
+Every chat and folder is erased from this phone. Models, the dossier and settings stay.	С телефона стираются все диалоги и папки. Модели, досье и настройки остаются.
+New folder	Новая папка
+Rename folder	Переименовать папку
+Folder	Папка
+Delete folder	Удалить папку
+New folder…	Новая папка…
+The folder is empty	Папка пуста
+Hold a chat in the list and choose Move to folder, or start a new chat here.	Удерживайте диалог в списке и выберите «Переместить в папку» или начните новый диалог здесь.
+Hold a chat to move it to a folder or delete it.	Удерживайте диалог, чтобы переместить его в папку или удалить.
+Move to folder…	Переместить в папку…
+Move to folder	Переместить в папку
+No folder	Без папки
+The answer was paused when you left the chat.	Ответ приостановлен: вы ушли из диалога.
+Pictures for «%s»	Картинки по запросу «%s»
+Pictures come from a web search: turn it on under Internet to see them.	Картинки ищутся в интернете: включите поиск в разделе «Интернет», чтобы их увидеть.
+What is the Bluetooth device “%s” (%s): what kind of device is it, and what does it advertise about itself?	Что за Bluetooth-устройство «%s» (%s): какого оно типа и что сообщает о себе в эфире?
+What is the device %s (%s) on my local network, and what deserves attention about it?	Что за устройство %s (%s) в моей локальной сети и на что в нём стоит обратить внимание?
+Open the page	Открыть страницу
+The answer did not finish.	Ответ не закончен.

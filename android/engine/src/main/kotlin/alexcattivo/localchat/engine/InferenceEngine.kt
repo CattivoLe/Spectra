@@ -96,6 +96,8 @@ interface InferenceEngine {
     suspend fun load(path: String, config: EngineConfig): ModelInfo
     suspend fun unload()
     fun generate(messages: List<ChatMessage>, params: GenerationParams): Flow<GenerationEvent>
+    /** Breaks off whatever the engine is computing right now, mid-batch if it can. */
+    fun abort() {}
 
     /** Сколько токенов займёт этот диалог в контексте, без обрезки старого. `null`, если считать нечем. */
     suspend fun countTokens(messages: List<ChatMessage>, thinking: Boolean): Int? = null

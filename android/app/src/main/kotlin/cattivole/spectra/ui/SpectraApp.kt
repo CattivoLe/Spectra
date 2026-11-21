@@ -95,13 +95,7 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
     /** A ✨ button: a new chat about what this screen shows, asked as soon as the model is there. */
     fun askAssistant(model: cattivole.spectra.SpectraModel, question: String) {
         if (!cattivole.spectra.assistant.AssistantModel.isSupported) return
-        val assistant = model.assistant
-        assistant.ensureStarted()
-        kotlinx.coroutines.MainScope().launch {
-            val chat = assistant.store.createChat()
-            assistant.queue(question, chat.id)
-            chat(chat.id)
-        }
+        kotlinx.coroutines.MainScope().launch { chat(model.assistant.ask(question)) }
     }
 
     fun network(id: MacAddress, entry: String? = null) =

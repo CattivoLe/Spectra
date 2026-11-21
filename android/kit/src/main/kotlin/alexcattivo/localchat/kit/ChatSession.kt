@@ -41,6 +41,8 @@ sealed interface SearchNotice {
     data class Unavailable(val error: Throwable) : SearchNotice
     data class NothingFound(val query: String) : SearchNotice
     data class Failed(val error: Throwable) : SearchNotice
+    /** Pictures were asked for, but searching the web is off. */
+    data object ImagesNeedWeb : SearchNotice
 }
 
 /**
@@ -87,6 +89,24 @@ class ChatSession(
     /** Label for recalled earlier chats in [attachments] topics. Set by the app (translations live there). */
     var earlierChatsTopic = "Earlier chats"
 
+    /**
+     * The model is working on the prompt and has not written a word yet: after "Continue", after a tool result, or
+     * before the first word of an answer. The screen shows a "Thinking…" line for it instead of silence.
+     */
+    var awaitingText by mutableStateOf(false)
+        private set
+
+    /** Last touch on every visible piece of the answer: the app hides service words the model leaks. */
+    var polish: (String) -> String = { it }
+
+    /** Questions that ask to see something («как выглядит эта метка»). Set by the app. */
+    var asksForImages: (String) -> Boolean = { false }
+    /**
+     * Questions that get pictures without asking («что за устройство…»), when web search is on. Quietly: no notice
+     * when search is off or nothing is found, and no search when the model cannot name a product.
+     */
+    var showsImagesToo: (String) -> Boolean = { false }
+
     /** Какое действие модели сейчас выполняется (код действия). `null`, когда ничего. */
     var toolStatus by mutableStateOf<String?>(null)
         private set
@@ -125,6 +145,8 @@ class ChatSession(
 
     private var task: Job? = null
     private var lastDropped = 0
+    /** Checks the app ran before answering each question (call JSON → result), kept so a resumed answer reuses them. */
+    private val preflightRuns = mutableMapOf<java.util.UUID, MutableList<Pair<String, String>>>()
 
     private val systemPrompt: String get() = persona?.systemPrompt ?: chat.systemPrompt
 
@@ -216,6 +238,23 @@ class ChatSession(
         }
     }
 
+    /** The question is still waiting for its answer: it was paused before the model wrote anything. */
+    val isUnanswered: Boolean get() = !isGenerating && messages.lastOrNull()?.role == ChatMessage.Role.User
+
+    /**
+     * Picks up where a paused answer stopped: an answer cut short is continued, a question left without one is
+     * answered — reusing the checks already run for it and what was attached, so nothing is scanned twice.
+     */
+    fun resume() {
+        val last = messages.lastOrNull() ?: return
+        if (isGenerating) return
+        if (last.role == ChatMessage.Role.Assistant) {
+            if (last.interrupted && last.content.isNotEmpty()) continueGenerating()
+            return
+        }
+        start(resuming = true) {}
+    }
+
     /** Дописывает оборванный ответ с того места, где он остановился. Модель продолжает ту же реплику. */
     fun continueGenerating() {
         val last = messages.lastOrNull() ?: return
@@ -266,7 +305,7 @@ class ChatSession(
 
     // MARK: - Внутреннее
 
-    private fun start(prepare: suspend () -> Unit) {
+    private fun start(resuming: Boolean = false, prepare: suspend () -> Unit) {
         isGenerating = true
         errorText = null
         task = scope.launch {
@@ -274,10 +313,14 @@ class ChatSession(
                 searchNotice = null
                 searchReused = null
                 prepare()
-                if (messages.lastOrNull()?.role == ChatMessage.Role.User) {
+                val last = messages.lastOrNull()
+                if (last?.role == ChatMessage.Role.User) {
                     searchIfNeeded()
-                    if (appDataProvider != null) attachAppData() else recallIfNeeded()
-                    generate()
+                    // A resumed question keeps what was attached to it: the prompt then matches what is in the cache.
+                    if (!(resuming && attachments.containsKey(last.id))) {
+                        if (appDataProvider != null) attachAppData() else recallIfNeeded()
+                    }
+                    generate(reusePreflight = resuming)
                 }
             } catch (_: CancellationException) {
             } catch (error: Throwable) {
@@ -295,7 +338,10 @@ class ChatSession(
     private suspend fun searchIfNeeded() {
         val web = web ?: return
         val index = messages.lastIndex
-        if (!isWebSearchOn || index < 0 || messages[index].role != ChatMessage.Role.User || messages[index].searchJson != null) return
+        if (index < 0 || messages[index].role != ChatMessage.Role.User || messages[index].searchJson != null) return
+        if (asksForImages(messages[index].content)) return searchImages(web, index, explicit = true)
+        if (isWebSearchOn && showsImagesToo(messages[index].content)) return searchImages(web, index, explicit = false)
+        if (!isWebSearchOn) return
         // Просьба что-то запомнить или забыть выполняется приложением, интернет для неё не нужен.
         val registry = tools
         if (registry != null && (registry.preflight(messages[index].content).isNotEmpty() || registry.skipsWebSearch(messages[index].content))) return
@@ -377,6 +423,73 @@ class ChatSession(
         }
     }
 
+    /**
+     * «Как выглядит эта метка»: pictures from the web search service, shown above the answer. The same switch, the
+     * same confirmation and the same log as a text search; the model only writes the query and a line about it.
+     */
+    private suspend fun searchImages(web: WebAccess, index: Int, explicit: Boolean) {
+        if (!isWebSearchOn) {
+            searchNotice = SearchNotice.ImagesNeedWeb
+            return
+        }
+        isSearching = true
+        searchStage = ResearchStage.Planning
+        try {
+            val question = messages[index].content
+            val history = messages.subList(0, index).map { it.asChatMessage }
+            val provider = try {
+                web.makeProvider()
+            } catch (error: WebSearchException) {
+                if (explicit) searchNotice = SearchNotice.Unavailable(error)
+                return
+            }
+            var query = alexcattivo.localchat.kit.web.ImageQuery.write(history, question, controller)
+                ?: if (explicit) searchQuery(question) else return
+            if (web.needsConfirmation(voiceMode)) {
+                if (voiceMode) {
+                    searchNotice = SearchNotice.VoiceNeedsNoConfirmation
+                    return
+                }
+                query = web.approve?.invoke(query) ?: run { if (explicit) searchNotice = SearchNotice.Cancelled; return }
+            }
+            query = query.trim()
+            if (query.isEmpty()) return
+            searchStage = ResearchStage.Searching
+            try {
+                var images = provider.searchImages(query, IMAGE_COUNT)
+                store.logSearch(query, provider.name, true)
+                // «Локатор tracker» finds nothing where «Локатор» does: one more try without the last word.
+                val shorter = query.substringBeforeLast(' ', "")
+                if (images.isEmpty() && shorter.isNotBlank()) {
+                    images = provider.searchImages(shorter, IMAGE_COUNT)
+                    store.logSearch(shorter, provider.name, true)
+                    if (images.isNotEmpty()) query = shorter
+                }
+                if (images.isEmpty()) {
+                    if (explicit) searchNotice = SearchNotice.NothingFound(query)
+                    return
+                }
+                val payload = SearchPayload(
+                    query = query,
+                    provider = provider.name,
+                    results = images.map { alexcattivo.localchat.kit.web.SearchResult(it.title, it.page, "") },
+                    images = images,
+                )
+                val json = payload.toJson()
+                store.setSearch(json, messages[index].id)
+                messages[index] = messages[index].copy(searchJson = json)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                store.logSearch(query, provider.name, false)
+                if (explicit) searchNotice = SearchNotice.Failed(error)
+            }
+        } finally {
+            isSearching = false
+            searchStage = null
+        }
+    }
+
     private suspend fun refreshChat() {
         store.chat(chat.id)?.let { chat = it }
     }
@@ -413,7 +526,7 @@ class ChatSession(
         if (earlier.isNotEmpty()) recollections[last.id] = earlier
     }
 
-    private suspend fun generate(continuing: Boolean = false) {
+    private suspend fun generate(continuing: Boolean = false, reusePreflight: Boolean = false) {
         val index: Int
         var assistant: StoredMessage
         val last = messages.lastOrNull()
@@ -427,6 +540,30 @@ class ChatSession(
             index = messages.lastIndex
         }
 
+        try {
+            generateInto(index, assistant, continuing, reusePreflight)
+        } catch (error: CancellationException) {
+            // Paused before the first word (the user left the chat): no empty answer is left behind, so the question
+            // shows as waiting and "Continue" answers it.
+            // Paused halfway: what was written stays, marked as cut short, so "Continue" shows on return.
+            val current = messages.getOrNull(index)
+            if (current != null && current.id == assistant.id) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    if (current.content.isBlank()) {
+                        store.deleteMessages(chat.id, assistant.seq)
+                        messages.removeAt(index)
+                    } else {
+                        store.update(current.id, current.content, interrupted = true)
+                        messages[index] = current.copy(interrupted = true)
+                    }
+                }
+            }
+            throw error
+        }
+    }
+
+    private suspend fun generateInto(index: Int, created: StoredMessage, continuing: Boolean, reusePreflight: Boolean) {
+        var assistant = created
         val history = buildHistory(messages.dropLast(1)).toMutableList()
         // Продолжение: начатый ответ стоит последним, и движок обрежет промпт сразу после него.
         val started = if (continuing) assistant.content.trimEnd() else ""
@@ -444,16 +581,26 @@ class ChatSession(
         // так, будто вызвала сама, и только отвечает по ним.
         val question = messages.getOrNull(index - 1)
         if (!continuing && registry != null && question != null && question.role == ChatMessage.Role.User) {
-            for (entry in registry.preflight(question.content).take(stepsLeft)) {
+            // Paused in the middle and resumed: the checks that finished are not run again.
+            val done = if (reusePreflight) preflightRuns[question.id].orEmpty() else emptyList()
+            val runs = done.toMutableList()
+            preflightRuns[question.id] = runs
+            for ((position, entry) in registry.preflight(question.content).take(stepsLeft).withIndex()) {
                 val call = ToolCalls.parse(registry.callTag + entry, registry.callTag)
                 val name = call?.name ?: entry
                 val args = call?.argsJSON ?: "{\"tool\": \"$entry\"}"
                 stepsLeft--
                 toolsUsed.add(name)
-                toolStatus = name
                 history.add(ChatMessage(ChatMessage.Role.Assistant, registry.callTag + args))
-                val result = registry.run(name, args)
-                toolStatus = null
+                val result = done.getOrNull(position)?.takeIf { it.first == args }?.second ?: run {
+                    toolStatus = name
+                    try {
+                        registry.run(name, args)
+                    } finally {
+                        toolStatus = null
+                    }
+                }
+                if (position >= runs.size) runs.add(args to result)
                 history.add(ChatMessage(ChatMessage.Role.User, ToolCalls.resultPrompt(name, result)))
             }
         }
@@ -470,13 +617,16 @@ class ChatSession(
                 var attempt = params.copy(seed = Random.nextInt())
                 if (voiceMode) attempt = attempt.copy(maxTokens = minOf(attempt.maxTokens, 220))
                 if (registry != null && stepsLeft > 0) attempt = attempt.copy(grammar = registry.grammar, grammarTriggers = listOf(registry.callTag))
+                awaitingText = true
                 controller.send(history, attempt).collect { event ->
                     when (event) {
                         is GenerationEvent.Text -> {
+                            awaitingText = false
                             text.append(event.piece)
                             // Вызов действия не показываем и не озвучиваем: это служебный текст.
                             val visible = ToolCalls.visiblePart(text.toString(), tag)
-                            messages[index] = messages[index].copy(content = registry?.let { ToolCalls.humanize(prefix + visible, it.offer).first } ?: (prefix + visible))
+                            val shown = registry?.let { ToolCalls.humanize(prefix + visible, it.offer).first } ?: (prefix + visible)
+                            messages[index] = messages[index].copy(content = polish(shown))
                             if (visible.length > spoken) {
                                 onPiece?.invoke(visible.substring(spoken))
                                 spoken = visible.length
@@ -494,11 +644,14 @@ class ChatSession(
                     }
                 }
             } catch (error: CancellationException) {
+                awaitingText = false
                 throw error
             } catch (error: Throwable) {
                 failure = error
                 finalText = prefix + ToolCalls.visiblePart(text.toString(), tag)
                 break
+            } finally {
+                awaitingText = false
             }
 
             val call = if (registry != null && stepsLeft > 0) ToolCalls.parse(text.toString(), registry.callTag) else null
@@ -528,8 +681,17 @@ class ChatSession(
         }
 
         // Служебные имена действий — словами, а сами действия — предложением под ответом.
-        val offered = registry?.let { ToolCalls.humanize(finalText, it.offer, toolsUsed) }
+        val offered = registry?.let { reg ->
+            ToolCalls.humanize(finalText, reg.offer, toolsUsed + toolRuns[assistant.id].orEmpty())
+        }
         if (offered != null) finalText = offered.first
+        finalText = polish(finalText)
+        // Next steps the answer put in words («проверьте порты роутера») become buttons too — but not the checks this
+        // answer already ran, also before a pause it was continued from.
+        val ran = toolsUsed + toolRuns[assistant.id].orEmpty() +
+            preflightRuns[question?.id].orEmpty().mapNotNull { ToolCalls.argument(it.first, "tool") }
+        val suggested = registry?.suggest?.invoke(finalText, ran).orEmpty()
+        val nextSteps = (offered?.second.orEmpty() + suggested).distinctBy { it.request ?: it.name }
 
         if (finalText.isBlank()) {
             // Ничего не получено: пустое сообщение не оставляем.
@@ -540,7 +702,7 @@ class ChatSession(
             assistant = assistant.copy(content = finalText, interrupted = !complete)
             messages[index] = assistant
             if (toolsUsed.isNotEmpty()) toolRuns[assistant.id] = (toolRuns[assistant.id] ?: emptyList()) + toolsUsed
-            offered?.second?.takeIf { it.isNotEmpty() }?.let { offers[assistant.id] = it.take(3) }
+            nextSteps.takeIf { it.isNotEmpty() }?.let { offers[assistant.id] = it.take(3) }
             store.update(assistant.id, finalText, interrupted = !complete)
         }
         failure?.let { throw it }
@@ -573,6 +735,9 @@ class ChatSession(
             chosen = chosen.trim()
             return if (chosen.length > 150) chosen.take(150) else chosen
         }
+
+        /** How many pictures one «как выглядит» question brings. */
+        const val IMAGE_COUNT = 6
 
         const val VOICE_INSTRUCTION =
             "Сейчас ты говоришь голосом, и твой ответ будет произнесён вслух. Отвечай на языке собеседника, " +

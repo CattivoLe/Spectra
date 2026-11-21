@@ -102,6 +102,8 @@ class EngineController(private val engine: InferenceEngine) {
     fun stop() {
         generation?.cancel()
         generation = null
+        // A batch of the prompt can take tens of seconds: break it off instead of waiting for its end.
+        engine.abort()
     }
 
     /** Система просит освободить память (onTrimMemory). */

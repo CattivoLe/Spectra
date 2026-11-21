@@ -27,6 +27,11 @@ class ToolRegistry(
      * и можно ли предложить его кнопкой. `null` — имя не из этого набора, текст не трогается.
      */
     val offer: (String) -> ToolOffer? = { null },
+    /**
+     * Next steps an answer put in plain words («проверьте открытые порты роутера»), offered as buttons under it.
+     * Gets the final answer and the tools that already ran for it.
+     */
+    val suggest: (answer: String, ran: Collection<String>) -> List<ToolOffer> = { _, _ -> emptyList() },
     /** Код действия для подписи на экране, пока оно выполняется. */
     val runningLabel: (String) -> String = { it },
     /** Выполняет вызов и возвращает текст для модели. Не бросает ошибок: неудача — тоже текст для модели. */

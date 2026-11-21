@@ -67,6 +67,10 @@ class ChatStore(
                     query TEXT NOT NULL, terms TEXT NOT NULL, gathered TEXT NOT NULL)""")
                 execute("CREATE INDEX websearch_cache_on_provider ON websearch_cache(provider, date)")
             },
+            {
+                execute("CREATE TABLE folder (id TEXT PRIMARY KEY, name TEXT NOT NULL, createdAt INTEGER NOT NULL)")
+                execute("ALTER TABLE chat ADD COLUMN folderID TEXT REFERENCES folder(id) ON DELETE SET NULL")
+            },
         )
         database.execute("PRAGMA foreign_keys = ON")
         val current = database.userVersion
@@ -89,17 +93,43 @@ class ChatStore(
 
     // MARK: - Диалоги
 
-    suspend fun createChat(systemPrompt: String = Chat.DEFAULT_SYSTEM_PROMPT, persona: Persona? = null): Chat {
+    suspend fun createChat(systemPrompt: String = Chat.DEFAULT_SYSTEM_PROMPT, persona: Persona? = null, folderID: UUID? = null): Chat {
         val now = System.currentTimeMillis()
-        val chat = Chat(UUID.randomUUID(), "", persona?.systemPrompt ?: systemPrompt, now, now, persona?.id, null)
+        val chat = Chat(UUID.randomUUID(), "", persona?.systemPrompt ?: systemPrompt, now, now, persona?.id, null, folderID)
         write {
             execute(
-                "INSERT INTO chat (id, title, systemPrompt, createdAt, updatedAt, personaID) VALUES (?, ?, ?, ?, ?, ?)",
-                chat.id.toString(), chat.title, chat.systemPrompt, now, now, chat.personaID?.toString(),
+                "INSERT INTO chat (id, title, systemPrompt, createdAt, updatedAt, personaID, folderID) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                chat.id.toString(), chat.title, chat.systemPrompt, now, now, chat.personaID?.toString(), folderID?.toString(),
             )
         }
         return chat
     }
+
+    // MARK: - Folders
+
+    suspend fun folders(): List<ChatFolder> = read {
+        query("SELECT * FROM folder ORDER BY name COLLATE NOCASE").map {
+            ChatFolder(UUID.fromString(it.string("id")), it.string("name"), it.long("createdAt"))
+        }
+    }
+
+    suspend fun createFolder(name: String): ChatFolder {
+        val folder = ChatFolder(UUID.randomUUID(), name.trim(), System.currentTimeMillis())
+        write { execute("INSERT INTO folder (id, name, createdAt) VALUES (?, ?, ?)", folder.id.toString(), folder.name, folder.createdAt) }
+        return folder
+    }
+
+    suspend fun renameFolder(id: UUID, name: String) =
+        write { execute("UPDATE folder SET name = ? WHERE id = ?", name.trim(), id.toString()) }
+
+    /** Deletes the folder only: its chats stay, outside any folder. */
+    suspend fun deleteFolder(id: UUID) = write {
+        execute("UPDATE chat SET folderID = NULL WHERE folderID = ?", id.toString())
+        execute("DELETE FROM folder WHERE id = ?", id.toString())
+    }
+
+    suspend fun moveChat(chatID: UUID, folderID: UUID?) =
+        write { execute("UPDATE chat SET folderID = ? WHERE id = ?", folderID?.toString(), chatID.toString()) }
 
     suspend fun chats(): List<Chat> = read { query("SELECT * FROM chat ORDER BY updatedAt DESC").map(::chat) }
 
@@ -117,6 +147,7 @@ class ChatStore(
         write {
             execute("DELETE FROM message")
             execute("DELETE FROM chat")
+            execute("DELETE FROM folder")
             execute("DELETE FROM websearch_log")
             // Заметки модель делала по ходу разговоров: удаляя всю переписку, удаляем и их.
             execute("DELETE FROM memoryNote")
@@ -375,6 +406,7 @@ class ChatStore(
         updatedAt = row.long("updatedAt"),
         personaID = row.stringOrNull("personaID")?.let(UUID::fromString),
         modelName = row.stringOrNull("modelName"),
+        folderID = row.stringOrNull("folderID")?.let(UUID::fromString),
     )
 
     private fun message(row: Map<String, Any?>) = StoredMessage(
@@ -412,9 +444,12 @@ class ChatStore(
             return if (stop > limit / 2) cut.substring(0, stop + 1) else "$cut…"
         }
 
+        /** Room for two lines in the chat list: the topic of a ✨ question sits past its first 40 characters. */
+        const val TITLE_LENGTH = 90
+
         fun title(text: String): String {
             val line = text.lineSequence().firstOrNull()?.trim() ?: text.trim()
-            return if (line.length > 40) line.take(40) + "…" else line
+            return if (line.length > TITLE_LENGTH) line.take(TITLE_LENGTH) + "…" else line
         }
     }
 }

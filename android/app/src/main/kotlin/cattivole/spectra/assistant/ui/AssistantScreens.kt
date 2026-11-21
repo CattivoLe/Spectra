@@ -3,6 +3,7 @@ package cattivole.spectra.assistant.ui
 import alexcattivo.localchat.engine.ChatMessage
 import alexcattivo.localchat.engine.EngineController
 import alexcattivo.localchat.kit.Chat
+import alexcattivo.localchat.kit.ChatFolder
 import alexcattivo.localchat.kit.ChatSession
 import alexcattivo.localchat.kit.SearchNotice
 import alexcattivo.localchat.kit.StoredMessage
@@ -13,6 +14,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +38,11 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Book
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CreateNewFolder
+import androidx.compose.material.icons.rounded.DriveFileMove
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.FolderOff
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
@@ -69,6 +76,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +87,9 @@ import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.assistant.AssistantModel
 import cattivole.spectra.assistant.AssistantStarters
+import cattivole.spectra.assistant.AssistantText
+import cattivole.spectra.assistant.AssistantTopic
+import cattivole.spectra.ui.Pill
 import cattivole.spectra.ui.ActionRow
 import cattivole.spectra.ui.EmptyState
 import cattivole.spectra.ui.IconTile
@@ -107,7 +118,7 @@ interface AssistantNav {
     fun dossier()
 }
 
-/** The Assistant tab: chats, and the way to models, internet search and the dossier. */
+/** The Assistant tab: chats sorted into folders, and the way to models, internet search and the dossier. */
 @Composable
 fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     if (!AssistantModel.isSupported) {
@@ -120,39 +131,107 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     LaunchedEffect(Unit) { assistant.ensureStarted() }
     val scope = rememberCoroutineScope()
     var chats by remember { mutableStateOf<List<Chat>>(emptyList()) }
+    var folders by remember { mutableStateOf<List<ChatFolder>>(emptyList()) }
     val changes = assistant.store.changes.collectAsStateValue()
-    LaunchedEffect(changes) { chats = runCatching { assistant.store.chats() }.getOrDefault(emptyList()) }
+    LaunchedEffect(changes) {
+        chats = runCatching { assistant.store.chats() }.getOrDefault(emptyList())
+        folders = runCatching { assistant.store.folders() }.getOrDefault(emptyList())
+    }
+    // The folder shown; null is every chat. Kept as text so it survives the tab being recreated.
+    var shownFolder by rememberSaveable { mutableStateOf<String?>(null) }
+    val folder = folders.firstOrNull { it.id.toString() == shownFolder }
+    androidx.activity.compose.BackHandler(enabled = folder != null) { shownFolder = null }
     var menu by remember { mutableStateOf(false) }
     var confirmErase by remember { mutableStateOf(false) }
+    /** The folder dialog: a new one (null id) or renaming one. */
+    var naming by remember { mutableStateOf<Pair<ChatFolder?, UUID?>?>(null) }
+    var moving by remember { mutableStateOf<Chat?>(null) }
     if (confirmErase) {
         AlertDialog(
             onDismissRequest = { confirmErase = false },
             title = { Text(tr("Delete all chats?")) },
-            text = { Text(tr("Every chat is erased from this phone. Models, the dossier and settings stay.")) },
+            text = { Text(tr("Every chat and folder is erased from this phone. Models, the dossier and settings stay.")) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmErase = false
+                    shownFolder = null
                     scope.launch { assistant.eraseChats() }
                 }) { Text(tr("Delete"), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { confirmErase = false }) { Text(tr("Cancel")) } },
         )
     }
+    naming?.let { (renamed, chatToFile) ->
+        FolderNameDialog(
+            initial = renamed?.name.orEmpty(),
+            title = if (renamed == null) tr("New folder") else tr("Rename folder"),
+            onDismiss = { naming = null },
+            onSave = { name ->
+                naming = null
+                scope.launch {
+                    if (renamed != null) {
+                        assistant.store.renameFolder(renamed.id, name)
+                    } else {
+                        val created = assistant.store.createFolder(name)
+                        if (chatToFile != null) assistant.store.moveChat(chatToFile, created.id) else shownFolder = created.id.toString()
+                    }
+                }
+            },
+        )
+    }
+    moving?.let { chat ->
+        MoveChatDialog(
+            chat = chat,
+            folders = folders,
+            onDismiss = { moving = null },
+            onMove = { target ->
+                moving = null
+                scope.launch { assistant.store.moveChat(chat.id, target) }
+            },
+            onNewFolder = {
+                moving = null
+                naming = null to chat.id
+            },
+        )
+    }
     val newChat: () -> Unit = {
         scope.launch {
-            val chat = assistant.store.createChat()
+            val chat = assistant.store.createChat(folderID = folder?.id)
             nav.chat(chat.id)
         }
     }
     val noModel = assistant.assistantModelFile == null
+    val shown = if (folder == null) chats else chats.filter { it.folderID == folder.id }
+    val folderNames = folders.associate { it.id to it.name }
     SpectraScreen(
-        title = tr("Assistant"),
-        subtitle = assistant.currentModelName,
+        title = folder?.name ?: tr("Assistant"),
+        subtitle = if (folder == null) assistant.currentModelName else tr("Folder"),
+        onBack = if (folder != null) ({ shownFolder = null }) else null,
         actions = {
             if (!noModel) IconButton(onClick = newChat) { Icon(Icons.Rounded.Add, contentDescription = tr("New chat")) }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("More")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    if (folder != null) {
+                        DropdownMenuItem(text = { Text(tr("Rename folder")) }, leadingIcon = { Icon(Icons.Rounded.Edit, null) }, onClick = {
+                            menu = false
+                            naming = folder to null
+                        })
+                        DropdownMenuItem(
+                            text = { Text(tr("Delete folder"), color = MaterialTheme.colorScheme.error) },
+                            leadingIcon = { Icon(Icons.Rounded.FolderOff, null, tint = MaterialTheme.colorScheme.error) },
+                            onClick = {
+                                menu = false
+                                shownFolder = null
+                                scope.launch { assistant.store.deleteFolder(folder.id) }
+                            },
+                        )
+                        HorizontalDivider()
+                    }
+                    DropdownMenuItem(text = { Text(tr("New folder…")) }, leadingIcon = { Icon(Icons.Rounded.CreateNewFolder, null) }, onClick = {
+                        menu = false
+                        naming = null to null
+                    })
                     DropdownMenuItem(text = { Text(tr("Model…")) }, leadingIcon = { Icon(Icons.Rounded.Memory, null) }, onClick = {
                         menu = false
                         nav.models()
@@ -188,7 +267,14 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                     action = tr("Download the model"),
                     onAction = nav::models,
                 )
-                chats.isEmpty() -> EmptyState(
+                folder != null && shown.isEmpty() -> EmptyState(
+                    Icons.Rounded.Folder,
+                    tr("The folder is empty"),
+                    tr("Hold a chat in the list and choose Move to folder, or start a new chat here."),
+                    action = tr("New chat"),
+                    onAction = newChat,
+                )
+                chats.isEmpty() && folders.isEmpty() -> EmptyState(
                     Icons.Rounded.AutoAwesome,
                     tr("Ask about what Spectra found"),
                     tr("The assistant reads the app's own scans and can run fresh ones: Wi‑Fi, LAN, Bluetooth, the connection. It runs on this phone."),
@@ -200,19 +286,162 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     ) {
         assistant.storageWarning?.let { warning -> card(key = "storage", rows = listOf { NoteRow(warning, warning = true) }) }
         assistant.loadError?.let { error -> card(key = "load-error", rows = listOf { NoteRow(tr("Could not load the model: %s", error), warning = true) }) }
-        if (chats.isNotEmpty()) {
-            cardSection(chats, key = { it.id.toString() }, sectionKey = "chats", dividerInset = 70.dp) { chat ->
-                ListRow(
-                    title = chat.title.ifEmpty { tr("New chat") },
-                    subtitle = listOfNotNull(ago(chat.updatedAt), chat.modelName).joinToString(" · "),
-                    leading = { IconTile(Icons.Rounded.AutoAwesome, Spectra.colors.revealed) },
-                    onClick = { nav.chat(chat.id) },
-                    onLongClick = { scope.launch { assistant.store.deleteChat(chat.id) } },
+        if (folder == null && folders.isNotEmpty()) {
+            item(key = "folders") {
+                FolderStrip(folders, chats, onOpen = { shownFolder = it.id.toString() }, onNew = { naming = null to null })
+            }
+        }
+        if (shown.isNotEmpty()) {
+            cardSection(shown, key = { it.id.toString() }, sectionKey = "chats") { chat ->
+                ChatRow(
+                    chat = chat,
+                    folderName = if (folder == null) chat.folderID?.let(folderNames::get) else null,
+                    onOpen = { nav.chat(chat.id) },
+                    onMove = { moving = chat },
+                    onDelete = { scope.launch { assistant.deleteChat(chat.id) } },
                 )
             }
-            item(key = "hint") { cattivole.spectra.ui.SectionFooter(tr("Hold a chat to delete it.")) }
+            item(key = "hint") { cattivole.spectra.ui.SectionFooter(tr("Hold a chat to move it to a folder or delete it.")) }
         }
     }
+}
+
+/** The folders as a row of chips above the chats, with the count in each and a way to add one. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun FolderStrip(folders: List<ChatFolder>, chats: List<Chat>, onOpen: (ChatFolder) -> Unit, onNew: () -> Unit) {
+    val counts = chats.groupingBy { it.folderID }.eachCount()
+    FlowRow(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        for (folder in folders) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.clickable { onOpen(folder) },
+            ) {
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Icon(Icons.Rounded.Folder, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                    Text(folder.name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp))
+                    Text("${counts[folder.id] ?: 0}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.clickable(onClick = onNew)) {
+            Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.CreateNewFolder, tr("New folder"), Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/**
+ * One chat in the list. No icon: the whole width goes to the question (two lines) and what it was about —
+ * LAN, Bluetooth, Wi‑Fi… — as coloured labels, with when and, in the full list, its folder.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun ChatRow(chat: Chat, folderName: String?, onOpen: () -> Unit, onMove: () -> Unit, onDelete: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    val topics = remember(chat.title) { AssistantText.topics(chat.title) }
+    Box {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = onOpen, onLongClick = { menu = true })
+                .padding(horizontal = 16.dp, vertical = 11.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                chat.title.ifEmpty { tr("New chat") },
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (topic in topics) Pill(topic.label, topic.color())
+                val meta = listOfNotNull(ago(chat.updatedAt), folderName).joinToString(" · ")
+                Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(text = { Text(tr("Move to folder…")) }, leadingIcon = { Icon(Icons.Rounded.DriveFileMove, null) }, onClick = {
+                menu = false
+                onMove()
+            })
+            DropdownMenuItem(
+                text = { Text(tr("Delete"), color = MaterialTheme.colorScheme.error) },
+                leadingIcon = { Icon(Icons.Rounded.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                onClick = {
+                    menu = false
+                    onDelete()
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun AssistantTopic.color(): androidx.compose.ui.graphics.Color = when (this) {
+    AssistantTopic.WIFI -> Spectra.colors.info
+    AssistantTopic.LAN -> Spectra.colors.good
+    AssistantTopic.BLUETOOTH -> MaterialTheme.colorScheme.primary
+    AssistantTopic.THREATS -> Spectra.colors.danger
+    AssistantTopic.HISTORY -> MaterialTheme.colorScheme.secondary
+    AssistantTopic.LINK -> Spectra.colors.warning
+    AssistantTopic.CAPTURE -> Spectra.colors.revealed
+}
+
+@Composable
+private fun FolderNameDialog(initial: String, title: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var name by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.take(60) },
+                label = { Text(tr("Name")) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = { TextButton(onClick = { onSave(name.trim()) }, enabled = name.isNotBlank()) { Text(tr("Save")) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(tr("Cancel")) } },
+    )
+}
+
+@Composable
+private fun MoveChatDialog(chat: Chat, folders: List<ChatFolder>, onDismiss: () -> Unit, onMove: (UUID?) -> Unit, onNewFolder: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("Move to folder")) },
+        text = {
+            Column {
+                @Composable
+                fun option(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, onClick: () -> Unit) {
+                    Row(
+                        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(icon, null, tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(label, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (selected) Icon(Icons.Rounded.Check, null, tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                option(tr("No folder"), Icons.Rounded.FolderOff, chat.folderID == null) { onMove(null) }
+                for (folder in folders) option(folder.name, Icons.Rounded.Folder, chat.folderID == folder.id) { onMove(folder.id) }
+                option(tr("New folder…"), Icons.Rounded.CreateNewFolder, false, onNewFolder)
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text(tr("Cancel")) } },
+    )
 }
 
 @Composable
@@ -228,8 +457,7 @@ fun AssistantChatScreen(model: SpectraModel, nav: AssistantNav, chatId: UUID) {
     LaunchedEffect(Unit) { assistant.ensureStarted() }
     var session by remember { mutableStateOf<ChatSession?>(null) }
     LaunchedEffect(chatId) {
-        val chat = assistant.store.chat(chatId) ?: return@LaunchedEffect nav.back()
-        session = assistant.session(chat).apply { load() }
+        session = assistant.openSession(chatId) ?: return@LaunchedEffect nav.back()
     }
     val current = session ?: return
     ChatContent(model, assistant, current, nav)
@@ -238,6 +466,7 @@ fun AssistantChatScreen(model: SpectraModel, nav: AssistantNav, chatId: UUID) {
 @Composable
 private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session: ChatSession, nav: AssistantNav) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var draft by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<StoredMessage?>(null) }
     val listState = rememberLazyListState()
@@ -251,7 +480,19 @@ private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session:
         }
     }
     assistant.pendingSearch?.let { SearchApprovalDialog(it, assistant.web.provider.title) }
-    DisposableEffect(session) { onDispose { session.stop() } }
+    // Leaving the chat — back to the list or to another tab — pauses the answer; "Continue" picks it up on return.
+    // Folding or unfolding the phone recreates the screen and is not leaving.
+    DisposableEffect(session) {
+        onDispose { if ((context as? android.app.Activity)?.isChangingConfigurations != true) session.stop() }
+    }
+    // A next step starts a clean chat of its own: a short context answers faster and the step needs nothing above it.
+    val startNextStep: (String) -> Unit = { request ->
+        scope.launch {
+            val folder = assistant.store.chat(session.chat.id)?.folderID
+            nav.chat(assistant.ask(request, folder))
+        }
+    }
+    val queued = assistant.queuedQuestion(session.chat.id)
     LaunchedEffect(session.messages.size) { if (session.messages.isNotEmpty()) listState.scrollToItem(0) }
     val ready = engine != EngineController.State.Empty && engine != EngineController.State.Loading
     SpectraScreen(
@@ -277,7 +518,11 @@ private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session:
                     )
                 }
                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                    if (session.messages.isEmpty()) {
+                    if (session.messages.isEmpty() && (queued != null || session.isGenerating)) {
+                        // Opened from another screen with a question: it is asked as soon as the model is loaded.
+                        // Also the moment between taking it and its message landing, so the starters never flash.
+                        QueuedQuestion(queued, ready, assistant.loadError)
+                    } else if (session.messages.isEmpty()) {
                         Starters(model, assistant, ready) { session.send(it) }
                     } else {
                         LazyColumn(
@@ -303,6 +548,15 @@ private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session:
                                 }
                             }
                             if (session.isSearching) item { BusyLine(stageText(session.searchStage)) }
+                            if (session.isUnanswered) {
+                                item(key = "paused") {
+                                    PausedLine(
+                                        if (session.errorText != null) tr("The answer did not finish.") else tr("The answer was paused when you left the chat."),
+                                        enabled = ready,
+                                        onContinue = session::resume,
+                                    )
+                                }
+                            }
                             itemsIndexed(session.messages.asReversed(), key = { _, message -> message.id }) { reversedIndex, message ->
                                 val index = session.messages.lastIndex - reversedIndex
                                 val question = if (index > 0 && message.role == ChatMessage.Role.Assistant) session.messages[index - 1] else null
@@ -314,15 +568,16 @@ private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session:
                                     sources = question?.searchJson?.let(SearchPayload::fromJson),
                                     isLast = index == session.messages.lastIndex,
                                     isGenerating = session.isGenerating,
+                                    awaiting = session.awaitingText && index == session.messages.lastIndex,
                                     onCopy = { copy(context, message.content) },
                                     onEdit = {
                                         editing = message
                                         draft = message.content
                                     },
                                     onRegenerate = session::regenerate,
-                                    onContinue = session::continueGenerating,
+                                    onContinue = session::resume,
                                     offers = if (ready) session.offers[message.id].orEmpty() else emptyList(),
-                                    onOffer = session::send,
+                                    onOffer = startNextStep,
                                 )
                             }
                         }
@@ -386,6 +641,41 @@ private fun Starters(model: SpectraModel, assistant: AssistantModel, ready: Bool
     }
 }
 
+/** A question handed over by another screen, waiting for the model: shown in place of the starters. */
+@Composable
+private fun QueuedQuestion(question: String?, ready: Boolean, loadError: String?) {
+    Column(
+        Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
+    ) {
+        if (question != null) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.widthIn(max = 320.dp)) {
+                    Text(question, Modifier.padding(horizontal = 14.dp, vertical = 10.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+            }
+        }
+        when {
+            loadError != null -> Text(tr("Could not load the model: %s", loadError), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            !ready -> BusyLine(tr("Loading the model…"))
+            else -> BusyLine(tr("Thinking…"))
+        }
+    }
+}
+
+/** A question left without an answer when the chat was left: the answer waits for a tap. */
+@Composable
+private fun PausedLine(text: String, enabled: Boolean, onContinue: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(Icons.Rounded.Pause, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(text, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        TextButton(onClick = onContinue, enabled = enabled) {
+            Icon(Icons.Rounded.PlayArrow, null, Modifier.size(18.dp))
+            Text(tr("Continue"), Modifier.padding(start = 4.dp))
+        }
+    }
+}
+
 /** The assistant has one model: no picker, only the way to its page (download, delete, free up space). */
 @Composable
 private fun ModelMenu(assistant: AssistantModel, nav: AssistantNav) {
@@ -409,6 +699,7 @@ private fun MessageRow(
     sources: SearchPayload?,
     isLast: Boolean,
     isGenerating: Boolean,
+    awaiting: Boolean = false,
     onCopy: () -> Unit,
     onEdit: () -> Unit,
     onRegenerate: () -> Unit,
@@ -429,16 +720,23 @@ private fun MessageRow(
         return
     }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        sources?.images?.takeIf { it.isNotEmpty() }?.let { ImageStrip(it) }
         if (message.content.isEmpty() && isLast && isGenerating) {
             BusyLine(status?.let(cattivole.spectra.assistant.AssistantActions::runningLabel) ?: tr("Thinking…"))
         } else {
             MarkdownText(message.content)
-            if (status != null) BusyLine(cattivole.spectra.assistant.AssistantActions.runningLabel(status))
+            when {
+                status != null -> BusyLine(cattivole.spectra.assistant.AssistantActions.runningLabel(status))
+                // After "Continue" or a check, the model reads everything again before the next word: say it works.
+                awaiting && isGenerating -> BusyLine(tr("Thinking…"))
+            }
         }
         val notes = buildList {
             if (readFrom.isNotEmpty()) add(tr("Read from Spectra: %s", readFrom.joinToString(", ")))
             if (tools.isNotEmpty()) add(tr("Ran: %s", tools.distinct().joinToString(", ", transform = cattivole.spectra.assistant.AssistantActions::title)))
-            sources?.let { add(tr("Web: %d sources for «%s»", it.results.size, it.query)) }
+            sources?.let {
+                add(if (it.images.isNullOrEmpty()) tr("Web: %d sources for «%s»", it.results.size, it.query) else tr("Pictures for «%s»", it.query))
+            }
             message.modelName?.let(::add)
         }
         if (notes.isNotEmpty()) {
@@ -465,7 +763,12 @@ private fun MessageRow(
                 IconButton(onClick = onCopy, modifier = Modifier.size(32.dp)) { Icon(Icons.Rounded.ContentCopy, tr("Copy"), Modifier.size(18.dp)) }
                 if (isLast) {
                     IconButton(onClick = onRegenerate, modifier = Modifier.size(32.dp)) { Icon(Icons.Rounded.Refresh, tr("Answer again"), Modifier.size(18.dp)) }
-                    if (message.interrupted) TextButton(onClick = onContinue) { Text(tr("Continue")) }
+                    if (message.interrupted) {
+                        TextButton(onClick = onContinue) {
+                            Icon(Icons.Rounded.PlayArrow, null, Modifier.size(18.dp))
+                            Text(tr("Continue"), Modifier.padding(start = 4.dp))
+                        }
+                    }
                 }
             }
         }
@@ -543,6 +846,7 @@ private fun noticeText(notice: SearchNotice): String = when (notice) {
     is SearchNotice.Unavailable -> tr("Search is not set up: %s.", notice.error.message ?: "")
     is SearchNotice.NothingFound -> tr("Nothing found for «%s». Answering without the internet.", notice.query)
     is SearchNotice.Failed -> tr("Search failed: %s Answering without the internet.", notice.error.message ?: notice.error.javaClass.simpleName)
+    SearchNotice.ImagesNeedWeb -> tr("Pictures come from a web search: turn it on under Internet to see them.")
 }
 
 private fun copy(context: Context, text: String) {

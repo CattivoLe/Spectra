@@ -520,6 +520,14 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
         title = device.displayName,
         subtitle = if (snapshot) entry?.let { tr("Saved %s", dateTime(it.savedAt)) } else device.ipAddress,
         onBack = nav::back,
+        actions = {
+            // Worded without "open port" or "risk": those widen the question to every scanner and bury this host.
+            if (!snapshot) {
+                AskAssistantButton(model, nav, question = {
+                    tr("What is the device %s (%s) on my local network, and what deserves attention about it?", device.displayName, device.ipAddress)
+                })
+            }
+        },
     ) {
         freeCard("hero") {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
