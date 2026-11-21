@@ -34,17 +34,22 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableFloatState
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -247,13 +252,15 @@ fun SpectraApp(model: SpectraModel) {
             snackbarHost = { SnackbarHost(snackbar) },
             bottomBar = {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp) {
+                    // One scale for every label, so they stay the same size when the narrow cover screen shrinks them.
+                    val labelScale = remember(LocalConfiguration.current.screenWidthDp) { mutableFloatStateOf(1f) }
                     Tab.entries.forEach { tab ->
                         val selected = currentTab == tab
                         NavigationBarItem(
                             selected = selected,
                             onClick = { openTab(nav, tab) },
                             icon = { Icon(if (selected) tab.selected else tab.idle, contentDescription = null) },
-                            label = { Text(tab.label(), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            label = { TabLabel(tab.label(), labelScale) },
                             colors = NavigationBarItemDefaults.colors(
                                 indicatorColor = MaterialTheme.colorScheme.primaryContainer,
                                 selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -382,6 +389,34 @@ fun SpectraApp(model: SpectraModel) {
         }
     }
 }
+
+/**
+ * A tab's name on one line. A name too wide for its slot shrinks the shared [scale] a step at a time,
+ * down to [MIN_LABEL_SCALE]; past that it ends in an ellipsis. It is drawn only once it fits.
+ */
+@Composable
+private fun TabLabel(text: String, scale: MutableFloatState) {
+    val style = LocalTextStyle.current
+    var fits by remember(text) { mutableStateOf(false) }
+    Text(
+        text,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
+        style = style.copy(fontSize = style.fontSize * scale.floatValue),
+        modifier = Modifier.drawWithContent { if (fits) drawContent() },
+        onTextLayout = { layout ->
+            val over = layout.hasVisualOverflow
+            if (over && scale.floatValue > MIN_LABEL_SCALE) {
+                scale.floatValue = (scale.floatValue - 0.05f).coerceAtLeast(MIN_LABEL_SCALE)
+            } else {
+                fits = true
+            }
+        },
+    )
+}
+
+private const val MIN_LABEL_SCALE = 0.75f
 
 /** The decode screen's ✨: the capture is kept for the assistant, then a summary card about it opens. */
 private fun assistantAsk(model: SpectraModel, navigator: Navigator): ((String, cattivole.spectra.core.CaptureAnalysis, Boolean) -> Unit)? =
