@@ -27,6 +27,13 @@ data/       Catalogs shared by both apps (MAC vendors, Bluetooth IDs, RDAP) and 
 > at a network that is not yours. Capturing or inspecting traffic you are not
 > authorised to see is illegal in many countries. See [SECURITY.md](SECURITY.md).
 
+## Download
+
+The Android APK (arm64 phones) and the sensor firmware for all three boards
+are published on the [Releases](https://github.com/CattivoLe/Spectra/releases) page,
+with checksums and build attestations. How they are built and how to check
+them: [docs/releasing.md](docs/releasing.md).
+
 ## Quick start
 
 | Part | Needs | Build |
