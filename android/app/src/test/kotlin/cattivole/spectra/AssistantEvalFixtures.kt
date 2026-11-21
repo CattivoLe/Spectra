@@ -54,7 +54,7 @@ class AssistantEvalFixtures {
         ),
         link = AssistantSnapshot.Link(
             checkedAt = now - 300_000, status = "ok", gatewayMs = 3, dnsMs = 18, webMs = 95,
-            publicIp = "93.86.12.40", provider = "SBB", country = "RS", intercepted = false, resolverLies = false,
+            publicIp = "203.0.113.40", provider = "SBB", country = "RS", intercepted = false, resolverLies = false,
         ),
     )
 
