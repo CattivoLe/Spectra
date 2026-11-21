@@ -70,7 +70,8 @@ class HistoryEntry(
     fun shownKinds(): List<String> {
         val found = buildList {
             if (networks.isNotEmpty() || probes.isNotEmpty() || deauths.isNotEmpty()) add("networks")
-            if (lan.isNotEmpty() || connections.isNotEmpty()) add("lan")
+            if (lan.isNotEmpty()) add("lan")
+            if (connections.isNotEmpty()) add("internet")
             if (bluetooth.isNotEmpty()) add("bluetooth")
             if (kind == "lora") add("lora")
         }
@@ -113,6 +114,7 @@ class HistoryEntry(
 
 internal fun labelFor(kind: String): String = when (kind) {
     "lan" -> "LAN"
+    "internet" -> "Internet"
     "bluetooth" -> "Bluetooth"
     "lora" -> "LoRa"
     else -> "Wi‑Fi"
@@ -365,6 +367,24 @@ class HistoryStore(context: Context) {
         encoded.clear()
         partials.clear()
         pendingFix.clear()
+        persist()
+        publish()
+    }
+
+    /** Removes [area]'s records from one session. The session goes when no other tab has anything in it. */
+    fun delete(id: String, area: HistoryArea) = reshape { if (it.id == id) it.without(area) else it }
+
+    /** Clears [area]'s records from one shelf. Other tabs keep their part of the same sessions. */
+    fun clearShelf(imported: Boolean, area: HistoryArea) =
+        reshape { if ((it.importedFrom != null) == imported) it.without(area) else it }
+
+    private fun reshape(change: (HistoryEntry) -> HistoryEntry?) {
+        val next = entries.mapNotNull { old ->
+            change(old)?.also { if (it !== old) encoded[it.id] = encodeEntry(it) }
+        }
+        if (next.size == entries.size && next.indices.all { next[it] === entries[it] }) return
+        entries = next
+        encoded.keys.retainAll(next.map { it.id }.toSet())
         persist()
         publish()
     }

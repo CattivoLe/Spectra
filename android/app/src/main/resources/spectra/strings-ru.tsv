@@ -1308,7 +1308,7 @@ Model downloads	Загрузка моделей
 Downloading the assistant's model	Загружается модель ассистента
 Import…	Импорт…
 Settings…	Настройки…
-This Wi-Fi gives the phone no IPv4 address. The device scan walks an IPv4 subnet, so there is nothing to sweep here. Connection, speed and link checks still work.	Эта сеть Wi‑Fi не выдаёт телефону адрес IPv4. Поиск устройств обходит подсеть IPv4, так что здесь нечего сканировать. Проверки соединения, скорости и ссылок работают.
+This Wi-Fi gives the phone no IPv4 address. The device scan walks an IPv4 subnet, so there is nothing to sweep here. Connection, speed and link checks on the Internet tab still work.	Эта сеть Wi‑Fi не выдаёт телефону адрес IPv4. Поиск устройств обходит подсеть IPv4, так что здесь нечего сканировать. Проверки соединения, скорости и ссылок на вкладке «Интернет» работают.
 Edit the path if the camera needs one (e.g. /cam, /live).	Допишите путь, если он нужен камере (например, /cam, /live).
 Android does not trust this certificate: something between you and the site may be re-signing HTTPS.	Android не доверяет этому сертификату: возможно, что-то между вами и сайтом подменяет HTTPS.
 Trusted by Android	Доверяет Android
@@ -1506,3 +1506,8 @@ Read over GATT: %d services, %d characteristics; nothing was written.	Прочи
 Fold	Свернуть
 All %d	Все %d
 Trackers: %d, all near their owners	Трекеры: %d, все рядом с владельцами
+Device scans of each network are saved here automatically.	Сканирования устройств каждой сети сохраняются здесь автоматически.
+Connection checks are saved here automatically, by network.	Проверки соединения сохраняются здесь автоматически, по сетям.
+Bluetooth scans are saved here automatically.	Сканирования Bluetooth сохраняются здесь автоматически.
+Imported %s records are removed. Scans on this phone and other tabs stay.	Импортированные записи вкладки «%s» удаляются. Сканирования этого телефона и других вкладок остаются.
+Saved %s records are removed. Other tabs keep theirs.	Сохранённые записи вкладки «%s» удаляются. В других вкладках всё остаётся.

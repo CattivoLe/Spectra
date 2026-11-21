@@ -66,10 +66,12 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.core.Band
+import cattivole.spectra.core.HistoryArea
 import cattivole.spectra.core.HistoryEntry
+import cattivole.spectra.core.forArea
+import cattivole.spectra.core.only
 import cattivole.spectra.core.hasStoredPassword
 import cattivole.spectra.core.passesWifiFilter
-import cattivole.spectra.core.labelFor
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -77,6 +79,7 @@ import java.util.Locale
 
 internal fun kindIcon(kind: String): ImageVector = when (kind) {
     "lan" -> Icons.Rounded.Lan
+    "internet" -> Icons.Rounded.Public
     "bluetooth" -> Icons.Rounded.Bluetooth
     "lora" -> Icons.Rounded.CellTower
     else -> Icons.Rounded.Wifi
@@ -85,6 +88,7 @@ internal fun kindIcon(kind: String): ImageVector = when (kind) {
 @Composable
 internal fun kindTint(kind: String): Color = when (kind) {
     "lan" -> Spectra.colors.good
+    "internet" -> Spectra.colors.excellent
     "bluetooth" -> Spectra.colors.info
     "lora" -> Spectra.colors.revealed
     else -> MaterialTheme.colorScheme.primary
@@ -96,8 +100,27 @@ internal fun sourceName(source: String): String = when (source) {
     else -> source
 }
 
-/** The order kind chips are shown in. */
-private val KIND_ORDER = listOf("networks", "lan", "bluetooth", "lora")
+/** The tab's name, under the History title. */
+internal fun HistoryArea.title(): String = when (this) {
+    HistoryArea.WIFI -> "Wi‑Fi"
+    HistoryArea.LAN -> "LAN"
+    HistoryArea.INTERNET -> tr("Internet")
+    HistoryArea.BLUETOOTH -> "Bluetooth"
+}
+
+/** What the empty history of a tab says will appear in it. */
+private fun HistoryArea.emptyHint(): String = when (this) {
+    HistoryArea.WIFI -> tr("Scans are saved here automatically. The Cardputer's side button saves its own scan, and it arrives here when the phone connects.")
+    HistoryArea.LAN -> tr("Device scans of each network are saved here automatically.")
+    HistoryArea.INTERNET -> tr("Connection checks are saved here automatically, by network.")
+    HistoryArea.BLUETOOTH -> tr("Bluetooth scans are saved here automatically.")
+}
+
+/** The clock in a tab's top bar: that tab's saved sessions. */
+@Composable
+fun HistoryButton(nav: Navigator, area: HistoryArea) {
+    IconButton(onClick = { nav.history(area) }) { Icon(Icons.Rounded.History, contentDescription = tr("History")) }
+}
 
 /** How the saved sessions are grouped on screen. */
 private enum class Grouping { DATE, PLACE, LIST }
@@ -116,10 +139,12 @@ private class HistoryGroup(
     val itemCount: Int get() = entries.sumOf { it.itemCount }
 }
 
+/** One tab's saved sessions: only the records of [area], each session cut down to them. */
 @Composable
-fun HistoryScreen(model: SpectraModel, nav: Navigator) {
+fun HistoryScreen(model: SpectraModel, nav: Navigator, area: HistoryArea) {
     model.generation
     val history = model.history
+    val all = history.entries.forArea(area)
     // Live map is hidden for now.
     // var showLive by remember { mutableStateOf(false) }
     // if (showLive) {
@@ -132,7 +157,6 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     var sort by rememberSaveable { mutableStateOf(HistorySort.NEWEST) }
     var query by rememberSaveable { mutableStateOf("") }
     var importedShelf by rememberSaveable { mutableStateOf(false) }
-    var kindFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var menu by remember { mutableStateOf(false) }
     // Today starts open. Every other day stays folded until it is tapped.
     var expanded by remember { mutableStateOf(setOf(todayGroupId())) }
@@ -163,13 +187,13 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
             title = { Text(tr("Clear history?")) },
             text = {
                 Text(
-                    if (importedShelf) tr("Imported scans are removed. Scans on this phone stay.")
-                    else tr("Saved scans from this phone and the Cardputer are removed."),
+                    if (importedShelf) tr("Imported %s records are removed. Scans on this phone and other tabs stay.", area.title())
+                    else tr("Saved %s records are removed. Other tabs keep theirs.", area.title()),
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    history.clearShelf(importedShelf)
+                    history.clearShelf(importedShelf, area)
                     confirmClear = false
                 }) { Text(tr("Clear history"), color = MaterialTheme.colorScheme.error) }
             },
@@ -183,9 +207,7 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
             onDismiss = { showSettings = false },
         )
     }
-    val shelf = history.entries.filter { (it.importedFrom != null) == importedShelf }
-    val availableKinds = KIND_ORDER.filter { kind -> shelf.any { kind in it.shownKinds() } }
-    val shown = kindFilter?.let { kind -> shelf.filter { kind in it.shownKinds() } } ?: shelf
+    val shown = all.filter { (it.importedFrom != null) == importedShelf }
     val needle = query.trim()
     val matched = shown.filter { it.matchesQuery(needle) }.ordered(sort)
     val groups = when (grouping) {
@@ -197,6 +219,8 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
     val showMap = grouping == Grouping.PLACE && pins.isNotEmpty()
     SpectraScreen(
         title = tr("History"),
+        subtitle = area.title(),
+        onBack = nav::back,
         actions = {
             // Live map is hidden for now.
             // IconButton(onClick = { showLive = true }) { Icon(Icons.Rounded.MyLocation, contentDescription = tr("Live map")) }
@@ -237,17 +261,13 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
             }
         },
         overlay = {
-            if (history.entries.isEmpty()) {
-                EmptyState(
-                    Icons.Rounded.History,
-                    tr("Nothing saved"),
-                    tr("Scans are saved here automatically. The Cardputer's side button saves its own scan, and it arrives here when the phone connects."),
-                )
+            if (all.isEmpty()) {
+                EmptyState(Icons.Rounded.History, tr("Nothing saved"), area.emptyHint())
             }
         },
         fill = if (showMap) {
             {
-                HistoryPlaceMap(matched, onOpen = { nav.history(it) })
+                HistoryPlaceMap(matched, onOpen = { nav.history(area, it) })
                 Column(Modifier.align(Alignment.TopCenter)) {
                     HistoryFilters(importedShelf, { importedShelf = it }, grouping, { grouping = it }, sort, { sort = it })
                 }
@@ -255,31 +275,20 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
         } else {
             null
         },
-        searchQuery = query.takeIf { history.entries.isNotEmpty() },
-        onSearchChange = if (history.entries.isNotEmpty()) {
+        searchQuery = query.takeIf { all.isNotEmpty() },
+        onSearchChange = if (all.isNotEmpty()) {
             { query = it }
         } else {
             null
         },
         searchPlaceholder = tr("Name, place or address"),
     ) {
-        if (!showMap && history.entries.isNotEmpty()) {
+        if (!showMap && all.isNotEmpty()) {
             item(key = "filters") {
                 HistoryFilters(importedShelf, { importedShelf = it }, grouping, { grouping = it }, sort, { sort = it })
             }
-            if (availableKinds.size > 1) {
-                item(key = "kind-filters") {
-                    ChipRow(contentPadding = FilterChipPadding) {
-                        availableKinds.forEach { kind ->
-                            ToggleChip(labelFor(kind), kindFilter == kind, {
-                                kindFilter = if (kindFilter == kind) null else kind
-                            }, kindIcon(kind))
-                        }
-                    }
-                }
-            }
         }
-        if (!showMap && history.entries.isNotEmpty() && shown.isEmpty()) {
+        if (!showMap && all.isNotEmpty() && shown.isEmpty()) {
             item(key = "shelf-empty") {
                 SectionFooter(
                     if (importedShelf) tr("Nothing imported yet.")
@@ -310,8 +319,8 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
                 HistoryRow(
                     entry,
                     showPlace = true,
-                    onOpen = { nav.history(entry.id) },
-                    onDelete = { history.delete(entry.id) },
+                    onOpen = { nav.history(area, entry.id) },
+                    onDelete = { history.delete(entry.id, area) },
                 )
             }
         }
@@ -333,8 +342,8 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator) {
                     HistoryRow(
                         entry,
                         showPlace = grouping == Grouping.DATE,
-                        onOpen = { nav.history(entry.id) },
-                        onDelete = { history.delete(entry.id) },
+                        onOpen = { nav.history(area, entry.id) },
+                        onDelete = { history.delete(entry.id, area) },
                     )
                 }
             } else {
@@ -513,7 +522,7 @@ private fun HistoryRow(entry: HistoryEntry, showPlace: Boolean, onOpen: () -> Un
         }
         Box(Modifier.background(MaterialTheme.colorScheme.surfaceContainer)) {
             ListRow(
-                title = entry.rowTitle,
+                title = tr(entry.rowTitle),
                 subtitle = line,
                 subtitleLines = 1,
                 leading = { IconTile(if (fromSensor) Icons.Rounded.Memory else kindIcon(iconKind), kindTint(iconKind)) },
@@ -530,7 +539,7 @@ private fun HistoryRow(entry: HistoryEntry, showPlace: Boolean, onOpen: () -> Un
 }
 
 @Composable
-fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
+fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String, area: HistoryArea) {
     model.generation
     var query by rememberSaveable { mutableStateOf("") }
     var wifiSort by rememberSaveable { mutableStateOf(WifiSort.SIGNAL) }
@@ -541,7 +550,8 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
     var bleSort by rememberSaveable { mutableStateOf(BleSort.SIGNAL) }
     var bleScope by rememberSaveable { mutableStateOf(BleScope.ALL) }
     var showBleOut by rememberSaveable { mutableStateOf(false) }
-    val entry = model.history.entry(id)
+    // The session as this tab shows it: another tab's records in it stay out of sight.
+    val entry = model.history.entry(id)?.only(area)
     if (entry == null) {
         SpectraScreen(tr("History"), onBack = nav::back, overlay = {
             EmptyState(Icons.Rounded.History, tr("Gone"), tr("This saved scan is no longer here."))
@@ -592,13 +602,13 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String) {
     val footer = "$who · ${dateTime(entry.savedAt)}"
     val context = LocalContext.current
     SpectraScreen(
-        title = entry.rowTitle,
+        title = tr(entry.rowTitle),
         subtitle = footer,
         onBack = nav::back,
         actions = {
             ExportMenu(listOf(entry))
             IconButton(onClick = {
-                model.history.delete(id)
+                model.history.delete(id, area)
                 nav.back()
             }) { Icon(Icons.Rounded.Delete, contentDescription = tr("Delete")) }
         },
