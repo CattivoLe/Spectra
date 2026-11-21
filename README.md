@@ -1,14 +1,54 @@
 # Spectra
 
-A Wi-Fi scanner for iPhone. iOS does not let apps list nearby networks, so
-Spectra uses an M5Stack Cardputer (ESP32-S3) as its radio: the Cardputer scans
-and sends every access point it hears to the app over Bluetooth LE.
+Spectra audits your own wireless surroundings: the Wi-Fi networks around you,
+the devices on your local network, nearby Bluetooth devices and your phone's
+internet connection. It runs on iPhone and Android, optionally with a small
+ESP32 sensor that adds what a phone cannot do by itself, and it has an
+on-device assistant (llama.cpp) that explains what it found. Nothing is sent
+to a server: scans, history and the assistant all stay on the phone.
+
+iOS does not let apps list nearby networks, so on iPhone the Wi-Fi list comes
+from the sensor: an M5Stack Cardputer (ESP32-S3), an ESP32-C5 or an
+ESP32-WROOM-32 scans and sends every access point it hears to the app over
+Bluetooth LE. Android can also scan with the phone's own radio.
 
 ```
-firmware/   PlatformIO project for the Cardputer
-ios/        Xcode project for the iPhone app
-docs/       BLE protocol between the two
+android/    Android app (Kotlin, Jetpack Compose) and the llama.cpp engine module
+ios/        Xcode project for the iPhone app and its packet-tunnel extension
+firmware/   PlatformIO project for the sensor (Cardputer, ESP32-C5, WROOM-32)
+docs/       BLE protocol between the apps and the sensor
+data/       Catalogs shared by both apps (MAC vendors, Bluetooth IDs, RDAP) and their build scripts
 ```
+
+> **Use it on networks and devices you own or are allowed to test.** Spectra
+> is a defensive tool. It listens; it does not attack. Some features (raw
+> 802.11 frame capture to `.pcap`, decrypting your own phone's TLS traffic,
+> port scans of the local network) can reveal other people's data if pointed
+> at a network that is not yours. Capturing or inspecting traffic you are not
+> authorised to see is illegal in many countries. See [SECURITY.md](SECURITY.md).
+
+## Quick start
+
+| Part | Needs | Build |
+|------|-------|-------|
+| Android | Android Studio, JDK 17+, Android SDK 36, NDK 29 | `android/scripts/fetch-llama.sh`, then `cd android && ./gradlew :app:assembleDebug` |
+| iOS | Xcode 26, iOS 18 device or simulator | `ios/Tools/build-llama.sh` once (~15 min), copy `ios/Config/Signing.local.xcconfig.example` to `Signing.local.xcconfig`, open `ios/Spectra.xcodeproj` |
+| Sensor | [PlatformIO](https://platformio.org) | `cd firmware && pio run -t upload` |
+
+`android/local.properties` (with `sdk.dir=...`) and
+`ios/Config/Signing.local.xcconfig` are per-machine and git-ignored. The
+assistant's language models are downloaded by the app on first use; they are
+not part of this repository.
+
+Tests: `./gradlew :app:testDebugUnitTest` in `android/`, the `Spectra` scheme
+in Xcode, and `pio test -e native` in `firmware/`.
+
+A fork has to use its own identifiers: `SPECTRA_BUNDLE_ID` in
+`Signing.local.xcconfig`, plus the app group (`group.cattivole.Spectra` in
+both `.entitlements` files and in `TrafficSniffer.swift` /
+`PacketTunnelProvider.swift`) and the tunnel's bundle id in the Xcode project.
+The packet tunnel needs the paid Network Extensions capability; everything
+else runs with a free developer account.
 
 ## Firmware
 
@@ -135,3 +175,12 @@ counts as present when a TCP connect opens or is refused, or ARP already has it.
 See [docs/protocol.md](docs/protocol.md). The app's `SensorProtocol` and the
 firmware's `main.cpp` both implement it; the tests in `ios/SpectraTests`
 check the app against byte layouts written out from the document.
+
+## Security, contributing, licenses
+
+- Reporting a vulnerability, and what Spectra is not for: [SECURITY.md](SECURITY.md).
+- Patches and issues: [CONTRIBUTING.md](CONTRIBUTING.md).
+- Third-party code, data and the downloadable models:
+  [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+- License: _not chosen yet_. Until a `LICENSE` file is added, no rights are
+  granted to use, copy or redistribute this code.

@@ -33,3 +33,34 @@ android/engine/src/main/cpp/llama.cpp/
 
 # llama.cpp xcframework built by ios/Tools/build-llama.sh
 ios/Packages/LocalChatEngine/Vendor/
+
+# Local machine settings (any module)
+**/local.properties
+.env
+.env.*
+.claude/
+.idea/workspace.xml
+**/.swiftpm/
+
+# Build outputs and release artefacts
+*.ipa
+*.xcarchive
+*.dSYM/
+*.dSYM.zip
+firmware/*.zip
+
+# Signing material
+*.jks
+*.keystore
+*.p12
+*.p8
+*.mobileprovision
+*.provisionprofile
+
+# Captures and exports: they hold other people's MAC addresses and traffic
+*.pcap
+*.pcapng
+*.cap
+
+# Language models are downloaded by the app, never committed
+*.gguf
