@@ -53,7 +53,7 @@ object CaptureDigest {
 }
 
 /**
- * The phone's own recorded traffic (LAN tab → Traffic: connections forwarded through the on-device VPN) written up
+ * The phone's own recorded traffic (Internet tab → Traffic: connections forwarded through the on-device VPN) written up
  * for the assistant. Hosts, paths and headers come from the network, so each is flattened before the model sees it.
  */
 object TrafficDigest {

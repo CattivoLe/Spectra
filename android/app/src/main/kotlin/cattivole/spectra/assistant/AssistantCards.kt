@@ -39,7 +39,7 @@ sealed class CardSubject {
     /** Which narrow prompt the model gets for it. */
     abstract val kind: Kind
 
-    enum class Kind { LAN, HOST, BLUETOOTH, WIFI, TRAFFIC, CAPTURE }
+    enum class Kind { LAN, HOST, BLUETOOTH, WIFI, TRAFFIC, CAPTURE, INTERNET, LINK }
 
     data object Lan : CardSubject() {
         override val kind get() = Kind.LAN
@@ -66,6 +66,16 @@ sealed class CardSubject {
     data object Capture : CardSubject() {
         override val kind get() = Kind.CAPTURE
     }
+
+    /** The way out to the internet: the connection check, speed, the user's sites and the last traceroute. */
+    data object Internet : CardSubject() {
+        override val kind get() = Kind.INTERNET
+    }
+
+    /** One link from the Check a link screen; what was checked about it is kept on the [LinkShelf]. */
+    data class Link(val link: String) : CardSubject() {
+        override val kind get() = Kind.LINK
+    }
 }
 
 /** How a saved card remembers its subject (in the chat's system-prompt field), so the journal can refresh it. */
@@ -79,6 +89,8 @@ object CardSubjects {
         is CardSubject.Wifi -> "wifi:" + subject.bssid
         CardSubject.Traffic -> "traffic"
         CardSubject.Capture -> "capture"
+        CardSubject.Internet -> "internet"
+        is CardSubject.Link -> "link:" + subject.link
     }
 
     fun decode(text: String): CardSubject? {
@@ -93,6 +105,8 @@ object CardSubjects {
             "wifi" -> value.takeIf { it.isNotEmpty() }?.let { CardSubject.Wifi(it) }
             "traffic" -> CardSubject.Traffic
             "capture" -> CardSubject.Capture
+            "internet" -> CardSubject.Internet
+            "link" -> value.takeIf { it.isNotEmpty() }?.let { CardSubject.Link(it) }
             else -> null
         }
     }
@@ -116,6 +130,11 @@ data class CardFacts(
     val steps: List<CardStep>,
     val data: String,
     val deepData: String,
+    /**
+     * Nothing has been measured yet: the card only offers its checks as buttons, and the model is not asked to
+     * explain an empty page (that would cost the user half a minute for "run a check first").
+     */
+    val awaitsCheck: Boolean = false,
 )
 
 /** The model's actions on a card. Each one is a fresh, short generation with its own prompt and length. */
@@ -148,8 +167,10 @@ object AssistantCards {
         is CardSubject.Host -> host(snapshot, subject.ip, now)
         is CardSubject.Bluetooth -> bluetooth(snapshot, subject.address, now)
         is CardSubject.Wifi -> wifi(snapshot, subject.bssid, now)
-        // Recorded traffic and captures come from the shelf, not the snapshot: see [traffic] and [capture].
-        CardSubject.Traffic, CardSubject.Capture -> null
+        CardSubject.Internet -> InternetCards.internet(snapshot, now)
+        // Recorded traffic, captures and links come from their shelves, not the snapshot: see [traffic],
+        // [capture] and [InternetCards.link].
+        CardSubject.Traffic, CardSubject.Capture, is CardSubject.Link -> null
     }
 
     // MARK: - The local network
@@ -487,7 +508,7 @@ object AssistantCards {
     /** The worst level on a card: what its journal row is colored by. */
     fun worst(findings: List<CardFinding>): CardRisk = findings.minByOrNull { it.risk.ordinal }?.risk ?: CardRisk.OK
 
-    private fun step(name: AssistantActions.Name, label: String? = null): CardStep =
+    internal fun step(name: AssistantActions.Name, label: String? = null): CardStep =
         CardStep(name.raw, label ?: AssistantActions.offer(name.raw)?.button?.trimEnd('?') ?: name.raw)
 
     private fun portScan(ip: String, all: Boolean): CardStep =
@@ -497,10 +518,10 @@ object AssistantCards {
             CardStep("{\"tool\": \"${AssistantActions.Name.SCAN_PORTS.raw}\", \"host\": ${JSONObject.quote(ip)}}", tr("Scan ports of %s", ip))
         }
 
-    private fun sections(s: AssistantSnapshot, now: Long, vararg topics: AssistantTopic): String =
+    internal fun sections(s: AssistantSnapshot, now: Long, vararg topics: AssistantTopic): String =
         topics.map { AssistantDigest.section(it, s, now) }.filter { it.isNotBlank() }.joinToString("\n\n")
 
-    private fun memory(s: AssistantSnapshot): String = s.memory?.let { "\n\n$it" } ?: ""
+    internal fun memory(s: AssistantSnapshot): String = s.memory?.let { "\n\n$it" } ?: ""
 
     // MARK: - Saving
 
@@ -542,11 +563,13 @@ You are the security assistant inside Spectra, an app that inspects the user's o
         CardSubject.Kind.WIFI -> "The subject is one Wi-Fi network: how safe its encryption is, whether anything looks like an attack or a fake access point, and how good its channel and signal are."
         CardSubject.Kind.TRAFFIC -> "The subject is the traffic recorded from the user's own phone: which servers and apps it talked to, anything unencrypted, tracking or unexpected."
         CardSubject.Kind.CAPTURE -> "The subject is a captured traffic file: what is in it, the busiest devices, and anything unusual (deauthentication bursts, plain-text protocols, unknown devices)."
+        CardSubject.Kind.INTERNET -> "The subject is the user's internet connection as the app measured it: whether it works, name lookups (DNS), latency, the provider and public address, whether HTTPS is intercepted, which sites and services open, the speed, and the path out. When often-blocked services do not open while the rest works, that is filtering on the way, not a fault of the phone. Say what a measurement means for everyday use (calls, video, games). A check that has not been run is not a problem: say what is known and that the buttons below run the rest; do not guess at faults it might find."
+        CardSubject.Kind.LINK -> "The subject is one link the user may open: whether the address looks like phishing (look-alike names, a brand in the wrong place, free hosting, a link hidden inside a link), what its certificate and the domain's age say, and where its redirects lead. A young domain or certificate is a warning sign, not proof; a clean address does not prove the page is safe."
     }
 
     private fun task(action: CardAction): String = when (action) {
         CardAction.CHECK -> "The app has just run one check; its result is in <check>. The user has already read the summary quoted before it. Write 2 to 4 short sentences of plain text about the check result only: what it found and what that means for the user, and say so when it is reassuring. Never retell the summary or the device's other findings. No lists."
-        CardAction.SUMMARY -> "Write 2 to 4 short sentences of plain text: what this is, what matters most, and the one thing to do first. No lists. Do not repeat the findings word for word: say what they mean."
+        CardAction.SUMMARY -> "Write 2 to 4 short sentences of plain text: what this is, what matters most, and the one thing to do first. When no finding is a problem, say plainly that all is in order and nothing needs doing: never invent a problem or a fix. No lists. Do not repeat the findings word for word: say what they mean."
         CardAction.DETAILS -> "Explain each finding in one or two sentences, most serious first: what it means in practice and exactly what to do about it. A short list is fine. At most 250 words."
         CardAction.DEEP -> "Write a thorough analysis using all of the data: what stands out, what it could mean (with the innocent explanation too), how it compares with History and the notes, and a short ordered list of steps. Bold a few words to lead each part. At most 300 words."
     }
@@ -571,7 +594,12 @@ You are the security assistant inside Spectra, an app that inspects the user's o
         AssistantActions.Name.CONNECT_BLUETOOTH -> "This check connected to the device and read its GATT services: go through what each service and value tells (model, maker, firmware, battery, the maker's own services) and which of the maker's services accept writes without pairing."
         AssistantActions.Name.SCAN_PORTS -> "This check scanned the device's ports: say which are open and what each one is for, and which of them is a risk."
         AssistantActions.Name.CAPTURE_PCAP -> "This check captured a few seconds of the network's traffic: say what was in it and whether anything is unusual."
-        AssistantActions.Name.CHECK_CONNECTION -> "This check tested the internet connection: say how it went and anything wrong with it."
+        AssistantActions.Name.CHECK_CONNECTION -> "This check tested the internet connection: say whether it works and anything wrong with it (DNS, HTTPS interception, services that do not open, ports open from the internet)."
+        AssistantActions.Name.SPEED_TEST -> "This check measured the speed: say whether it is enough for video calls and streaming, and whether latency or latency under load (bufferbloat) is a problem."
+        AssistantActions.Name.TRACE_ROUTE -> "This check traced the path to one address hop by hop: say whether it got there, where the delay grows most, and which places or networks the path goes through. Hops that do not answer are usually routers ignoring the probes, not a break."
+        AssistantActions.Name.CHECK_SITES -> "This check tried to open the user's own sites: say which open and which do not, and what a site that does not open most likely means (blocked on the way, the site is down, or a DNS problem)."
+        AssistantActions.Name.CHECK_SITE -> "This check read the site's certificate and asked the domain's registry: say what it found about the certificate (who issued it and when, only if the result names them) and how old the domain is, and whether that is a warning sign (phishing sites are usually only days or weeks old). When no certificate was received or the registry has no record, say exactly that: it matters in itself. Never name an issuer, a registrar or a date that is not in the result."
+        AssistantActions.Name.EXPAND_REDIRECTS -> "This check followed the link's redirects without opening the page: say where the link really leads and whether the final site differs from the one in the link."
         AssistantActions.Name.SCAN_LAN, AssistantActions.Name.SCAN_WIFI, AssistantActions.Name.SCAN_BLUETOOTH -> "This check scanned again: say only what changed or what is new."
         else -> null
     }

@@ -15,6 +15,9 @@ import cattivole.spectra.core.TrackerDetector
  * has found; [AssistantActions] is what may start a scan. Mirrors AssistantSources.swift.
  */
 class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val memory: AssistantMemory) {
+    /** What the Check a link screen and the link card's buttons found about recent links. */
+    val links = LinkShelf()
+
     fun attachment(question: String): AppDataAttachment {
         // The dossier is assembled per question: only what is in front of the user, or named in the question.
         val current = snapshot().let { it.copy(memory = memory.digest(AssistantDigest.subjects(question, it))) }
@@ -32,12 +35,15 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
         CardSubject.Capture -> captures.latest?.let { entry ->
             AssistantCards.capture(entry.analysis, entry.name, CaptureDigest.text(entry.analysis, entry.name, entry.origin, ::describe))
         }
+        is CardSubject.Link -> links.facts(subject.link, now)
         else -> {
             val base = snapshot(now)
             val key = when (subject) {
                 is CardSubject.Host -> listOfNotNull(subject.ip, base.hosts.firstOrNull { it.ip == subject.ip }?.mac)
                 is CardSubject.Bluetooth -> listOf(subject.address)
                 is CardSubject.Wifi -> listOf(subject.bssid)
+                // The way out has no device of its own to look up in the dossier.
+                CardSubject.Internet -> emptyList()
                 else -> base.hosts.flatMap { listOfNotNull(it.ip, it.mac) }
             }
             val subjects = key.mapNotNull { AssistantMemory.normalize(it) }.toSet()
@@ -171,8 +177,10 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
         val report = model.connection.report
         val speed = model.speed.result
         val link = if (report?.status != null) {
-            val down = report.speed?.downBps ?: speed?.downBps
-            val up = report.speed?.upBps ?: speed?.upBps
+            // The connection check samples the download; a full speed test run after it is the fresher word.
+            val fresher = speed != null && speed.measuredAt >= report.checkedAt
+            val down = if (fresher) speed?.downBps ?: report.speed?.downBps else report.speed?.downBps ?: speed?.downBps
+            val up = if (fresher) speed?.upBps ?: report.speed?.upBps else report.speed?.upBps ?: speed?.upBps
             AssistantSnapshot.Link(
                 checkedAt = report.checkedAt,
                 status = report.status?.name?.lowercase(),
@@ -185,12 +193,24 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
                 country = report.external?.countryCode,
                 downMbps = down?.let { it / 1_000_000 },
                 upMbps = up?.let { it / 1_000_000 },
-                latencyMs = report.speed?.latencyMs ?: speed?.idleLatencyMs,
+                latencyMs = if (fresher) speed?.idleLatencyMs ?: report.speed?.latencyMs else report.speed?.latencyMs ?: speed?.idleLatencyMs,
                 jitterMs = speed?.jitterMs,
                 intercepted = report.tls?.intercepted,
                 resolverLies = report.resolver?.liesAboutMissingNames,
                 exposedPorts = report.exposure?.openPorts?.map { it.port }.orEmpty(),
                 access = report.access?.verdict?.name?.lowercase(),
+                gatewayOk = report.gateway?.ok,
+                dnsOk = report.dns?.ok,
+                webOk = report.web?.ok,
+                resolverName = report.resolver?.let { it.resolverName ?: it.resolverIp },
+                resolverCountry = report.resolver?.resolverCountry,
+                blocked = report.access?.unreachable.orEmpty(),
+                tlsReached = report.tls?.reachable,
+                exposureChecked = report.exposure != null,
+                bufferbloat = speed?.bufferbloatGrade,
+                speedFailed = report.speedFailed,
+                via = model.connection.route.name.lowercase(),
+                warp = report.external?.warp == true,
             )
         } else if (speed != null) {
             AssistantSnapshot.Link(
@@ -199,6 +219,7 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
                 upMbps = speed.upBps?.let { it / 1_000_000 },
                 latencyMs = speed.idleLatencyMs,
                 jitterMs = speed.jitterMs,
+                bufferbloat = speed.bufferbloatGrade,
             )
         } else {
             null
@@ -207,6 +228,27 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
             val device = model.ble.devices[read.address]
             val age = ((now - read.readAt) / 60_000L).toInt()
             GattDigest.text(read, device?.displayName ?: read.address, device?.rssi, if (age < 1) "Read just now from" else "Read $age min ago from")
+        }
+        val connection = model.connection
+        val sites = connection.resources.mapNotNull { host ->
+            connection.resourceResults[host]?.let { AssistantSnapshot.SiteReach(host, it.ok, it.millis) }
+        }
+        val route = connection.routeTarget?.let { target ->
+            AssistantSnapshot.Route(
+                target = target,
+                address = connection.routeAddress,
+                hops = connection.routeTrace?.hops.orEmpty().map { hop ->
+                    val place = hop.address?.let { connection.routePlaces[it] }
+                    AssistantSnapshot.RouteHop(
+                        hop.address,
+                        hop.millis,
+                        place?.let { listOfNotNull(listOfNotNull(it.city, it.countryCode).joinToString(", ").ifEmpty { null }, it.isp).joinToString(" · ") }
+                            ?.ifEmpty { null },
+                    )
+                },
+                failure = connection.routeFailure,
+                running = connection.routeRunning,
+            )
         }
         return AssistantSnapshot(
             wifiName = model.wifiJoiner.currentSsid,
@@ -239,6 +281,8 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
                     )
                 }
             },
+            sites = sites,
+            route = route,
         )
     }
 

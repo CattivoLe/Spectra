@@ -35,7 +35,17 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
         CONNECT_BLUETOOTH("connect_bluetooth"),
         SEARCH_HISTORY("search_history"),
         REMEMBER("remember"),
-        FORGET("forget");
+        FORGET("forget"),
+
+        // Summary-card steps only: the chat grammar does not offer them, the card's buttons call them.
+        /** A traceroute to "host". */
+        TRACE_ROUTE("trace_route"),
+        /** The user's own list of sites (Connection → Resources), each tried once. */
+        CHECK_SITES("check_sites"),
+        /** The certificate and the registry record of the link in "text". */
+        CHECK_SITE("check_site"),
+        /** The redirects of the link in "text", followed by their headers only. */
+        EXPAND_REDIRECTS("expand_redirects");
 
         companion object {
             fun of(raw: String): Name? = entries.firstOrNull { it.raw == raw }
@@ -102,8 +112,35 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
             Name.SPEED_TEST -> {
                 model.speed.start()
                 delay(400)
-                waitWhile(30_000) { model.speed.running }
+                waitWhile(60_000) { model.speed.running }
                 section(AssistantTopic.LINK)
+            }
+            Name.TRACE_ROUTE -> {
+                val host = argument(argsJson, "host", "text") ?: cattivole.spectra.core.RouteTrace.DEFAULT_TARGET
+                model.connection.traceRoute(host)
+                delay(400)
+                waitWhile(120_000) { model.connection.routeRunning }
+                sources.snapshot().route?.let { AssistantDigest.routeLines(it).joinToString("\n") } ?: "The traceroute did not start."
+            }
+            Name.CHECK_SITES -> {
+                val connection = model.connection
+                if (connection.resources.isEmpty()) return "The user's list of sites is empty (Connection → Resources), so there is nothing to try."
+                connection.checkAllResources()
+                delay(400)
+                waitWhile(30_000) { connection.checkingResources.isNotEmpty() }
+                AssistantDigest.siteLines(sources.snapshot().sites).joinToString("\n").ifEmpty { "None of the sites answered in time." }
+            }
+            Name.CHECK_SITE -> {
+                val target = webLink(argsJson) ?: return "Missing or invalid \"text\": give the link to check."
+                val report = cattivole.spectra.platform.SiteProbe.probe(target.asciiHost ?: target.host, LinkShelf.registryName(target))
+                sources.links.keepSite(target.link, report)
+                InternetCards.siteText(report)
+            }
+            Name.EXPAND_REDIRECTS -> {
+                val target = webLink(argsJson) ?: return "Missing or invalid \"text\": give the link to expand."
+                val trace = cattivole.spectra.platform.RedirectTracer.trace(LinkShelf.start(target))
+                sources.links.keepRedirects(target.link, trace)
+                InternetCards.redirectText(trace)
             }
             Name.SCAN_PORTS -> {
                 val host = argument(argsJson, "host", "bssid")
@@ -242,6 +279,10 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
         lines.add("Each line means that device is reachable from the open internet on that port.")
         return lines.joinToString("\n")
     }
+
+    /** The web link with a name in the call's "text": only such a link has a certificate and redirects. */
+    private fun webLink(argsJson: String): cattivole.spectra.core.LinkInspection? =
+        argument(argsJson, "text")?.let { cattivole.spectra.core.LinkInspector.inspect(it) }?.takeIf(LinkShelf::isWeb)
 
     private fun section(topic: AssistantTopic): String =
         AssistantDigest.section(topic, sources.snapshot()).ifEmpty { "Nothing new." }
@@ -425,6 +466,10 @@ Leave "host" out for a general note. To remove a note:
             Name.CAPTURE_PCAP -> ToolOffer(name, tr("a traffic capture"))
             Name.CONNECT_BLUETOOTH -> ToolOffer(name, tr("a connection to the device"))
             Name.SEARCH_HISTORY -> ToolOffer(name, tr("a search through History"))
+            Name.TRACE_ROUTE -> ToolOffer(name, tr("a traceroute"))
+            Name.CHECK_SITES -> ToolOffer(name, tr("a check of your sites"))
+            Name.CHECK_SITE -> ToolOffer(name, tr("a certificate and domain check"))
+            Name.EXPAND_REDIRECTS -> ToolOffer(name, tr("expanding the redirects"))
             Name.REMEMBER, Name.FORGET, null -> null
         }
 
@@ -505,6 +550,10 @@ Leave "host" out for a general note. To remove a note:
             Name.SEARCH_HISTORY -> tr("History search")
             Name.REMEMBER -> tr("saving a note")
             Name.FORGET -> tr("removing a note")
+            Name.TRACE_ROUTE -> tr("traceroute")
+            Name.CHECK_SITES -> tr("check of your sites")
+            Name.CHECK_SITE -> tr("certificate and domain check")
+            Name.EXPAND_REDIRECTS -> tr("redirects")
             null -> name
         }
 
@@ -521,6 +570,10 @@ Leave "host" out for a general note. To remove a note:
             Name.SEARCH_HISTORY -> tr("Looking through History…")
             Name.REMEMBER -> tr("Saving a note…")
             Name.FORGET -> tr("Removing a note…")
+            Name.TRACE_ROUTE -> tr("Tracing the path…")
+            Name.CHECK_SITES -> tr("Trying your sites…")
+            Name.CHECK_SITE -> tr("Asking the site and the registry…")
+            Name.EXPAND_REDIRECTS -> tr("Following redirects…")
             null -> tr("Running %s…", name)
         }
 

@@ -82,7 +82,8 @@ class AssistantCardRunner(
         val card = AssistantCard(chat.id, subject, facts, chat.createdAt, live = true).also { it.headMessage = head.id }
         cards[chat.id] = card
         Log.i(TAG, "card ${subject.kind}: ${facts.findings.size} findings shown at once")
-        run(card, CardAction.SUMMARY)
+        // Nothing measured yet: the buttons are the whole card, there is nothing for the model to explain.
+        if (!facts.awaitsCheck) run(card, CardAction.SUMMARY)
         return chat.id
     }
 

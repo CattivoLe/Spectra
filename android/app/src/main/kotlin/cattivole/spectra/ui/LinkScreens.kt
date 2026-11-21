@@ -92,6 +92,7 @@ fun LinkScreen(model: SpectraModel, nav: Navigator) {
         subtitle = report?.external?.ip,
         onBack = nav::back,
         actions = {
+            AskAssistantButton(model, nav, subject = { cattivole.spectra.assistant.CardSubject.Internet })
             IconButton(onClick = { if (link.running) link.stop() else link.check() }) {
                 Icon(
                     if (link.running) Icons.Rounded.Stop else Icons.Rounded.Refresh,

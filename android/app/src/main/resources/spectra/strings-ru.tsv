@@ -1522,3 +1522,77 @@ Connection checks are saved here automatically, by network.	Проверки с�
 Bluetooth scans are saved here automatically.	Сканирования Bluetooth сохраняются здесь автоматически.
 Imported %s records are removed. Scans on this phone and other tabs stay.	Импортированные записи вкладки «%s» удаляются. Сканирования этого телефона и других вкладок остаются.
 Saved %s records are removed. Other tabs keep theirs.	Сохранённые записи вкладки «%s» удаляются. В других вкладках всё остаётся.
+# Assistant: Internet and link summary cards
+Your sites that do not open: %s.	Ваши сайты, которые не открываются: %s.
+Your sites that open: %s.	Ваши сайты, которые открываются: %s.
+The connection has not been checked yet: DNS, the provider, HTTPS interception and blocked services are unknown.	Соединение ещё не проверялось: DNS, провайдер, перехват HTTPS и блокировки сервисов неизвестны.
+Check the connection	Проверить соединение
+Check the connection again	Проверить соединение ещё раз
+Checked %s ago: the results may be out of date.	Проверка была %s назад: данные могли устареть.
+Check access to your sites	Проверить доступ к вашим сайтам
+Check your sites again	Проверить ваши сайты ещё раз
+The internet works: a page answers in %d ms.	Интернет работает: страница отвечает за %d мс.
+The internet works.	Интернет работает.
+The network asks for a sign-in page before it lets traffic out.	Сеть требует входа через страницу авторизации, прежде чем выпустить в интернет.
+The router answers, but the internet does not.	Роутер отвечает, а интернет — нет.
+The phone is not connected to any network.	Телефон не подключён ни к одной сети.
+No internet on this connection.	В этом подключении нет интернета.
+Only allow-listed sites open: the rest of the internet is cut off.	Открываются только сайты из белого списка: остальной интернет отрезан.
+None of the reference sites answered.	Ни один из контрольных сайтов не ответил.
+Some often-blocked services do not open.	Часть сервисов, которые часто блокируют, не открывается.
+Often-blocked services do not open: %s.	Не открываются сервисы, которые часто блокируют: %s.
+Foreign sites and often-blocked services open.	Зарубежные сайты и часто блокируемые сервисы открываются.
+Name lookups (DNS) fail: sites open only by their address.	Не работает DNS: сайты открываются только по IP-адресу.
+Name lookups are slow: %d ms.	DNS отвечает медленно: %d мс.
+The router answers slowly (%d ms): weak Wi‑Fi signal or a busy router.	Роутер отвечает медленно (%d мс): слабый сигнал Wi‑Fi или роутер перегружен.
+HTTPS certificates are genuine: nothing re-signs them on the way.	Сертификаты HTTPS настоящие: по пути их никто не подменяет.
+No usual port of your public address answers from the internet.	Ни один из обычных портов вашего внешнего адреса не отвечает из интернета.
+Public address: %s.	Внешний адрес: %s.
+Name lookups are answered by %s.	DNS-запросы обслуживает %s.
+Checked through the VPN: the address and provider are the VPN's.	Проверка шла через VPN: адрес и провайдер принадлежат VPN.
+Traffic leaves through Cloudflare WARP.	Трафик выходит через Cloudflare WARP.
+The speed test did not finish.	Замер скорости не завершился.
+The speed has not been measured yet.	Скорость ещё не замерялась.
+Measure the speed	Замерить скорость
+Slow download: %s Mbit/s: video and calls may stutter.	Медленная загрузка: %s Мбит/с — видео и звонки могут прерываться.
+Speed: %s Mbit/s down, %s up.	Скорость: %s Мбит/с на загрузку, %s на отдачу.
+Speed: %s Mbit/s down.	Скорость: %s Мбит/с на загрузку.
+High latency: %d ms: calls and games will lag.	Высокая задержка: %d мс — звонки и игры будут отставать.
+Latency jumps by %d ms: calls may break up.	Задержка скачет на %d мс: звонки могут прерываться.
+Latency grows a lot under load (grade %s): calls stutter while something downloads.	Под нагрузкой задержка сильно растёт (оценка %s): пока что-то качается, звонки заикаются.
+Measure the speed again	Замерить скорость ещё раз
+The traceroute to %s is still running.	Трассировка до %s ещё идёт.
+Traceroute to %s: %s	Трассировка до %s: %s
+The path to %s takes %d hops: it answers.	Путь до %s — %d узлов, цель отвечает.
+The trace to %s stops after %d hops: the rest do not answer, more often a firewall than a break.	Трассировка до %s обрывается после %d узлов: дальше не отвечают — чаще это файрвол, а не обрыв.
+The delay grows most at hop %d (%s): +%d ms.	Сильнее всего задержка растёт на узле %d (%s): +%d мс.
+Trace %s again	Повторить трассировку до %s
+Trace the route to %s	Трассировка до %s
+%d min	%d мин
+%d h	%d ч
+%d d	%d дн.
+Looks like phishing: do not open it and do not enter anything on it.	Похоже на фишинг: не открывайте ссылку и ничего на ней не вводите.
+Several things about this address are typical of phishing.	В этом адресе несколько признаков, типичных для фишинга.
+The address itself shows no warning signs.	В самом адресе тревожных признаков нет.
+Inside the link (%s): 	Внутри ссылки (%s): 
+The certificate and the domain's age have not been checked yet.	Сертификат и возраст домена ещё не проверялись.
+Where the link really leads has not been checked yet.	Куда на самом деле ведёт ссылка, ещё не проверялось.
+No redirects: the link opens where it says.	Перенаправлений нет: ссылка открывается там, куда указывает.
+Redirects once and ends at %s.	Одно перенаправление, в конце — %s.
+Redirects %d times and ends at %s.	Перенаправлений: %d, в конце — %s.
+It leads to another site: %s.	Ссылка ведёт на другой сайт: %s.
+The final address looks like phishing: %s.	Конечный адрес похож на фишинг: %s.
+The final address has warning signs: %s.	У конечного адреса есть тревожные признаки: %s.
+a traceroute	трассировку
+a check of your sites	проверку ваших сайтов
+a certificate and domain check	проверку сертификата и домена
+expanding the redirects	раскрытие перенаправлений
+traceroute	трассировка
+check of your sites	проверка ваших сайтов
+certificate and domain check	проверка сертификата и домена
+redirects	перенаправления
+Tracing the path…	Трассировка…
+Trying your sites…	Проверяю ваши сайты…
+Measure the speed fully	Замерить скорость полностью
+A short link: the real address is hidden. Expand the redirects to see it.	Короткая ссылка: настоящий адрес скрыт. Раскройте перенаправления, чтобы его увидеть.
+The address has words phishing likes to use: %s.	В адресе есть слова, которые любит фишинг: %s.

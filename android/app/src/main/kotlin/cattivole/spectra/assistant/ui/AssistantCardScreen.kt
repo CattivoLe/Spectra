@@ -104,7 +104,7 @@ fun AssistantCardScreen(model: SpectraModel, nav: AssistantNav, id: UUID) {
             }
             // An action that finished is not offered again until a check brings new data: it would say the same.
             val done = current.doneSinceCheck
-            val offers = listOf(CardAction.DETAILS, CardAction.DEEP).filter { it !in done }
+            val offers = if (facts.awaitsCheck) emptyList() else listOf(CardAction.DETAILS, CardAction.DEEP).filter { it !in done }
             if (offers.isNotEmpty()) {
                 freeCard(
                     key = "more",
