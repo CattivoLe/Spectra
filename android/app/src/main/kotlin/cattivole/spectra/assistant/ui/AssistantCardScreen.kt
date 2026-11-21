@@ -89,10 +89,12 @@ fun AssistantCardScreen(model: SpectraModel, nav: AssistantNav, id: UUID) {
             }
         }
         if (current.live) {
-            if (facts.steps.isNotEmpty()) {
+            // A step already run is not offered again: its result is above.
+            val steps = facts.steps.filter { it.call !in current.ranSteps }
+            if (steps.isNotEmpty()) {
                 freeCard(key = "steps", header = tr("Next steps")) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        for (step in facts.steps) {
+                        for (step in steps) {
                             FilledTonalButton(onClick = { assistant.cards.runStep(current, step) }, enabled = !current.busy, modifier = Modifier.fillMaxWidth()) {
                                 Text(step.label)
                             }
@@ -100,16 +102,22 @@ fun AssistantCardScreen(model: SpectraModel, nav: AssistantNav, id: UUID) {
                     }
                 }
             }
-            val ran = current.entries.mapNotNull { it.action }.toSet()
-            freeCard(key = "more", header = tr("Ask the model"), footer = tr("Deep analysis reads everything around this subject and writes at length: about 3–4 minutes on this phone.")) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { assistant.cards.run(current, CardAction.DETAILS) }, enabled = !current.busy, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Rounded.Subject, null, Modifier.size(18.dp))
-                        Text(if (CardAction.DETAILS in ran) tr("More detail again") else tr("More detail"), Modifier.padding(start = 8.dp))
-                    }
-                    OutlinedButton(onClick = { assistant.cards.run(current, CardAction.DEEP) }, enabled = !current.busy, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Rounded.TravelExplore, null, Modifier.size(18.dp))
-                        Text(tr("Deep analysis"), Modifier.padding(start = 8.dp))
+            // An action that finished is not offered again until a check brings new data: it would say the same.
+            val done = current.doneSinceCheck
+            val offers = listOf(CardAction.DETAILS, CardAction.DEEP).filter { it !in done }
+            if (offers.isNotEmpty()) {
+                freeCard(
+                    key = "more",
+                    header = tr("Ask the model"),
+                    footer = if (CardAction.DEEP in offers) tr("Deep analysis reads everything around this subject and writes at length: about 3–4 minutes on this phone.") else null,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for (action in offers) {
+                            OutlinedButton(onClick = { assistant.cards.run(current, action) }, enabled = !current.busy, modifier = Modifier.fillMaxWidth()) {
+                                Icon(if (action == CardAction.DEEP) Icons.Rounded.TravelExplore else Icons.Rounded.Subject, null, Modifier.size(18.dp))
+                                Text(action.heading, Modifier.padding(start = 8.dp))
+                            }
+                        }
                     }
                 }
             }

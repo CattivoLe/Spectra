@@ -1429,7 +1429,6 @@ Nearby for %d min.	Рядом уже %d мин.
 Out of range now; this is what it said last.	Сейчас вне зоны; это последнее, что оно сообщало.
 Maker by its signal: %s.	Производитель по сигналу: %s.
 Signal %d dBm: %s.	Сигнал %d дБм: %s.
-Its GATT data was read: model, maker and services are in the data.	Данные GATT прочитаны: модель, производитель и сервисы есть в данных.
 Read “%s” over Bluetooth	Прочитать «%s» по Bluetooth
 Scan Bluetooth again	Просканировать Bluetooth заново
 very close, within a couple of metres	совсем близко, в паре метров
@@ -1471,7 +1470,6 @@ Findings	Находки
 Next steps	Следующие шаги
 Ask the model	Спросить модель
 Deep analysis reads everything around this subject and writes at length: about 3–4 minutes on this phone.	Глубокий анализ читает всё вокруг и пишет подробно: на этом телефоне около 3–4 минут.
-More detail again	Подробнее ещё раз
 More detail	Подробнее
 Deep analysis	Глубокий анализ
 In plain words	Простыми словами
@@ -1497,3 +1495,14 @@ Saved session of %s	Сохранённая сессия от %s
 Recording in progress	Идёт запись
 Current recording	Текущая запись
 Scan ports of %s	Просканировать порты %s
+What the check showed	Что показала проверка
+The router does not let devices open ports over UPnP: the safer setting.	Роутер не даёт устройствам открывать порты через UPnP: так безопаснее.
+The router forwards no ports from the internet.	Роутер не пробрасывает порты из интернета.
+The router forwards from the internet: %s.	Роутер пробрасывает из интернета: %s.
+And %d more.	И ещё %d.
+Connected, but it published nothing readable without pairing.	Подключились, но без сопряжения оно ничего не отдаёт.
+%d of the maker's own characteristics accept writes without pairing (%s).	Характеристик производителя, принимающих запись без сопряжения: %d (%s).
+Read over GATT: %d services, %d characteristics; nothing was written.	Прочитано по GATT: сервисов %d, характеристик %d; ничего не записано.
+Fold	Свернуть
+All %d	Все %d
+Trackers: %d, all near their owners	Трекеры: %d, все рядом с владельцами

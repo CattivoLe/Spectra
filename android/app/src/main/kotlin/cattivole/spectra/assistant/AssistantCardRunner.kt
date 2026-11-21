@@ -40,6 +40,17 @@ class AssistantCard(val id: UUID, val subject: CardSubject?, facts: CardFacts, v
     val entries = mutableStateListOf<CardEntry>()
     /** The saved head message, rewritten when a check changes the findings. */
     var headMessage: UUID? = null
+    /** The last check a step button ran: every later model action reads its result. */
+    var lastCheck: CardCheck? = null
+    /** Step calls already run on this card: their buttons are not offered again. */
+    val ranSteps = mutableStateListOf<String>()
+
+    /** The model actions that finished since the last check: offering them again would only repeat them. */
+    val doneSinceCheck: Set<CardAction>
+        get() {
+            val lastCheck = entries.indexOfLast { it.isCheck }
+            return entries.drop(lastCheck + 1).filter { it.state == CardEntry.State.DONE }.mapNotNull { it.action }.toSet()
+        }
 
     val busy: Boolean get() = entries.any { it.active }
 }
@@ -116,6 +127,7 @@ class AssistantCardRunner(
             text = AssistantActions.runningLabel(step.tool)
         }
         card.entries.add(entry)
+        card.ranSteps.add(step.call)
         job = scope.launch {
             val result = try {
                 actions.perform(step.call)
@@ -133,12 +145,14 @@ class AssistantCardRunner(
             store.append(ChatMessage.Role.Assistant, "✓ ${step.label}", card.id)
             val subject = card.subject ?: return@launch
             val fresh = sources.cardFacts(subject) ?: card.facts
-            // The check's own words ride along: a capture or a GATT read says more than the refreshed snapshot.
-            card.facts = fresh.copy(data = fresh.data + "\n\nJust ran ${AssistantActions.title(step.tool)}:\n" + result.take(1500))
+            // The check's own words go to the model as their own block: a capture or a GATT read says more than
+            // the refreshed findings, and the model is asked about the check, not for the summary again.
+            card.lastCheck = CardCheck(AssistantActions.title(step.tool), result)
+            card.facts = fresh
             card.headMessage?.let { store.update(it, AssistantCards.render(fresh.title, fresh.findings)) }
-            val summary = CardEntry(CardAction.SUMMARY, CardAction.SUMMARY.heading)
-            card.entries.add(summary)
-            generate(card, summary, CardAction.SUMMARY)
+            val explained = CardEntry(CardAction.CHECK, CardAction.CHECK.heading)
+            card.entries.add(explained)
+            generate(card, explained, CardAction.CHECK)
         }
     }
 
@@ -175,7 +189,7 @@ class AssistantCardRunner(
         }
         val messages = listOf(
             ChatMessage(ChatMessage.Role.System, CardPrompts.system(action, card.facts.subject.kind)),
-            ChatMessage(ChatMessage.Role.User, CardPrompts.user(card.facts, action)),
+            ChatMessage(ChatMessage.Role.User, CardPrompts.user(card.facts, action, card.lastCheck, earlierSummary(card, entry))),
         )
         val params = GenerationParams(maxTokens = action.maxTokens, temperature = 0.3f)
         entry.state = CardEntry.State.RUNNING
@@ -223,6 +237,11 @@ class AssistantCardRunner(
             }
         }
     }
+
+    /** What the card already said in short (its summary and check notes), for a check's text not to repeat it. */
+    private fun earlierSummary(card: AssistantCard, current: CardEntry): String =
+        card.entries.filter { it !== current && (it.action == CardAction.SUMMARY || it.action == CardAction.CHECK) && it.text.isNotBlank() }
+            .joinToString("\n") { it.text }
 
     /** Forgets a deleted card. */
     fun forget(id: UUID) {

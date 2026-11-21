@@ -31,6 +31,11 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.DisposableEffect
@@ -131,6 +136,8 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
     var scope by rememberSaveable { mutableStateOf(BleScope.ALL) }
     var showOut by rememberSaveable { mutableStateOf(false) }
     var menu by rememberSaveable { mutableStateOf(false) }
+    /** The Trackers section, folded to the tags that need a look; open, it lists every tag heard. */
+    var trackersOpen by rememberSaveable { mutableStateOf(false) }
     val now = ble.now
     val needle = query.trim()
     val heard = ble.devices.values
@@ -268,18 +275,51 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
                 NoteRow(tr("Classic inquiry pauses low-energy scanning on many phones until it finishes."), warning = false)
             })
         }
+        // Tags near their owners are everyday keys and bags: folded away unless asked for, the alarming ones stay.
+        val rankedTrackers = trackers.sortedByDescending { it.second.level }
+        val shownTrackers = if (trackersOpen) rankedTrackers else rankedTrackers.filter { it.second.level != TrackerAssessment.Level.INFO }
+        val toggleTrackers = { trackersOpen = !trackersOpen }
+        val trackersTint: @Composable () -> Color = { if (alarming) Spectra.colors.danger else Spectra.colors.warning }
+        val trackersTrailing: @Composable RowScope.() -> Unit = {
+            Text(
+                if (trackersOpen) tr("Fold") else tr("All %d", trackers.size),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Icon(
+                if (trackersOpen) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        if (trackers.isNotEmpty() && shownTrackers.isEmpty()) {
+            item(key = "header-trackers") {
+                SectionHeader(
+                    tr("Trackers: %d, all near their owners", trackers.size),
+                    Modifier.animateItem().clickable(onClick = toggleTrackers),
+                    tint = trackersTint(),
+                    icon = Icons.Rounded.Sell,
+                    trailing = trackersTrailing,
+                )
+            }
+        }
         cardSection(
-            trackers,
+            shownTrackers,
             header = tr("Trackers"),
             footer = if (alarming) {
                 tr("A tag away from its owner has stayed near you for a while. Move somewhere else and check whether it is still here.")
-            } else {
+            } else if (trackersOpen) {
                 tr("AirTags, Tile, Samsung SmartTag, Chipolo and Find My Device tags report their position through other people's phones. One near its owner is just someone's keys.")
+            } else {
+                null
             },
             key = { "tracker-" + it.first.address },
             sectionKey = "trackers",
-            headerTint = { if (alarming) Spectra.colors.danger else Spectra.colors.warning },
+            headerTint = trackersTint,
             headerIcon = Icons.Rounded.Sell,
+            headerTrailing = if (trackers.size > shownTrackers.size || trackersOpen) trackersTrailing else null,
+            onHeaderClick = toggleTrackers,
             dividerInset = 70.dp,
         ) { (device, assessment) -> TrackerRow(device, assessment, onClick = { nav.ble(device.address) }) }
         cardSection(

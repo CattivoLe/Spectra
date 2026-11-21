@@ -33,7 +33,15 @@ data class AssistantSnapshot(
     val memory: String? = null,
     /** Which device [gatt] was read from. */
     val gattAddress: String? = null,
+    /** The same read, one entry per characteristic: what the summary card turns into findings. */
+    val gattItems: List<GattItem> = emptyList(),
 ) {
+    /** [vendor]: in a service the Bluetooth catalog does not name, i.e. the maker's own. */
+    data class GattItem(val service: String, val name: String, val value: String?, val writable: Boolean, val vendor: Boolean)
+
+    /** The router's answer to a port-forwarding check: [rules] as "TCP 8080 → 192.168.1.50:80". */
+    data class Forwarding(val supported: Boolean, val rules: List<String>)
+
     data class Wifi(
         val name: String,
         val bssid: String,
@@ -69,6 +77,8 @@ data class AssistantSnapshot(
         val note: String? = null,
         /** [risks] with their weight: what the summary card ranks by. */
         val portRisks: List<PortRiskItem> = emptyList(),
+        /** The router's forwarding table once a check read it; null before that. Gateway only. */
+        val forwarding: Forwarding? = null,
     )
 
     data class PortRiskItem(val title: String, val high: Boolean)

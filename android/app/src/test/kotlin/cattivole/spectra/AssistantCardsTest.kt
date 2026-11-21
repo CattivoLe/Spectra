@@ -5,6 +5,7 @@ import cattivole.spectra.assistant.AssistantCardRunner
 import cattivole.spectra.assistant.AssistantCards
 import cattivole.spectra.assistant.AssistantSnapshot
 import cattivole.spectra.assistant.CardAction
+import cattivole.spectra.assistant.CardCheck
 import cattivole.spectra.assistant.CardFinding
 import cattivole.spectra.assistant.CardPrompts
 import cattivole.spectra.assistant.CardRisk
@@ -124,6 +125,25 @@ class AssistantCardsTest {
         assertTrue(facts.findings.single().text.contains("not been scanned"))
     }
 
+    @Test
+    fun theForwardingCheckBecomesAFindingAndIsNotOfferedAgain() {
+        val before = AssistantCards.host(AssistantSnapshot(hosts = listOf(router)), router.ip, now)
+        assertTrue("check_port_forwarding" in calls(before.steps))
+
+        val open = router.copy(forwarding = AssistantSnapshot.Forwarding(true, listOf("TCP 8080 → 192.168.1.64:80")))
+        val after = AssistantCards.host(AssistantSnapshot(hosts = listOf(open)), router.ip, now)
+        assertTrue(after.findings.any { it.risk == CardRisk.CRITICAL && it.text.contains("TCP 8080 → 192.168.1.64:80") })
+        assertFalse("check_port_forwarding" in calls(after.steps))
+        val lan = AssistantCards.lan(AssistantSnapshot(hosts = listOf(open, camera)), now)
+        assertFalse("check_port_forwarding" in calls(lan.steps))
+        assertTrue(lan.findings.any { it.text.contains("8080") })
+
+        val closed = router.copy(forwarding = AssistantSnapshot.Forwarding(true, emptyList()))
+        assertTrue(AssistantCards.host(AssistantSnapshot(hosts = listOf(closed)), router.ip, now).findings.any { it.risk == CardRisk.OK && it.text.contains("forwards no ports") })
+        val off = router.copy(forwarding = AssistantSnapshot.Forwarding(false, emptyList()))
+        assertTrue(AssistantCards.host(AssistantSnapshot(hosts = listOf(off)), router.ip, now).findings.any { it.risk == CardRisk.OK && it.text.contains("UPnP") })
+    }
+
     // MARK: - Wi‑Fi
 
     private val home = AssistantSnapshot.Wifi("Home", "AA:BB:CC:00:00:10", -50, 6, "2.4 GHz", "WPA2", isCurrent = true)
@@ -187,7 +207,12 @@ class AssistantCardsTest {
         val before = AssistantCards.bluetooth(AssistantSnapshot(bluetooth = listOf(speaker)), speaker.address, now)
         assertEquals("""{"tool": "connect_bluetooth", "text": "Momentum 3"}""", before.steps.first().call)
         assertRunnable(before.steps)
-        val read = AssistantSnapshot(bluetooth = listOf(speaker), gatt = "GATT of Momentum 3: Battery 80%", gattAddress = speaker.address)
+        val read = AssistantSnapshot(
+            bluetooth = listOf(speaker),
+            gatt = "GATT of Momentum 3: Battery 80%",
+            gattAddress = speaker.address,
+            gattItems = listOf(AssistantSnapshot.GattItem("Battery Service", "Battery Level", "80%", writable = false, vendor = false)),
+        )
         val after = AssistantCards.bluetooth(read, speaker.address, now)
         assertEquals(listOf("scan_bluetooth"), calls(after.steps))
         assertTrue(after.findings.any { it.risk == CardRisk.OK })
@@ -195,6 +220,28 @@ class AssistantCardsTest {
         // Another device's read never rides along.
         val other = AssistantCards.bluetooth(read.copy(bluetooth = listOf(speaker, tag)), tag.address, now)
         assertFalse(other.data.contains("Battery"))
+    }
+
+    @Test
+    fun aGattReadIsTakenApartItemByItem() {
+        val items = listOf(
+            AssistantSnapshot.GattItem("74EC2172-0BAD-4D01-8F77-997B2BE0722A", "4F860002-943B-49EF-BED4-2F730304427A", null, writable = true, vendor = true),
+            AssistantSnapshot.GattItem("74EC2172-0BAD-4D01-8F77-997B2BE0722A", "4F860003-943B-49EF-BED4-2F730304427A", "0x0102", writable = false, vendor = true),
+            AssistantSnapshot.GattItem("Device Information", "Model Number String", "A2187", writable = false, vendor = false),
+            AssistantSnapshot.GattItem("Battery Service", "Battery Level", "60%", writable = false, vendor = false),
+        )
+        val found = AssistantCards.gattFindings(items)
+        assertEquals(CardRisk.WARNING, found.first().risk)
+        assertTrue(found.first().text.startsWith("1 of the maker's own characteristics accept writes"))
+        // Standard values first: they say what the device is.
+        assertEquals(listOf("Model Number String: A2187", "Battery Level: 60%", "4F860003-943B-49EF-BED4-2F730304427A: 0x0102"), found.filter { it.risk == CardRisk.INFO }.map { it.text })
+        assertTrue(found.last().text.contains("3 services, 4 characteristics"))
+        assertEquals(listOf(CardRisk.INFO), AssistantCards.gattFindings(emptyList()).map { it.risk })
+
+        val tag = AssistantSnapshot(bluetooth = listOf(speaker), gatt = "GATT text", gattAddress = speaker.address, gattItems = items)
+        val facts = AssistantCards.bluetooth(tag, speaker.address, now)
+        assertEquals(CardRisk.WARNING, facts.findings.first().risk)
+        assertTrue(facts.findings.any { it.text == "Model Number String: A2187" })
     }
 
     // MARK: - Traffic and captures
@@ -280,6 +327,22 @@ class AssistantCardsTest {
         assertTrue(CardPrompts.system(CardAction.SUMMARY, CardSubject.Kind.HOST, Locale.forLanguageTag("ru")).endsWith("Answer in Russian."))
         assertTrue(CardAction.SUMMARY.maxTokens <= 160)
         assertTrue(CardAction.DEEP.maxTokens > CardAction.DETAILS.maxTokens)
+    }
+
+    @Test
+    fun afterACheckTheModelIsAskedAboutTheCheckNotTheSummaryAgain() {
+        val facts = AssistantCards.host(AssistantSnapshot(hosts = listOf(router)), router.ip, now)
+        val check = CardCheck("port forwarding check", "The router forwards no ports from the internet right now.")
+        val text = CardPrompts.user(facts, CardAction.CHECK, check, earlier = "The router has Telnet open.")
+        assertTrue(text.startsWith("<check name=\"port forwarding check\">\nThe router forwards no ports"))
+        assertTrue(text.contains("do not repeat it):\nThe router has Telnet open."))
+        assertTrue(CardPrompts.system(CardAction.CHECK, CardSubject.Kind.HOST, Locale.ENGLISH).contains("Do not repeat the earlier summary"))
+        // Later actions still read the check, but never get the earlier summary to echo.
+        val details = CardPrompts.user(facts, CardAction.DETAILS, check, earlier = "The router has Telnet open.")
+        assertTrue(details.contains("<check"))
+        assertFalse(details.contains("Telnet open."))
+        assertFalse(CardPrompts.user(facts, CardAction.SUMMARY).contains("<check"))
+        assertEquals(CardAction.CHECK to "Nothing forwarded.", AssistantCardRunner.savedText("**What the check showed**\n\nNothing forwarded."))
     }
 
     @Test

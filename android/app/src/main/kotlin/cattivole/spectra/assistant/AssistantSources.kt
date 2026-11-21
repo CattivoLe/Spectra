@@ -143,6 +143,12 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
                 trust = device.trust.name.lowercase(),
                 note = device.note,
                 portRisks = risks.map { AssistantSnapshot.PortRiskItem(it.title, it.level >= RiskLevel.HIGH) },
+                forwarding = device.profile?.portForwarding?.takeIf { device.isGateway }?.let { table ->
+                    AssistantSnapshot.Forwarding(
+                        table.supported,
+                        table.mappings.filter { it.enabled }.map { "${it.proto} ${it.externalPort} → ${it.internalClient}:${it.internalPort}" },
+                    )
+                },
             )
         }
         val bluetooth = model.ble.devices.values.map { device ->
@@ -220,6 +226,19 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
             capture = captureText(),
             gatt = gatt,
             gattAddress = model.gatt.lastRead?.address,
+            gattItems = model.gatt.lastRead?.services.orEmpty().flatMap { service ->
+                val vendor = cattivole.spectra.core.Catalog.serviceName(service.uuid) == null
+                val serviceName = service.name ?: cattivole.spectra.core.Catalog.serviceName(service.uuid) ?: service.uuid
+                service.characteristics.map { c ->
+                    AssistantSnapshot.GattItem(
+                        serviceName,
+                        c.name ?: cattivole.spectra.core.Catalog.characteristicName(c.uuid) ?: c.uuid,
+                        c.value?.let { cattivole.spectra.core.GattValue.decode(c.uuid, it) },
+                        c.properties.contains("Write"),
+                        vendor,
+                    )
+                }
+            },
         )
     }
 

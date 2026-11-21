@@ -121,6 +121,8 @@ data class CardFacts(
 /** The model's actions on a card. Each one is a fresh, short generation with its own prompt and length. */
 enum class CardAction(val maxTokens: Int) {
     SUMMARY(150),
+    /** After a step button's check: what that check found, without retelling the first summary. */
+    CHECK(200),
     DETAILS(450),
     // Measured on a Z Fold4 (CPU): ~4.4 tok/s after a ~1900-token prompt, so 700 tokens is about 3–4 minutes in all.
     DEEP(700);
@@ -131,6 +133,7 @@ enum class CardAction(val maxTokens: Int) {
     val englishHeading: String
         get() = when (this) {
             SUMMARY -> "In plain words"
+            CHECK -> "What the check showed"
             DETAILS -> "More detail"
             DEEP -> "Deep analysis"
         }
@@ -170,9 +173,10 @@ object AssistantCards {
         val steps = mutableListOf<CardStep>()
         if (s.hosts.isEmpty()) steps += step(AssistantActions.Name.SCAN_LAN)
         val gateway = s.hosts.firstOrNull { it.isGateway }
+        gateway?.let { forwardingFindings(it, found) }
         if (gateway != null) {
             if (!gateway.portsScanned) steps += portScan(gateway.ip, all = false)
-            steps += step(AssistantActions.Name.CHECK_PORT_FORWARDING)
+            if (gateway.forwarding == null) steps += step(AssistantActions.Name.CHECK_PORT_FORWARDING)
         }
         if (s.link == null) steps += step(AssistantActions.Name.CHECK_CONNECTION)
         if (s.hosts.isNotEmpty()) steps += step(AssistantActions.Name.SCAN_LAN, tr("Scan the network again"))
@@ -203,6 +207,7 @@ object AssistantCards {
         if (host.isGateway) {
             found += CardFinding(CardRisk.INFO, tr("This is the router: everything else reaches the internet through it."))
             linkFindings(s, found)
+            forwardingFindings(host, found)
         }
         when {
             !host.portsScanned -> found += CardFinding(CardRisk.INFO, tr("Ports have not been checked yet."))
@@ -216,7 +221,7 @@ object AssistantCards {
         host.note?.takeIf { it.isNotBlank() }?.let { found += CardFinding(CardRisk.INFO, tr("Your note: %s", AssistantDigest.clean(it, 80))) }
         val steps = mutableListOf<CardStep>()
         if (!host.isThisPhone) steps += portScan(host.ip, all = host.portsScanned)
-        if (host.isGateway) steps += step(AssistantActions.Name.CHECK_PORT_FORWARDING)
+        if (host.isGateway && host.forwarding == null) steps += step(AssistantActions.Name.CHECK_PORT_FORWARDING)
         val title = listOfNotNull(AssistantDigest.clean(host.name), host.maker?.takeIf { !host.name.contains(it) }?.let(AssistantDigest::clean))
             .joinToString(" · ")
         val alone = s.copy(hosts = listOf(host))
@@ -256,6 +261,20 @@ object AssistantCards {
         }
     }
 
+    /** What the router said about port forwarding, once a check asked it. */
+    private fun forwardingFindings(gateway: AssistantSnapshot.Host, found: MutableList<CardFinding>) {
+        val forwarding = gateway.forwarding ?: return
+        found += when {
+            !forwarding.supported -> CardFinding(CardRisk.OK, tr("The router does not let devices open ports over UPnP: the safer setting."))
+            forwarding.rules.isEmpty() -> CardFinding(CardRisk.OK, tr("The router forwards no ports from the internet."))
+            else -> CardFinding(
+                CardRisk.CRITICAL,
+                tr("The router forwards from the internet: %s.", forwarding.rules.take(4).joinToString(", ")) +
+                    if (forwarding.rules.size > 4) " " + tr("And %d more.", forwarding.rules.size - 4) else "",
+            )
+        }
+    }
+
     private fun linkLines(s: AssistantSnapshot, host: AssistantSnapshot.Host): String =
         if (host.isGateway && s.link != null) "\n" + AssistantDigest.section(AssistantTopic.LINK, s) else ""
 
@@ -289,7 +308,7 @@ object AssistantCards {
         if (!device.nearby) found += CardFinding(CardRisk.INFO, tr("Out of range now; this is what it said last."))
         device.company?.let { found += CardFinding(CardRisk.INFO, tr("Maker by its signal: %s.", AssistantDigest.clean(it))) }
         found += CardFinding(CardRisk.INFO, tr("Signal %d dBm: %s.", device.rssi, distance(device.rssi)))
-        if (read != null) found += CardFinding(CardRisk.OK, tr("Its GATT data was read: model, maker and services are in the data."))
+        if (read != null) found += gattFindings(s.gattItems)
         val steps = mutableListOf<CardStep>()
         if (read == null && device.nearby && device.name.length >= 3) {
             steps += CardStep(
@@ -308,6 +327,24 @@ object AssistantCards {
             AssistantDigest.section(AssistantTopic.BLUETOOTH, s.copy(gatt = read), now) + "\n\n" +
                 sections(s, now, AssistantTopic.THREATS, AssistantTopic.HISTORY) + memory(s),
         )
+    }
+
+    /** What a GATT read says: the maker's own characteristics open to writes, the values it gives out freely. */
+    fun gattFindings(items: List<AssistantSnapshot.GattItem>): List<CardFinding> {
+        if (items.isEmpty()) return listOf(CardFinding(CardRisk.INFO, tr("Connected, but it published nothing readable without pairing.")))
+        val found = mutableListOf<CardFinding>()
+        val writable = items.filter { it.vendor && it.writable }
+        if (writable.isNotEmpty()) {
+            val services = writable.map { AssistantDigest.clean(it.service, 30) }.distinct().take(3).joinToString(", ")
+            found += CardFinding(CardRisk.WARNING, tr("%d of the maker's own characteristics accept writes without pairing (%s).", writable.size, services))
+        }
+        // Values it reads out freely: the standard ones first (model, maker, firmware, battery), then the maker's.
+        for (item in items.filter { !it.value.isNullOrBlank() }.sortedBy { it.vendor }.take(4)) {
+            found += CardFinding(CardRisk.INFO, "${AssistantDigest.clean(item.name, 40)}: ${AssistantDigest.clean(item.value.orEmpty(), 50)}")
+        }
+        val services = items.map { it.service }.toSet().size
+        found += CardFinding(CardRisk.OK, tr("Read over GATT: %d services, %d characteristics; nothing was written.", services, items.size))
+        return found
     }
 
     private fun distance(rssi: Int): String = when {
@@ -500,13 +537,14 @@ You are the security assistant inside Spectra, an app that inspects the user's o
     private fun subject(kind: CardSubject.Kind): String = when (kind) {
         CardSubject.Kind.LAN -> "The subject is the user's whole local network: which devices matter and what needs attention first."
         CardSubject.Kind.HOST -> "The subject is one device on the user's local network: what kind of device it most likely is (from its maker, name, system and ports) and whether anything about it needs attention."
-        CardSubject.Kind.BLUETOOTH -> "The subject is one Bluetooth device near the user: what it most likely is, whether it could be someone else's tracker, and what it reveals about itself."
+        CardSubject.Kind.BLUETOOTH -> "The subject is one Bluetooth device near the user: what it most likely is, whether it could be someone else's tracker, and what it reveals about itself. When a GATT read is in the data, go through it: what each service and value tells (model, maker, firmware, battery, the maker's own services) and which of the maker's services accept writes without pairing."
         CardSubject.Kind.WIFI -> "The subject is one Wi-Fi network: how safe its encryption is, whether anything looks like an attack or a fake access point, and how good its channel and signal are."
         CardSubject.Kind.TRAFFIC -> "The subject is the traffic recorded from the user's own phone: which servers and apps it talked to, anything unencrypted, tracking or unexpected."
         CardSubject.Kind.CAPTURE -> "The subject is a captured traffic file: what is in it, the busiest devices, and anything unusual (deauthentication bursts, plain-text protocols, unknown devices)."
     }
 
     private fun task(action: CardAction): String = when (action) {
+        CardAction.CHECK -> "The app has just run the check in <check>, and its result is there. In 2 to 4 short sentences of plain text say what this check found and what it means for the user; say so when the result is reassuring. Do not repeat the earlier summary: add only what the check showed. No lists."
         CardAction.SUMMARY -> "Write 2 to 4 short sentences of plain text: what this is, what matters most, and the one thing to do first. No lists. Do not repeat the findings word for word: say what they mean."
         CardAction.DETAILS -> "Explain each finding in one or two sentences, most serious first: what it means in practice and exactly what to do about it. A short list is fine. At most 250 words."
         CardAction.DEEP -> "Write a thorough analysis using all of the data: what stands out, what it could mean (with the innocent explanation too), how it compares with History and the notes, and a short ordered list of steps. Bold a few words to lead each part. At most 300 words."
@@ -518,10 +556,23 @@ You are the security assistant inside Spectra, an app that inspects the user's o
     fun system(action: CardAction, kind: CardSubject.Kind, locale: Locale = Locale.getDefault()): String =
         listOf(BASE, subject(kind), task(action), language(locale)).joinToString("\n\n")
 
-    /** The one user turn: the card's findings, then the data behind them. */
-    fun user(facts: CardFacts, action: CardAction): String {
+    /**
+     * The one user turn: the check just run (if any) and, after a check, the summary already shown; then the card's
+     * findings and the data behind them.
+     */
+    fun user(facts: CardFacts, action: CardAction, check: CardCheck? = null, earlier: String? = null): String {
         val findings = facts.findings.joinToString("\n") { "- [${it.risk.name.lowercase()}] ${it.text}" }
         val data = if (action == CardAction.DEEP) facts.deepData else facts.data
-        return "Subject: ${facts.title}\nFindings of the app:\n$findings\n\n<data>\n$data\n</data>"
+        val parts = mutableListOf<String>()
+        check?.let { parts += "<check name=\"${it.title}\">\n${it.result.take(CHECK_BUDGET)}\n</check>" }
+        if (action == CardAction.CHECK && !earlier.isNullOrBlank()) parts += "Earlier summary, already shown (do not repeat it):\n${earlier.take(600)}"
+        parts += "Subject: ${facts.title}\nFindings of the app:\n$findings"
+        parts += "<data>\n$data\n</data>"
+        return parts.joinToString("\n\n")
     }
+
+    private const val CHECK_BUDGET = 1600
 }
+
+/** A check a step button ran on a card: its name in words and what it returned. */
+data class CardCheck(val title: String, val result: String)
