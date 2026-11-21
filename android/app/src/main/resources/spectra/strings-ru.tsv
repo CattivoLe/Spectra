@@ -1558,7 +1558,7 @@ Latency grows a lot under load (grade %s): calls stutter while something downloa
 Measure the speed again	Замерить скорость ещё раз
 The traceroute to %s is still running.	Трассировка до %s ещё идёт.
 Traceroute to %s: %s	Трассировка до %s: %s
-The path to %s takes %d hops.	Путь до %s — %d узлов.
+The path to %s takes %d hops: it answers.	Путь до %s — %d узлов, цель отвечает.
 The trace to %s stops after %d hops: the rest do not answer, more often a firewall than a break.	Трассировка до %s обрывается после %d узлов: дальше не отвечают — чаще это файрвол, а не обрыв.
 The delay grows most at hop %d (%s): +%d ms.	Сильнее всего задержка растёт на узле %d (%s): +%d мс.
 Trace %s again	Повторить трассировку до %s
@@ -1588,3 +1588,6 @@ certificate and domain check	проверка сертификата и доме
 redirects	перенаправления
 Tracing the path…	Трассировка…
 Trying your sites…	Проверяю ваши сайты…
+Measure the speed fully	Замерить скорость полностью
+A short link: the real address is hidden. Expand the redirects to see it.	Короткая ссылка: настоящий адрес скрыт. Раскройте перенаправления, чтобы его увидеть.
+The address has words phishing likes to use: %s.	В адресе есть слова, которые любит фишинг: %s.

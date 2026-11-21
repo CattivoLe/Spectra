@@ -177,8 +177,10 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
         val report = model.connection.report
         val speed = model.speed.result
         val link = if (report?.status != null) {
-            val down = report.speed?.downBps ?: speed?.downBps
-            val up = report.speed?.upBps ?: speed?.upBps
+            // The connection check samples the download; a full speed test run after it is the fresher word.
+            val fresher = speed != null && speed.measuredAt >= report.checkedAt
+            val down = if (fresher) speed?.downBps ?: report.speed?.downBps else report.speed?.downBps ?: speed?.downBps
+            val up = if (fresher) speed?.upBps ?: report.speed?.upBps else report.speed?.upBps ?: speed?.upBps
             AssistantSnapshot.Link(
                 checkedAt = report.checkedAt,
                 status = report.status?.name?.lowercase(),
@@ -191,7 +193,7 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
                 country = report.external?.countryCode,
                 downMbps = down?.let { it / 1_000_000 },
                 upMbps = up?.let { it / 1_000_000 },
-                latencyMs = report.speed?.latencyMs ?: speed?.idleLatencyMs,
+                latencyMs = if (fresher) speed?.idleLatencyMs ?: report.speed?.latencyMs else report.speed?.latencyMs ?: speed?.idleLatencyMs,
                 jitterMs = speed?.jitterMs,
                 intercepted = report.tls?.intercepted,
                 resolverLies = report.resolver?.liesAboutMissingNames,

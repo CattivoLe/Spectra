@@ -78,14 +78,16 @@ object InternetCards {
         if (checked) steps += AssistantCards.step(AssistantActions.Name.CHECK_CONNECTION, tr("Check the connection again"))
 
         val title = listOfNotNull(tr("Internet"), link?.provider?.let { AssistantDigest.clean(it, 30) }).joinToString(" · ")
-        val data = (AssistantDigest.section(AssistantTopic.LINK, s, now).lines() + s.route?.let(AssistantDigest::routeLines).orEmpty()).joinToString("\n")
+        val connection = AssistantDigest.section(AssistantTopic.LINK, s, now)
+        val data = listOfNotNull(connection, s.route?.let { AssistantDigest.routeLines(it, compact = true).joinToString("\n") }).joinToString("\n")
+        val deep = listOfNotNull(connection, s.route?.let { AssistantDigest.routeLines(it).joinToString("\n") }).joinToString("\n")
         return CardFacts(
             CardSubject.Internet,
             title,
             AssistantCards.ranked(found),
             steps.distinctBy { it.tool }.take(3),
             data,
-            data + "\n\n" + AssistantCards.sections(s, now, AssistantTopic.HISTORY) + AssistantCards.memory(s),
+            deep + "\n\n" + AssistantCards.sections(s, now, AssistantTopic.HISTORY) + AssistantCards.memory(s),
             awaitsCheck = !checked && link == null && s.sites.isEmpty() && s.route == null,
         )
     }
@@ -167,7 +169,12 @@ object InternetCards {
             poor = true
             found += CardFinding(CardRisk.WARNING, tr("Latency grows a lot under load (grade %s): calls stutter while something downloads.", it))
         }
-        return if (poor) listOf(AssistantCards.step(AssistantActions.Name.SPEED_TEST, tr("Measure the speed again"))) else emptyList()
+        return when {
+            poor -> listOf(AssistantCards.step(AssistantActions.Name.SPEED_TEST, tr("Measure the speed again")))
+            // The connection check samples the download only: the full test adds upload and latency under load.
+            link.upMbps == null && link.bufferbloat == null -> listOf(AssistantCards.step(AssistantActions.Name.SPEED_TEST, tr("Measure the speed fully")))
+            else -> emptyList()
+        }
     }
 
     /** What the last traceroute says: whether it got there and where the delay grows. */
@@ -176,7 +183,7 @@ object InternetCards {
         when {
             route.running -> found += CardFinding(CardRisk.INFO, tr("The traceroute to %s is still running.", target))
             route.hops.isEmpty() -> route.failure?.let { found += CardFinding(CardRisk.INFO, tr("Traceroute to %s: %s", target, tr(it))) }
-            route.reached -> found += CardFinding(CardRisk.INFO, tr("The path to %s takes %d hops.", target, route.hops.size))
+            route.reached -> found += CardFinding(CardRisk.OK, tr("The path to %s takes %d hops: it answers.", target, route.hops.size))
             else -> found += CardFinding(
                 CardRisk.INFO,
                 tr("The trace to %s stops after %d hops: the rest do not answer, more often a firewall than a break.", target, route.hops.size - route.silentTail),
@@ -322,7 +329,7 @@ object InternetCards {
             certificate != null -> lines += "- Certificate from ${AssistantDigest.clean(certificate.issuer ?: "unknown issuer", 80)}, valid " +
                 "${day(certificate.notBefore)} to ${day(certificate.notAfter)}, issued ${days(certificate.notBefore, now)} days ago; " +
                 if (certificate.trusted) "the phone trusts it" else "the phone does NOT trust it (${AssistantDigest.clean(certificate.trustError ?: "unknown reason", 80)})"
-            report.certificateError != null -> lines += "- No usable HTTPS: ${AssistantDigest.clean(report.certificateError, 100)}"
+            report.certificateError != null -> lines += "- No certificate was received: the site gave no usable HTTPS (${AssistantDigest.clean(report.certificateError, 100)})"
         }
         when (val domain = report.domain) {
             is DomainOutcome.Found -> {
@@ -344,9 +351,17 @@ object InternetCards {
 
     /** The redirects as followed, in English: what an "expand_redirects" step returns. */
     fun redirectText(trace: RedirectTrace): String {
-        val lines = mutableListOf("Redirects, followed by their headers only:")
+        // Said outright: a small model reads "Final address" after a failed first request as a redirect.
+        val moves = trace.hops.count { it.status in 300..399 }
+        val lines = mutableListOf(
+            when {
+                trace.hops.isEmpty() -> "Redirects: the link could not be requested at all, so no redirect was seen."
+                moves == 0 -> "Redirects: none, the link answers by itself (headers only, the page was not loaded)."
+                else -> "Redirects: $moves, followed by their headers only:"
+            },
+        )
         trace.hops.forEachIndexed { index, hop -> lines += "${index + 1}. ${AssistantDigest.clean(hop.url, 160)} → HTTP ${hop.status}" }
-        lines += "Final address: ${AssistantDigest.clean(trace.final, 160)}"
+        if (moves > 0 || trace.stop is RedirectTrace.Stop.LeftTheWeb) lines += "Final address: ${AssistantDigest.clean(trace.final, 160)}"
         when (val stop = trace.stop) {
             RedirectTrace.Stop.TooManyHops -> lines += "Stopped after 10 redirects."
             is RedirectTrace.Stop.LeftTheWeb -> lines += "The last redirect leaves the web for a ${stop.scheme}: link."

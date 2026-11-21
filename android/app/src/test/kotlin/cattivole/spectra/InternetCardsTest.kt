@@ -117,7 +117,8 @@ class InternetCardsTest {
         assertEquals(listOf(trace("youtube.com"), "check_sites", "check_connection"), calls(facts.steps))
         assertEquals("Trace the route to youtube.com", facts.steps[0].label)
         assertEquals("Check your sites again", facts.steps[1].label)
-        assertTrue(facts.data.contains("youtube.com does not open"))
+        assertTrue(facts.data.contains("- Do not open: youtube.com"))
+        assertTrue(facts.data.contains("- Open: github.com (90 ms)"))
         assertRunnable(facts.steps)
     }
 
@@ -144,6 +145,16 @@ class InternetCardsTest {
         assertEquals(listOf(trace("1.1.1.1"), "speed_test", "check_connection"), calls(facts.steps))
         assertEquals("Measure the speed again", facts.steps[1].label)
         assertTrue(facts.data.contains("grade F"))
+    }
+
+    @Test
+    fun aDownloadSampleAloneOffersTheFullSpeedTest() {
+        // The connection check measures the download only: upload and latency under load need the full test.
+        val sample = healthy.copy(upMbps = null, bufferbloat = null, jitterMs = null)
+        val facts = InternetCards.internet(AssistantSnapshot(link = sample, sites = listOf(AssistantSnapshot.SiteReach("ya.ru", true))), now)
+        assertEquals(listOf("speed_test", "check_connection"), calls(facts.steps))
+        assertEquals("Measure the speed fully", facts.steps.first().label)
+        assertTrue(facts.findings.any { it.text == "Speed: 92.4 Mbit/s down." })
     }
 
     @Test
@@ -184,10 +195,13 @@ class InternetCardsTest {
         assertTrue(facts.findings.any { it.text == "The delay grows most at hop 3 (198.51.100.9 · Frankfurt, DE · Example Transit): +118 ms." })
         assertTrue(trace("example.org") in calls(facts.steps))
         assertEquals("Trace example.org again", facts.steps.first { it.tool == "trace_route" }.label)
-        // The model gets every hop.
+        // The short summary gets the outcome and the places; the deep analysis every hop.
         assertTrue(facts.data.contains("Traceroute to example.org (93.184.215.14): did not reach it; the last 2 hops did not answer"))
-        assertTrue(facts.data.contains("3. 198.51.100.9 · 130 ms · Frankfurt, DE · Example Transit"))
-        assertTrue(facts.data.contains("4. *"))
+        assertTrue(facts.data.contains("- Places along the way: Frankfurt, DE · Example Transit"))
+        assertTrue(facts.data.contains("- The delay grows most at hop 3 (198.51.100.9): +118 ms"))
+        assertFalse(facts.data.contains("4. *"))
+        assertTrue(facts.deepData.contains("3. 198.51.100.9 · 130 ms · Frankfurt, DE · Example Transit"))
+        assertTrue(facts.deepData.contains("4. *"))
     }
 
     @Test
@@ -199,7 +213,7 @@ class InternetCardsTest {
         assertTrue(route.reached)
         assertEquals(null, InternetCards.slowestHop(route.hops))
         val facts = InternetCards.internet(AssistantSnapshot(link = healthy, route = route), now)
-        assertTrue(facts.findings.any { it.text == "The path to 1.1.1.1 takes 3 hops." })
+        assertTrue(facts.findings.any { it.risk == CardRisk.OK && it.text == "The path to 1.1.1.1 takes 3 hops: it answers." })
         assertFalse("trace_route" in facts.steps.map { it.tool })
         assertFalse(facts.awaitsCheck)
     }
@@ -213,7 +227,7 @@ class InternetCardsTest {
         assertTrue(text.contains("HTTPS: genuine certificates on 4 reference sites"))
         assertTrue(text.contains("No usual port of the public address answers"))
         assertTrue(text.contains("Often-blocked services that did not open: x.com"))
-        assertTrue(text.contains("The user's sites: ya.ru opens (40 ms)"))
+        assertTrue(text.contains("The user's own sites, 1 tried:\n- Open: ya.ru (40 ms)\n- Do not open: none"))
         assertTrue(text.contains("Cloudflare WARP"))
     }
 
@@ -262,7 +276,20 @@ class InternetCardsTest {
         assertTrue(facts.steps.isEmpty())
         assertTrue(texts.none { it.contains("not been checked") })
         assertTrue(facts.data.contains("registered") && facts.data.contains("6 days ago") && facts.data.contains("Some Registrar"))
+        assertTrue(facts.data.contains("Redirects: 1, followed by their headers only:"))
         assertTrue(facts.data.contains("2. https://cheap-deals.top/x → HTTP 200"))
+        assertTrue(facts.data.contains("Final address: https://cheap-deals.top/x"))
+    }
+
+    @Test
+    fun aLinkThatCannotBeRequestedIsNotCalledARedirect() {
+        val link = "https://appleid.apple.com.verify-login.xyz/signin"
+        val text = InternetCards.redirectText(RedirectTrace(emptyList(), link, RedirectTrace.Stop.Failed("Unable to resolve host")))
+        assertTrue(text.startsWith("Redirects: the link could not be requested at all"))
+        assertFalse(text.contains("Final address"))
+        assertTrue(text.contains("Stopped: Unable to resolve host"))
+        val direct = InternetCards.redirectText(RedirectTrace(listOf(RedirectTrace.Hop(link, 200)), link, null))
+        assertTrue(direct.startsWith("Redirects: none"))
     }
 
     @Test

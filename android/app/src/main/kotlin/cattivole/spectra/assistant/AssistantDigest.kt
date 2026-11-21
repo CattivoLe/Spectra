@@ -598,18 +598,26 @@ object AssistantDigest {
         return lines + siteLines(s.sites)
     }
 
-    /** The user's own sites, as they answered last. */
+    /**
+     * The user's own sites, as they answered last. Two plain lists with an explicit "none": read as one run-on line
+     * ("a opens; b opens; …") a small model took the last site for one that failed.
+     */
     fun siteLines(sites: List<AssistantSnapshot.SiteReach>): List<String> {
         if (sites.isEmpty()) return emptyList()
+        val open = sites.filter { it.ok }
+        val closed = sites.filter { !it.ok }
         return listOf(
-            "The user's sites: " + sites.joinToString("; ") { site ->
-                clean(site.host, 40) + if (site.ok) " opens" + (site.millis?.let { " ($it ms)" } ?: "") else " does not open"
-            },
+            "The user's own sites, ${sites.size} tried:",
+            "- Open: " + open.joinToString(", ") { site -> clean(site.host, 40) + (site.millis?.let { " ($it ms)" } ?: "") }.ifEmpty { "none" },
+            "- Do not open: " + closed.joinToString(", ") { clean(it.host, 40) }.ifEmpty { "none" },
         )
     }
 
-    /** A traceroute, hop by hop: what a "trace" check returns and the internet card reads. */
-    fun routeLines(route: AssistantSnapshot.Route): List<String> {
+    /**
+     * A traceroute, hop by hop: what a "trace" check returns and the deep analysis reads. [compact] keeps the
+     * outcome and the places along the way only: every hop costs the short summary seconds of reading.
+     */
+    fun routeLines(route: AssistantSnapshot.Route, compact: Boolean = false): List<String> {
         val target = clean(route.target, 60) + (route.address?.takeIf { it != route.target }?.let { " ($it)" } ?: "")
         if (route.hops.isEmpty()) {
             return listOf("Traceroute to $target: " + (route.failure ?: if (route.running) "still running" else "no hops recorded"))
@@ -621,6 +629,13 @@ object AssistantDigest {
         }
         val lines = mutableListOf("Traceroute to $target: $outcome")
         route.failure?.let { lines.add("- Note: $it") }
+        if (compact) {
+            val places = route.hops.mapNotNull { it.place?.let { place -> clean(place, 50) } }.distinct()
+            if (places.isNotEmpty()) lines.add("- Places along the way: " + places.joinToString(" → "))
+            route.hops.lastOrNull { it.millis != null }?.let { lines.add("- Last answering hop: ${it.address} · ${it.millis} ms") }
+            InternetCards.slowestHop(route.hops)?.let { (index, jump) -> lines.add("- The delay grows most at hop ${index + 1} (${route.hops[index].address}): +$jump ms") }
+            return lines
+        }
         route.hops.forEachIndexed { index, hop ->
             val parts = listOfNotNull(hop.address ?: "*", hop.millis?.let { "$it ms" }, hop.place?.let { clean(it, 50) })
             lines.add("${index + 1}. " + parts.joinToString(" · "))
