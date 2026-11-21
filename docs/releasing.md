@@ -70,7 +70,7 @@ ends with a warning and keeps the unsigned APK and the firmware as artifacts.
    | `SPECTRA_KEYSTORE_BASE64` | the keystore as base64 |
    | `SPECTRA_KEYSTORE_PASSWORD` | keystore password |
    | `SPECTRA_KEY_ALIAS` | `spectra` |
-   | `SPECTRA_KEY_PASSWORD` | key password (the same as the keystore's unless you chose another) |
+   | `SPECTRA_KEY_PASSWORD` | key password: the same as the keystore's (a PKCS12 keystore, keytool's default, has one password) |
 
    ```sh
    base64 -i spectra-release.jks | gh secret set SPECTRA_KEYSTORE_BASE64 --repo CattivoLe/Spectra
@@ -80,7 +80,7 @@ ends with a warning and keeps the unsigned APK and the firmware as artifacts.
    ```
 
 3. Put the certificate's SHA-256 fingerprint in the README so people can check
-   the APK. Each release's notes repeat it.
+   the APK (done for the current key). Each release's notes repeat it.
 
    ```sh
    keytool -list -v -keystore spectra-release.jks -alias spectra | grep SHA256
