@@ -144,14 +144,17 @@ private fun LinkInspection.Finding.shown(): String = tr(text, *args.map { tr(it)
  * is fetched, so the sender never learns the message was looked at.
  */
 @Composable
-fun LinkCheckScreen(nav: Navigator) {
+fun LinkCheckScreen(model: cattivole.spectra.SpectraModel, nav: Navigator) {
     var text by rememberSaveable { mutableStateOf("") }
     var checked by rememberSaveable { mutableStateOf<String?>(null) }
     val clipboard = LocalClipboardManager.current
     val focus = LocalFocusManager.current
     val inspection = checked?.let { LinkInspector.inspect(it) }
-    // The on-demand certificate and registry check, for the link on screen.
-    var site by remember { mutableStateOf<SiteReport?>(null) }
+    // The on-demand certificate and registry check and the redirects, for the link on screen. Kept on the
+    // assistant's shelf, so the link's summary card reads them and its buttons' results show here too.
+    val shelf = model.assistantSources.links
+    val shelved = inspection?.let { shelf.entry(it.link) }
+    val site: SiteReport? = shelved?.site
     var siteBusy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -177,16 +180,21 @@ fun LinkCheckScreen(nav: Navigator) {
         )
     }
     // Redirects are followed only when asked: the sites along the way see the request.
-    var trace by remember { mutableStateOf<cattivole.spectra.platform.RedirectTrace?>(null) }
+    val trace = shelved?.redirects
     var tracing by remember { mutableStateOf(false) }
     LaunchedEffect(checked) {
-        site = null
         siteBusy = false
-        trace = null
         tracing = false
     }
     val noLink = checked != null && inspection == null && checked!!.isNotBlank()
-    SpectraScreen(title = tr("Check a link"), onBack = nav::back) {
+    SpectraScreen(
+        title = tr("Check a link"),
+        onBack = nav::back,
+        actions = {
+            // A card about this link: what the address shows, and buttons for the certificate and the redirects.
+            if (inspection != null) AskAssistantButton(model, nav, subject = { cattivole.spectra.assistant.CardSubject.Link(inspection.link) })
+        },
+    ) {
         freeCard(
             "input",
             footer = tr("Checked on this phone: the link is not sent anywhere and the page is not opened."),
@@ -273,7 +281,6 @@ fun LinkCheckScreen(nav: Navigator) {
             // Only a web link with a name has a certificate and a registry record to ask about.
             val target = inspection.takeIf { it.scheme == "https" || it.scheme == "http" }?.takeIf { it.host.isNotEmpty() }
             if (target != null) {
-                val named = target.site != target.host || target.site.any { it.isLetter() }
                 card(
                     header = tr("Certificate and domain"),
                     key = "site",
@@ -291,21 +298,9 @@ fun LinkCheckScreen(nav: Navigator) {
                                         siteBusy = true
                                         val link = checked
                                         scope.launch {
-                                            // An account on a free host is not in any registry: its platform is.
-                                            val asked = (target.asciiHost ?: target.site).let { name ->
-                                                if (target.findings.any { it.kind == LinkInspection.Kind.FREE_HOSTING }) {
-                                                    target.site.split('.').takeLast(2).joinToString(".")
-                                                } else if (target.asciiHost != null) {
-                                                    name.split('.').takeLast(target.site.count { it == '.' } + 1).joinToString(".")
-                                                } else {
-                                                    target.site
-                                                }
-                                            }
-                                            val report = SiteProbe.probe(target.asciiHost ?: target.host, asked.takeIf { named })
-                                            if (checked == link) {
-                                                site = report
-                                                siteBusy = false
-                                            }
+                                            val report = SiteProbe.probe(target.asciiHost ?: target.host, cattivole.spectra.assistant.LinkShelf.registryName(target))
+                                            shelf.keepSite(target.link, report)
+                                            if (checked == link) siteBusy = false
                                         }
                                     },
                                 )
@@ -313,7 +308,7 @@ fun LinkCheckScreen(nav: Navigator) {
                         }
                     },
                 )
-                val start = target.link.let { if (it.contains("://")) it else "${target.scheme}://$it" }
+                val start = cattivole.spectra.assistant.LinkShelf.start(target)
                 card(
                     header = tr("Redirects"),
                     key = "redirects",
@@ -351,10 +346,8 @@ fun LinkCheckScreen(nav: Navigator) {
                                     val link = checked
                                     scope.launch {
                                         val result = cattivole.spectra.platform.RedirectTracer.trace(start)
-                                        if (checked == link) {
-                                            trace = result
-                                            tracing = false
-                                        }
+                                        shelf.keepRedirects(target.link, result)
+                                        if (checked == link) tracing = false
                                     }
                                 })
                             }

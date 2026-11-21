@@ -35,6 +35,10 @@ data class AssistantSnapshot(
     val gattAddress: String? = null,
     /** The same read, one entry per characteristic: what the summary card turns into findings. */
     val gattItems: List<GattItem> = emptyList(),
+    /** The user's own sites that were checked, with their last answer. */
+    val sites: List<SiteReach> = emptyList(),
+    /** The last traceroute, when one was run. */
+    val route: Route? = null,
 ) {
     /** [vendor]: in a service the Bluetooth catalog does not name, i.e. the maker's own. */
     data class GattItem(val service: String, val name: String, val value: String?, val writable: Boolean, val vendor: Boolean)
@@ -116,7 +120,48 @@ data class AssistantSnapshot(
         val resolverLies: Boolean? = null,
         val exposedPorts: List<Int> = emptyList(),
         val access: String? = null,
+        /** Whether the router, the name lookup and a web page answered at all; null when not asked. */
+        val gatewayOk: Boolean? = null,
+        val dnsOk: Boolean? = null,
+        val webOk: Boolean? = null,
+        /** Who really answers the name lookups: the resolver the authoritative servers see. */
+        val resolverName: String? = null,
+        val resolverCountry: String? = null,
+        /** Often-blocked services that did not open (access check). */
+        val blocked: List<String> = emptyList(),
+        /** How many reference sites the TLS check could reach; null when it did not run. */
+        val tlsReached: Int? = null,
+        /** The ports reachable from outside were asked about (an empty [exposedPorts] then means none). */
+        val exposureChecked: Boolean = false,
+        /** Bufferbloat grade A–F: how much latency grows under a full load. */
+        val bufferbloat: String? = null,
+        val speedFailed: Boolean = false,
+        /** "wifi", "cellular" or "vpn": which way the check went out. */
+        val via: String? = null,
+        /** Traffic left through Cloudflare WARP. */
+        val warp: Boolean = false,
     )
+
+    /** One of the user's own sites (Connection → Resources), as it answered last. */
+    data class SiteReach(val host: String, val ok: Boolean, val millis: Int? = null)
+
+    /** The last traceroute from the Traceroute screen. [failure] is the app's English sentence when it did not run. */
+    data class Route(
+        val target: String,
+        val address: String? = null,
+        val hops: List<RouteHop> = emptyList(),
+        val failure: String? = null,
+        val running: Boolean = false,
+    ) {
+        /** The last hop answered from the target's own address. */
+        val reached: Boolean get() = address != null && hops.lastOrNull { it.address != null }?.address == address
+
+        /** Hops at the end that never answered: a firewall dropping probes, more often than a break. */
+        val silentTail: Int get() = hops.takeLastWhile { it.address == null }.size
+    }
+
+    /** [place]: "Frankfurt, DE · Cloudflare" when the hop is public and placed. */
+    data class RouteHop(val address: String?, val millis: Int?, val place: String? = null)
 }
 
 /** The parts of the app's data a question may need. */
@@ -502,8 +547,12 @@ object AssistantDigest {
         )
 
     private fun linkSection(s: AssistantSnapshot): List<String> {
-        val link = s.link ?: return listOf("Connection check: not run yet (LAN tab → Connection).")
+        val link = s.link ?: return listOf("Connection check: not run yet (LAN tab → Connection).") + siteLines(s.sites)
         val lines = mutableListOf("Latest connection check, ${clock(link.checkedAt)}:")
+        when (link.via) {
+            "vpn" -> lines.add("- Checked through the VPN: the public address and provider are the VPN's")
+            "cellular" -> lines.add("- Checked over the mobile network, not Wi‑Fi")
+        }
         link.status?.let { status -> lines.add("- Status: $status${link.detail?.let { " — ${clean(it, 120)}" } ?: ""}") }
         val latency = listOfNotNull(
             link.gatewayMs?.let { "gateway $it ms" },
@@ -521,7 +570,61 @@ object AssistantDigest {
             link.jitterMs?.let { speed += ", jitter $it ms" }
             lines.add(speed)
         }
+        link.bufferbloat?.let { lines.add("- Latency under load: grade $it (A is best, F means calls stutter while something downloads)") }
+        if (link.speedFailed && link.downMbps == null) lines.add("- Speed test: did not finish")
+        val failed = listOfNotNull(
+            "router".takeIf { link.gatewayOk == false },
+            "DNS".takeIf { link.dnsOk == false },
+            "web".takeIf { link.webOk == false },
+        )
+        if (failed.isNotEmpty()) lines.add("- Did not answer: " + failed.joinToString(", "))
+        link.resolverName?.let { name ->
+            lines.add("- DNS resolver the servers see: ${clean(name, 40)}${link.resolverCountry?.let { " · $it" } ?: ""}")
+        }
+        if (link.resolverLies == true) lines.add("- The DNS resolver answers for names that do not exist (redirects typos to its own page or filters)")
+        when (link.intercepted) {
+            true -> lines.add("- HTTPS: certificates are re-signed on the way — interception by a proxy, an antivirus or an attacker")
+            false -> lines.add("- HTTPS: genuine certificates${link.tlsReached?.let { " on $it reference sites" } ?: ""}, nothing re-signs them")
+            null -> Unit
+        }
+        if (link.exposedPorts.isNotEmpty()) {
+            lines.add("- Ports of the public address reachable from the internet: ${link.exposedPorts.joinToString(", ")}")
+        } else if (link.exposureChecked) {
+            lines.add("- No usual port of the public address answers from the internet")
+        }
         link.access?.let { lines.add("- Internet access: $it") }
+        if (link.blocked.isNotEmpty()) lines.add("- Often-blocked services that did not open: ${link.blocked.joinToString(", ") { clean(it, 40) }}")
+        if (link.warp) lines.add("- Traffic leaves through Cloudflare WARP")
+        return lines + siteLines(s.sites)
+    }
+
+    /** The user's own sites, as they answered last. */
+    fun siteLines(sites: List<AssistantSnapshot.SiteReach>): List<String> {
+        if (sites.isEmpty()) return emptyList()
+        return listOf(
+            "The user's sites: " + sites.joinToString("; ") { site ->
+                clean(site.host, 40) + if (site.ok) " opens" + (site.millis?.let { " ($it ms)" } ?: "") else " does not open"
+            },
+        )
+    }
+
+    /** A traceroute, hop by hop: what a "trace" check returns and the internet card reads. */
+    fun routeLines(route: AssistantSnapshot.Route): List<String> {
+        val target = clean(route.target, 60) + (route.address?.takeIf { it != route.target }?.let { " ($it)" } ?: "")
+        if (route.hops.isEmpty()) {
+            return listOf("Traceroute to $target: " + (route.failure ?: if (route.running) "still running" else "no hops recorded"))
+        }
+        val outcome = when {
+            route.reached -> "reached in ${route.hops.size} hops"
+            route.silentTail > 0 -> "did not reach it; the last ${route.silentTail} hops did not answer (often a firewall dropping probes)"
+            else -> "did not reach it"
+        }
+        val lines = mutableListOf("Traceroute to $target: $outcome")
+        route.failure?.let { lines.add("- Note: $it") }
+        route.hops.forEachIndexed { index, hop ->
+            val parts = listOfNotNull(hop.address ?: "*", hop.millis?.let { "$it ms" }, hop.place?.let { clean(it, 50) })
+            lines.add("${index + 1}. " + parts.joinToString(" · "))
+        }
         return lines
     }
 

@@ -69,7 +69,11 @@ fun TraceScreen(model: SpectraModel, nav: Navigator) {
         prefs.edit().putString("traceTarget", target).apply()
         link.traceRoute(target)
     }
-    SpectraScreen(title = tr("Traceroute"), onBack = nav::back) {
+    SpectraScreen(
+        title = tr("Traceroute"),
+        onBack = nav::back,
+        actions = { AskAssistantButton(model, nav, subject = { cattivole.spectra.assistant.CardSubject.Internet }) },
+    ) {
         freeCard("target", header = tr("Target"), footer = routeText(link.route)) {
             OutlinedTextField(
                 value = target,

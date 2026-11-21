@@ -278,7 +278,7 @@ fun SpectraApp(model: SpectraModel) {
                     composable("${Tab.Lan.cardRoute}/{id}") { summaryCard(model, navigator, it) }
                     composable("host/{ip}") { LanDetail(model, navigator, it.text("ip"), entryId = null) }
                     composable("connection") { LinkScreen(model, navigator) }
-                    composable("link-check") { LinkCheckScreen(navigator) }
+                    composable("link-check") { LinkCheckScreen(model, navigator) }
                     composable("speed-test") { SpeedTestScreen(model, navigator) }
                     composable("trace-route") { TraceScreen(model, navigator) }
                     composable("traffic") { SnifferScreen(model, navigator, sessionId = null) }

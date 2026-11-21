@@ -101,7 +101,11 @@ fun SpeedTestScreen(model: SpectraModel, nav: Navigator) {
     if (picking) {
         SpeedServerDialog(tester) { picking = false }
     }
-    SpectraScreen(title = tr("Speed test"), onBack = nav::back) {
+    SpectraScreen(
+        title = tr("Speed test"),
+        onBack = nav::back,
+        actions = { AskAssistantButton(model, nav, subject = { cattivole.spectra.assistant.CardSubject.Internet }) },
+    ) {
         freeCard("live") {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 SpeedFigure(
