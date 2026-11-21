@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Backup on Android 11 and older (cloud and device-to-device alike).
+    Android 12 and newer read data_extraction_rules.xml, which explains each
+    exclusion; keep the two in step.
+-->
+<full-backup-content>
+    <exclude domain="file" path="traffic/" />
+    <exclude domain="file" path="assistant/models/" />
+    <exclude domain="file" path="assistant/secrets/" />
+    <exclude domain="file" path="assistant/database.key" />
+    <exclude domain="file" path="assistant/chats.sqlite" />
+    <exclude domain="file" path="assistant/chats.sqlite-journal" />
+    <exclude domain="file" path="assistant/chats.sqlite-wal" />
+    <exclude domain="file" path="assistant/chats.sqlite-shm" />
+</full-backup-content>

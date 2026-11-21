@@ -56,4 +56,8 @@ for how you use this software.
 - Wi-Fi passwords entered on the sensor's **Join** screen are stored in the
   ESP32's NVS flash in plain text, so anyone with physical access to the
   board can read them. Erase the flash before giving a sensor away.
+- On Android, the traffic inspector's certificate authority is kept in
+  storage that is never backed up or transferred, and its private keys are
+  sealed with a key held in the Android Keystore. Decrypted traffic and the
+  assistant's encrypted chats are also left out of backups.
 - Exported `.pcap` files and history exports are not encrypted.

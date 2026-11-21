@@ -103,7 +103,19 @@ class TrafficSniffer(context: Context) {
     private val app = context.applicationContext
     private val prefs = app.getSharedPreferences("spectra", android.content.Context.MODE_PRIVATE)
     private val dir = File(app.filesDir, "traffic").apply { mkdirs() }
-    private val caDir = File(dir, "ca")
+
+    /**
+     * The certificate authority lives outside backed-up storage, and its keys
+     * are sealed by the Keystore: neither a backup nor a transfer to a new
+     * phone carries them. Earlier versions kept it in [dir]`/ca`.
+     */
+    private val caDir = File(app.noBackupFilesDir, "traffic-ca")
+    private val legacyCaDir = File(dir, "ca")
+
+    private fun openAuthority(): LocalCa? = runCatching {
+        LocalCa.relocate(legacyCaDir, caDir)
+        LocalCa.open(caDir, KeystoreKeyGuard())
+    }.getOrNull()
     private val listeners = mutableListOf<() -> Unit>()
     private val disk = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -130,7 +142,7 @@ class TrafficSniffer(context: Context) {
             changed()
         }
         disk.execute {
-            val ca = runCatching { LocalCa.open(caDir) }.getOrNull()
+            val ca = openAuthority()
             val loaded = dir.listFiles { file -> file.extension == "json" }
                 ?.mapNotNull { file -> runCatching { TrafficSession.fromJson(file.readText()) }.getOrNull() }
                 ?.sortedByDescending { it.stoppedAt }
@@ -155,7 +167,7 @@ class TrafficSniffer(context: Context) {
         changed()
         if (enabled && CaptureBus.authority == null) {
             disk.execute {
-                val ca = runCatching { LocalCa.open(caDir) }.getOrNull()
+                val ca = openAuthority()
                 main.post {
                     CaptureBus.authority = ca
                     changed()
@@ -170,7 +182,7 @@ class TrafficSniffer(context: Context) {
         error = null
         currentSessionId = null
         if (CaptureBus.decryptTls.get() && CaptureBus.authority == null) {
-            CaptureBus.authority = runCatching { LocalCa.open(caDir) }.getOrNull()
+            CaptureBus.authority = openAuthority()
         }
         ContextCompat.startForegroundService(app, Intent(app, SnifferVpnService::class.java))
     }

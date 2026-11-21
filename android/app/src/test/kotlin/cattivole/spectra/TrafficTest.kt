@@ -281,7 +281,7 @@ class TrafficTest {
     @Test
     fun authoritySignsLeavesAndReloads() {
         val dir = Files.createTempDirectory("spectra-ca").toFile()
-        val ca = LocalCa.open(dir)
+        val ca = LocalCa.open(dir, LocalCa.PLAIN)
         ca.certificate.verify(ca.certificate.publicKey)
         assertTrue(ca.certificate.basicConstraints >= 0)
         assertTrue(ca.certificate.subjectX500Principal.name.contains("Spectra"))
@@ -293,7 +293,7 @@ class TrafficTest {
         ip.verify(ca.certificate.publicKey)
         assertTrue(ip.subjectAlternativeNames.any { it[0] == 7 })
         LocalCa.forget(dir)
-        val again = LocalCa.open(dir)
+        val again = LocalCa.open(dir, LocalCa.PLAIN)
         assertTrue(ca.certificate.encoded.contentEquals(again.certificate.encoded))
     }
 
@@ -342,8 +342,8 @@ class TrafficTest {
 
     @Test
     fun bridgeShowsCleartextHttp() {
-        val ca = LocalCa.open(Files.createTempDirectory("spectra-bridge").toFile())
-        val origin = LocalCa.open(Files.createTempDirectory("spectra-origin").toFile())
+        val ca = LocalCa.open(Files.createTempDirectory("spectra-bridge").toFile(), LocalCa.PLAIN)
+        val origin = LocalCa.open(Files.createTempDirectory("spectra-origin").toFile(), LocalCa.PLAIN)
         val toOrigin = ArrayDeque<ByteArray>()
         val toPhone = ArrayDeque<ByteArray>()
         val fromPhone = StringBuilder()

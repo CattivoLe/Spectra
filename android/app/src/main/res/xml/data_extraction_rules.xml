@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Backup and device-to-device transfer on Android 12 and newer.
+    Android 11 and older read backup_rules.xml instead; keep the two in step.
+
+    Kept: scan history, settings, the assistant's notes.
+    Left out:
+    - traffic/: decrypted HTTP from the traffic inspector, and where earlier
+      versions kept the local certificate authority. The authority itself now
+      lives in no_backup (never copied) with its keys sealed by the Keystore.
+    - the assistant's chat database, its key and stored secrets: they are
+      sealed by Android Keystore keys that stay on this phone, so a copy could
+      not be opened anywhere else and would only break saving chats there.
+    - language models (gigabytes) in cloud backups, whose quota they would
+      exceed; a transfer to a new phone may carry them.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="traffic/" />
+        <exclude domain="file" path="assistant/models/" />
+        <exclude domain="file" path="assistant/secrets/" />
+        <exclude domain="file" path="assistant/database.key" />
+        <exclude domain="file" path="assistant/chats.sqlite" />
+        <exclude domain="file" path="assistant/chats.sqlite-journal" />
+        <exclude domain="file" path="assistant/chats.sqlite-wal" />
+        <exclude domain="file" path="assistant/chats.sqlite-shm" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="traffic/" />
+        <exclude domain="file" path="assistant/secrets/" />
+        <exclude domain="file" path="assistant/database.key" />
+        <exclude domain="file" path="assistant/chats.sqlite" />
+        <exclude domain="file" path="assistant/chats.sqlite-journal" />
+        <exclude domain="file" path="assistant/chats.sqlite-wal" />
+        <exclude domain="file" path="assistant/chats.sqlite-shm" />
+    </device-transfer>
+</data-extraction-rules>

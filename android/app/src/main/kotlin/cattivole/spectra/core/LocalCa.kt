@@ -26,12 +26,27 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 
 /**
- * The certificate this app signs for itself. The private key stays in the
- * app's files.
+ * Seals the private keys before they are written to disk. On the phone this
+ * is a key in the Android Keystore that never leaves the device, so key files
+ * copied off it (a backup, a transfer to a new phone, a rooted read) cannot be
+ * opened anywhere else.
+ */
+interface KeyGuard {
+    fun seal(plain: ByteArray): ByteArray
+    fun open(sealed: ByteArray): ByteArray
+}
+
+/**
+ * The certificate this app signs for itself. The private keys stay on this
+ * phone: sealed by a [KeyGuard] in a directory that is never backed up.
  *
  * A leaf for each server name is signed by that same key, so traffic can be
  * read when the phone trusts this certificate. Apps that do not trust it
  * close the connection.
+ *
+ * Keys that can no longer be opened (the sealing key is gone, the files came
+ * from another phone) are replaced by a new authority. The phone then has to
+ * trust the new certificate; the old one signs nothing any more.
  */
 class LocalCa private constructor(
     private val caKey: PrivateKey,
@@ -83,20 +98,55 @@ class LocalCa private constructor(
         SSLContext.getInstance("TLS").apply { init(keys.keyManagers, null, random) }
     }
 
-    private fun persist(dir: File) {
+    private fun persist(dir: File, guard: KeyGuard) {
         dir.mkdirs()
-        File(dir, "ca.pk8").writeBytes(caKey.encoded)
-        File(dir, "ca.crt").writeBytes(certificate.encoded)
-        File(dir, "leaf.pk8").writeBytes(leafKey.encoded)
+        File(dir, CA_KEY).writeBytes(guard.seal(caKey.encoded))
+        File(dir, LEAF_KEY).writeBytes(guard.seal(leafKey.encoded))
         File(dir, "leaf.pub").writeBytes(leafPublic.encoded)
+        // The certificate last: its presence is what marks the directory as complete.
+        File(dir, CA_CERT).writeBytes(certificate.encoded)
+        LEGACY_KEYS.forEach { File(dir, it).delete() }
     }
 
     companion object {
         const val AUTHORITY = "Spectra"
+        private const val CA_CERT = "ca.crt"
+        private const val CA_KEY = "ca.key"
+        private const val LEAF_KEY = "leaf.key"
+
+        /** Keys written in the clear by earlier versions. */
+        private val LEGACY_KEYS = listOf("ca.pk8", "leaf.pk8")
+        private val FILES = listOf(CA_CERT, CA_KEY, LEAF_KEY, "leaf.pub") + LEGACY_KEYS
+
+        /** Only for tests and the JVM: keys are written as they are. */
+        val PLAIN = object : KeyGuard {
+            override fun seal(plain: ByteArray) = plain
+            override fun open(sealed: ByteArray) = sealed
+        }
+
+        // Used only for the in-memory PKCS12 store that hands the leaf to SSLContext; never written to disk.
         private val STORE_PASSWORD = "spectra".toCharArray()
         private val random = SecureRandom()
         private val gate = Any()
         private val open = HashMap<String, LocalCa>()
+
+        /**
+         * Moves an authority from [from] (where earlier versions kept it, inside
+         * backed-up storage) to [to], so a certificate the phone already trusts
+         * keeps working. Whatever is left in [from] is deleted.
+         */
+        fun relocate(from: File, to: File) = synchronized(gate) {
+            if (!from.isDirectory) return@synchronized
+            if (!File(to, CA_CERT).isFile && File(from, CA_CERT).isFile) {
+                to.mkdirs()
+                for (name in FILES) {
+                    val source = File(from, name)
+                    if (source.isFile) source.copyTo(File(to, name), overwrite = true)
+                }
+            }
+            from.deleteRecursively()
+            open.remove(from.canonicalPath)
+        }
 
         /** The default trust store, used for the real server. */
         fun trustDefault(): SSLContext = SSLContext.getInstance("TLS").apply { init(null, null, null) }
@@ -111,10 +161,15 @@ class LocalCa private constructor(
             return SSLContext.getInstance("TLS").apply { init(null, trust.trustManagers, null) }
         }
 
-        fun open(dir: File): LocalCa = synchronized(gate) {
+        fun open(dir: File, guard: KeyGuard): LocalCa = synchronized(gate) {
             val key = dir.canonicalPath
             open[key]?.let { return it }
-            val loaded = if (File(dir, "ca.crt").isFile) read(dir) else create(dir)
+            val existing = if (File(dir, CA_CERT).isFile) runCatching { read(dir, guard) }.getOrNull() else null
+            val loaded = existing ?: run {
+                // Nothing usable on disk: drop it and start over.
+                dir.deleteRecursively()
+                create(dir, guard)
+            }
             open[key] = loaded
             loaded
         }
@@ -124,7 +179,7 @@ class LocalCa private constructor(
             synchronized(gate) { open.remove(dir.canonicalPath) }
         }
 
-        private fun create(dir: File): LocalCa {
+        private fun create(dir: File, guard: KeyGuard): LocalCa {
             val keys = KeyPairGenerator.getInstance("RSA").apply { initialize(2048, random) }
             val ca = keys.generateKeyPair()
             val leaf = keys.generateKeyPair()
@@ -145,17 +200,28 @@ class LocalCa private constructor(
                 issuerKey = ca.private,
             )
             val created = LocalCa(ca.private, ca.public, parse(tbs), leaf.private, leaf.public)
-            created.persist(dir)
+            created.persist(dir, guard)
             return created
         }
 
-        private fun read(dir: File): LocalCa {
+        private fun read(dir: File, guard: KeyGuard): LocalCa {
+            val legacy = File(dir, LEGACY_KEYS[0]).isFile
+            fun key(sealedName: String, legacyName: String): ByteArray =
+                if (legacy) File(dir, legacyName).readBytes() else guard.open(File(dir, sealedName).readBytes())
             val factory = KeyFactory.getInstance("RSA")
-            val caKey = factory.generatePrivate(PKCS8EncodedKeySpec(File(dir, "ca.pk8").readBytes()))
-            val cert = parse(File(dir, "ca.crt").readBytes())
-            val leafKey = factory.generatePrivate(PKCS8EncodedKeySpec(File(dir, "leaf.pk8").readBytes()))
+            val caKey = factory.generatePrivate(PKCS8EncodedKeySpec(key(CA_KEY, "ca.pk8")))
+            val cert = parse(File(dir, CA_CERT).readBytes())
+            val leafKey = factory.generatePrivate(PKCS8EncodedKeySpec(key(LEAF_KEY, "leaf.pk8")))
             val leafPublic = factory.generatePublic(X509EncodedKeySpec(File(dir, "leaf.pub").readBytes()))
-            return LocalCa(caKey, cert.publicKey, cert, leafKey, leafPublic)
+            // The certificate must belong to the key, or the files are not one authority.
+            cert.verify(cert.publicKey)
+            val probe = Signature.getInstance("SHA256withRSA").run { initSign(caKey); update(byteArrayOf(1)); sign() }
+            val matches = Signature.getInstance("SHA256withRSA").run { initVerify(cert.publicKey); update(byteArrayOf(1)); verify(probe) }
+            if (!matches) throw IllegalStateException("certificate and key do not match")
+            val loaded = LocalCa(caKey, cert.publicKey, cert, leafKey, leafPublic)
+            // Keys from an earlier version were in the clear: seal them now.
+            if (legacy) loaded.persist(dir, guard)
+            return loaded
         }
     }
 }
