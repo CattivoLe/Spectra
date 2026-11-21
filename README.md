@@ -34,6 +34,15 @@ are published on the [Releases](https://github.com/CattivoLe/Spectra/releases) p
 with checksums and build attestations. How they are built and how to check
 them: [docs/releasing.md](docs/releasing.md).
 
+The APK is signed with a certificate whose SHA-256 fingerprint is
+
+```
+D3:AD:5E:D1:B3:95:EB:0E:1C:0F:0A:47:DB:29:B6:A0:ED:29:95:69:EC:C9:AC:85:C8:63:B1:C0:C4:4F:F0:7E
+```
+
+(`apksigner verify --print-certs` prints it as `d3ad5ed1b395eb0e1c0f0a47db29b6a0ed299569ecc9ac85c863b1c0c44ff07e`.)
+An APK with any other signature was not built by this project.
+
 ## Quick start
 
 | Part | Needs | Build |
