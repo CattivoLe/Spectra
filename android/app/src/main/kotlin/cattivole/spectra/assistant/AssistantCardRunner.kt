@@ -147,7 +147,7 @@ class AssistantCardRunner(
             val fresh = sources.cardFacts(subject) ?: card.facts
             // The check's own words go to the model as their own block: a capture or a GATT read says more than
             // the refreshed findings, and the model is asked about the check, not for the summary again.
-            card.lastCheck = CardCheck(AssistantActions.title(step.tool), result)
+            card.lastCheck = CardCheck(AssistantActions.title(step.tool), result, step.tool)
             card.facts = fresh
             card.headMessage?.let { store.update(it, AssistantCards.render(fresh.title, fresh.findings)) }
             val explained = CardEntry(CardAction.CHECK, CardAction.CHECK.heading)
@@ -188,9 +188,10 @@ class AssistantCardRunner(
             return
         }
         val messages = listOf(
-            ChatMessage(ChatMessage.Role.System, CardPrompts.system(action, card.facts.subject.kind)),
+            ChatMessage(ChatMessage.Role.System, CardPrompts.system(action, card.facts.subject.kind, tool = card.lastCheck?.tool)),
             ChatMessage(ChatMessage.Role.User, CardPrompts.user(card.facts, action, card.lastCheck, earlierSummary(card, entry))),
         )
+        Log.i(TAG, "card ${card.facts.subject.kind} ${action.name}: system ${messages[0].content.length} chars, user ${messages[1].content.length} chars")
         val params = GenerationParams(maxTokens = action.maxTokens, temperature = 0.3f)
         entry.state = CardEntry.State.RUNNING
         running = entry

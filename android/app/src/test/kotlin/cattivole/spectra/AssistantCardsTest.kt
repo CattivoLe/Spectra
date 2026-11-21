@@ -203,6 +203,16 @@ class AssistantCardsTest {
     }
 
     @Test
+    fun aTrackerReadsInTheReadersWordsWithoutADoubleFullStop() {
+        Locale.setDefault(Locale.forLanguageTag("ru"))
+        val apple = tag.copy(company = "Apple, Inc.", trackerLevel = "watch")
+        val facts = AssistantCards.bluetooth(AssistantSnapshot(bluetooth = listOf(apple)), apple.address, now)
+        assertTrue(facts.findings.joinToString { it.text }, facts.findings.first().text.startsWith("Метка Find My"))
+        assertTrue(facts.findings.any { it.text.endsWith("Apple, Inc.") })
+        assertTrue(facts.findings.none { it.text.contains("..") })
+    }
+
+    @Test
     fun aDeviceIsOfferedForAReadUntilItIsRead() {
         val before = AssistantCards.bluetooth(AssistantSnapshot(bluetooth = listOf(speaker)), speaker.address, now)
         assertEquals("""{"tool": "connect_bluetooth", "text": "Momentum 3"}""", before.steps.first().call)
@@ -320,8 +330,11 @@ class AssistantCardsTest {
 
     @Test
     fun everyActionAndSubjectGetsItsOwnShortPrompt() {
-        val prompts = CardAction.entries.flatMap { action -> CardSubject.Kind.entries.map { CardPrompts.system(action, it, Locale.ENGLISH) } }
+        val prompts = CardAction.entries.filter { it != CardAction.CHECK }.flatMap { action -> CardSubject.Kind.entries.map { CardPrompts.system(action, it, Locale.ENGLISH) } }
         assertEquals(prompts.size, prompts.toSet().size)
+        // After a check the prompt follows the check, not the subject: each kind of check gets its own.
+        val checks = listOf("check_port_forwarding", "connect_bluetooth", "scan_ports", "capture_pcap").map { CardPrompts.system(CardAction.CHECK, CardSubject.Kind.HOST, Locale.ENGLISH, it) }
+        assertEquals(checks.size, checks.toSet().size)
         // Short enough to read in a few seconds on the phone's CPU (about 4 characters a token).
         assertTrue(prompts.maxOf { it.length } < 2200)
         assertTrue(CardPrompts.system(CardAction.SUMMARY, CardSubject.Kind.HOST, Locale.forLanguageTag("ru")).endsWith("Answer in Russian."))
@@ -332,11 +345,22 @@ class AssistantCardsTest {
     @Test
     fun afterACheckTheModelIsAskedAboutTheCheckNotTheSummaryAgain() {
         val facts = AssistantCards.host(AssistantSnapshot(hosts = listOf(router)), router.ip, now)
-        val check = CardCheck("port forwarding check", "The router forwards no ports from the internet right now.")
+        val check = CardCheck("port forwarding check", "The router forwards no ports from the internet right now.", "check_port_forwarding")
         val text = CardPrompts.user(facts, CardAction.CHECK, check, earlier = "The router has Telnet open.")
-        assertTrue(text.startsWith("<check name=\"port forwarding check\">\nThe router forwards no ports"))
-        assertTrue(text.contains("do not repeat it):\nThe router has Telnet open."))
-        assertTrue(CardPrompts.system(CardAction.CHECK, CardSubject.Kind.HOST, Locale.ENGLISH).contains("Do not repeat the earlier summary"))
+        // Only the check and what was said: no findings or data to retell, and the question right after the result.
+        assertTrue(text.contains("do not repeat any of it):\nThe router has Telnet open."))
+        assertTrue(text.contains("<check name=\"port forwarding check\">\nThe router forwards no ports"))
+        assertTrue(text.endsWith("</check>\n\nWhat did this check show?"))
+        assertFalse(text.contains("Findings of the app"))
+        assertFalse(text.contains("<data>"))
+        assertFalse(text.contains("Telnet: clear-text login"))
+        val system = CardPrompts.system(CardAction.CHECK, CardSubject.Kind.HOST, Locale.ENGLISH, check.tool)
+        assertTrue(system.contains("Never retell the summary"))
+        assertTrue(system.contains("which ports it forwards"))
+        assertFalse(system.contains("what kind of device it most likely is"))
+        val gatt = CardPrompts.system(CardAction.CHECK, CardSubject.Kind.BLUETOOTH, Locale.ENGLISH, "connect_bluetooth")
+        assertTrue(gatt.contains("read its GATT services"))
+        assertFalse(gatt.contains("someone else's tracker"))
         // Later actions still read the check, but never get the earlier summary to echo.
         val details = CardPrompts.user(facts, CardAction.DETAILS, check, earlier = "The router has Telnet open.")
         assertTrue(details.contains("<check"))

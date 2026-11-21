@@ -295,7 +295,8 @@ object AssistantCards {
         }
         val found = mutableListOf<CardFinding>()
         device.tracker?.let { tracker ->
-            val name = AssistantDigest.clean(tracker)
+            // The kind comes in English from TrackerDetector ("Find My tag"); the screen shows it in the reader's words.
+            val name = AssistantDigest.clean(tr(tracker))
             when (device.trackerLevel) {
                 "alert" -> found += CardFinding(CardRisk.CRITICAL, tr("%s nearby for %d min, away from its owner: it may be following you.", name, device.minutesNearby))
                 "watch" -> found += CardFinding(CardRisk.WARNING, tr("%s away from its owner, nearby for %d min.", name, device.minutesNearby))
@@ -306,7 +307,7 @@ object AssistantCards {
             found += CardFinding(CardRisk.INFO, tr("Nearby for %d min.", device.minutesNearby))
         }
         if (!device.nearby) found += CardFinding(CardRisk.INFO, tr("Out of range now; this is what it said last."))
-        device.company?.let { found += CardFinding(CardRisk.INFO, tr("Maker by its signal: %s.", AssistantDigest.clean(it))) }
+        device.company?.let { found += CardFinding(CardRisk.INFO, tr("Maker by its signal: %s.", AssistantDigest.clean(it).trimEnd('.'))) }
         found += CardFinding(CardRisk.INFO, tr("Signal %d dBm: %s.", device.rssi, distance(device.rssi)))
         if (read != null) found += gattFindings(s.gattItems)
         val steps = mutableListOf<CardStep>()
@@ -544,7 +545,7 @@ You are the security assistant inside Spectra, an app that inspects the user's o
     }
 
     private fun task(action: CardAction): String = when (action) {
-        CardAction.CHECK -> "The app has just run the check in <check>, and its result is there. In 2 to 4 short sentences of plain text say what this check found and what it means for the user; say so when the result is reassuring. Do not repeat the earlier summary: add only what the check showed. No lists."
+        CardAction.CHECK -> "The app has just run one check; its result is in <check>. The user has already read the summary quoted before it. Write 2 to 4 short sentences of plain text about the check result only: what it found and what that means for the user, and say so when it is reassuring. Never retell the summary or the device's other findings. No lists."
         CardAction.SUMMARY -> "Write 2 to 4 short sentences of plain text: what this is, what matters most, and the one thing to do first. No lists. Do not repeat the findings word for word: say what they mean."
         CardAction.DETAILS -> "Explain each finding in one or two sentences, most serious first: what it means in practice and exactly what to do about it. A short list is fine. At most 250 words."
         CardAction.DEEP -> "Write a thorough analysis using all of the data: what stands out, what it could mean (with the innocent explanation too), how it compares with History and the notes, and a short ordered list of steps. Bold a few words to lead each part. At most 300 words."
@@ -553,19 +554,46 @@ You are the security assistant inside Spectra, an app that inspects the user's o
     private fun language(locale: Locale): String =
         if (locale.language == "ru") "Answer in Russian." else "Answer in ${locale.getDisplayLanguage(Locale.ENGLISH).ifEmpty { "English" }}."
 
-    fun system(action: CardAction, kind: CardSubject.Kind, locale: Locale = Locale.getDefault()): String =
-        listOf(BASE, subject(kind), task(action), language(locale)).joinToString("\n\n")
+    /**
+     * After a check the prompt is about that check alone: the subject's own brief ("what kind of device it is") is
+     * left out, or a small model answers it again instead of the check.
+     */
+    fun system(action: CardAction, kind: CardSubject.Kind, locale: Locale = Locale.getDefault(), tool: String? = null): String =
+        if (action == CardAction.CHECK) {
+            listOfNotNull(BASE, task(action), tool?.let(::checkGuide), language(locale)).joinToString("\n\n")
+        } else {
+            listOf(BASE, subject(kind), task(action), language(locale)).joinToString("\n\n")
+        }
+
+    /** What to look for in one kind of check's result. */
+    private fun checkGuide(tool: String): String? = when (AssistantActions.Name.of(tool)) {
+        AssistantActions.Name.CHECK_PORT_FORWARDING -> "This check asked the router which ports it forwards from the internet: name each forwarded port and the device it leads to, or say that nothing is forwarded or that the router does not allow it."
+        AssistantActions.Name.CONNECT_BLUETOOTH -> "This check connected to the device and read its GATT services: go through what each service and value tells (model, maker, firmware, battery, the maker's own services) and which of the maker's services accept writes without pairing."
+        AssistantActions.Name.SCAN_PORTS -> "This check scanned the device's ports: say which are open and what each one is for, and which of them is a risk."
+        AssistantActions.Name.CAPTURE_PCAP -> "This check captured a few seconds of the network's traffic: say what was in it and whether anything is unusual."
+        AssistantActions.Name.CHECK_CONNECTION -> "This check tested the internet connection: say how it went and anything wrong with it."
+        AssistantActions.Name.SCAN_LAN, AssistantActions.Name.SCAN_WIFI, AssistantActions.Name.SCAN_BLUETOOTH -> "This check scanned again: say only what changed or what is new."
+        else -> null
+    }
 
     /**
      * The one user turn: the check just run (if any) and, after a check, the summary already shown; then the card's
      * findings and the data behind them.
      */
     fun user(facts: CardFacts, action: CardAction, check: CardCheck? = null, earlier: String? = null): String {
+        if (action == CardAction.CHECK && check != null) {
+            // Only the check and what was already said: with the findings and data in front of it, a small model
+            // retells the card. The question comes last, right after the result.
+            val parts = mutableListOf("Subject: ${facts.title}")
+            if (!earlier.isNullOrBlank()) parts += "Already told the user (do not repeat any of it):\n${earlier.take(600)}"
+            parts += "<check name=\"${check.title}\">\n${check.result.take(CHECK_BUDGET)}\n</check>"
+            parts += "What did this check show?"
+            return parts.joinToString("\n\n")
+        }
         val findings = facts.findings.joinToString("\n") { "- [${it.risk.name.lowercase()}] ${it.text}" }
         val data = if (action == CardAction.DEEP) facts.deepData else facts.data
         val parts = mutableListOf<String>()
         check?.let { parts += "<check name=\"${it.title}\">\n${it.result.take(CHECK_BUDGET)}\n</check>" }
-        if (action == CardAction.CHECK && !earlier.isNullOrBlank()) parts += "Earlier summary, already shown (do not repeat it):\n${earlier.take(600)}"
         parts += "Subject: ${facts.title}\nFindings of the app:\n$findings"
         parts += "<data>\n$data\n</data>"
         return parts.joinToString("\n\n")
@@ -575,4 +603,4 @@ You are the security assistant inside Spectra, an app that inspects the user's o
 }
 
 /** A check a step button ran on a card: its name in words and what it returned. */
-data class CardCheck(val title: String, val result: String)
+data class CardCheck(val title: String, val result: String, val tool: String = "")
