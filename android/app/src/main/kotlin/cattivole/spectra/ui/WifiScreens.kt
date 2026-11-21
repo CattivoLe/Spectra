@@ -759,15 +759,7 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
         onBack = nav::back,
         actions = {
             if (!snapshot) {
-                // The question names the network by its BSSID too, so the assistant puts this one first.
-                AskAssistantButton(model, nav, question = {
-                    val captured = model.link.rawCaptureNetwork == reading.bssid && model.link.rawFrameCount > 0
-                    if (captured) {
-                        tr("Analyze the Wi‑Fi network “%s” (%s) and the traffic captured on it: encryption, channel, signal, clients — is everything fine with it?", networkName(network), reading.bssid.text)
-                    } else {
-                        tr("Analyze the Wi‑Fi network “%s” (%s): encryption, channel, signal, clients — is everything fine with it?", networkName(network), reading.bssid.text)
-                    }
-                })
+                AskAssistantButton(model, nav, subject = { cattivole.spectra.assistant.CardSubject.Wifi(reading.bssid.text) })
                 val watched = model.isWatched(reading.bssid.text)
                 IconButton(onClick = { model.toggleWatch(reading.bssid.text) }) {
                     Icon(

@@ -75,7 +75,10 @@ private enum class Tab(val graph: String, val start: String, val label: () -> St
     Bluetooth("bluetooth-tab", "bluetooth", { "Bluetooth" }, Icons.Filled.Bluetooth, Icons.Outlined.Bluetooth),
     History("history-tab", "history", { tr("History") }, Icons.Filled.History, Icons.Outlined.History),
     // As on iOS, the sensor is a screen of the Wi‑Fi tab and its place in the bar went to the assistant.
-    Assistant("assistant-tab", "assistant", { tr("Assistant") }, Icons.Filled.AutoAwesome, Icons.Outlined.AutoAwesome),
+    Assistant("assistant-tab", "assistant", { tr("Assistant") }, Icons.Filled.AutoAwesome, Icons.Outlined.AutoAwesome);
+
+    /** Where this tab shows a summary card: each tab has its own copy of the screen (see [Navigator.card]). */
+    val cardRoute: String get() = "$start/card"
 }
 
 /** Where a screen goes next. One object so screens do not each take five lambdas. */
@@ -86,16 +89,23 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
 
     override fun chat(id: java.util.UUID) = nav.navigate("assistant/chat/$id")
 
+    /** A summary card opens in the tab it was asked from, so going back returns to that screen. */
+    override fun card(id: java.util.UUID) {
+        val hierarchy = nav.currentBackStackEntry?.destination?.hierarchy?.mapNotNull { it.route }?.toList().orEmpty()
+        val tab = Tab.entries.firstOrNull { it.graph in hierarchy } ?: Tab.Assistant
+        nav.navigate("${tab.cardRoute}/$id")
+    }
+
     override fun models() = nav.navigate("assistant/models")
 
     override fun internet() = nav.navigate("assistant/internet")
 
     override fun dossier() = nav.navigate("assistant/dossier")
 
-    /** A ✨ button: a new chat about what this screen shows, asked as soon as the model is there. */
-    fun askAssistant(model: cattivole.spectra.SpectraModel, question: String) {
+    /** A ✨ button: a summary card about what this screen shows — the findings at once, the model's words under them. */
+    fun summary(model: cattivole.spectra.SpectraModel, subject: cattivole.spectra.assistant.CardSubject) {
         if (!cattivole.spectra.assistant.AssistantModel.isSupported) return
-        kotlinx.coroutines.MainScope().launch { chat(model.assistant.ask(question)) }
+        kotlinx.coroutines.MainScope().launch { model.assistant.cards.open(subject)?.let(::card) }
     }
 
     fun network(id: MacAddress, entry: String? = null) =
@@ -244,6 +254,7 @@ fun SpectraApp(model: SpectraModel) {
             ) {
                 navigation(startDestination = Tab.Networks.start, route = Tab.Networks.graph) {
                     composable(Tab.Networks.start) { NetworksScreen(model, navigator) }
+                    composable("${Tab.Networks.cardRoute}/{id}") { summaryCard(model, navigator, it) }
                     composable("network/{id}") { NetworkDetail(model, navigator, it.mac("id"), entryId = null) }
                     composable("client/{mac}") { ClientDetail(model, navigator, it.mac("mac"), entryId = null) }
                     composable("channels") { ChannelsScreen(model, navigator) }
@@ -262,6 +273,7 @@ fun SpectraApp(model: SpectraModel) {
                 }
                 navigation(startDestination = Tab.Lan.start, route = Tab.Lan.graph) {
                     composable(Tab.Lan.start) { LanScreen(model, navigator) }
+                    composable("${Tab.Lan.cardRoute}/{id}") { summaryCard(model, navigator, it) }
                     composable("host/{ip}") { LanDetail(model, navigator, it.text("ip"), entryId = null) }
                     composable("connection") { LinkScreen(model, navigator) }
                     composable("link-check") { LinkCheckScreen(navigator) }
@@ -316,10 +328,12 @@ fun SpectraApp(model: SpectraModel) {
                 }
                 navigation(startDestination = Tab.Bluetooth.start, route = Tab.Bluetooth.graph) {
                     composable(Tab.Bluetooth.start) { BluetoothScreen(model, navigator) }
+                    composable("${Tab.Bluetooth.cardRoute}/{id}") { summaryCard(model, navigator, it) }
                     composable("ble/{address}") { BleDetail(model, navigator, it.text("address"), entryId = null) }
                 }
                 navigation(startDestination = Tab.History.start, route = Tab.History.graph) {
                     composable(Tab.History.start) { HistoryScreen(model, navigator) }
+                    composable("${Tab.History.cardRoute}/{id}") { summaryCard(model, navigator, it) }
                     composable("history/{id}") { HistoryDetail(model, navigator, it.text("id")) }
                     composable("saved/network/{entry}/{id}") { NetworkDetail(model, navigator, it.mac("id"), it.text("entry")) }
                     composable("saved/client/{entry}/{mac}") { ClientDetail(model, navigator, it.mac("mac"), it.text("entry")) }
@@ -331,6 +345,7 @@ fun SpectraApp(model: SpectraModel) {
                 }
                 navigation(startDestination = Tab.Assistant.start, route = Tab.Assistant.graph) {
                     composable(Tab.Assistant.start) { cattivole.spectra.assistant.ui.AssistantHomeScreen(model, navigator) }
+                    composable("${Tab.Assistant.cardRoute}/{id}") { summaryCard(model, navigator, it) }
                     composable("assistant/chat/{id}") {
                         val id = runCatching { java.util.UUID.fromString(it.text("id")) }.getOrNull()
                         if (id != null) cattivole.spectra.assistant.ui.AssistantChatScreen(model, navigator, id)
@@ -344,12 +359,18 @@ fun SpectraApp(model: SpectraModel) {
     }
 }
 
-/** The decode screen's ✨: the capture is kept for the assistant, then a chat about it opens. */
+/** The decode screen's ✨: the capture is kept for the assistant, then a summary card about it opens. */
 private fun assistantAsk(model: SpectraModel, navigator: Navigator): ((String, cattivole.spectra.core.CaptureAnalysis, Boolean) -> Unit)? =
     if (!cattivole.spectra.assistant.AssistantModel.isSupported) null else { name, analysis, fromSensor ->
         model.captures.keep(name, analysis, fromSensor)
-        navigator.askAssistant(model, tr("Decode this traffic capture: what is in it, and is anything unusual?"))
+        navigator.summary(model, cattivole.spectra.assistant.CardSubject.Capture)
     }
+
+@Composable
+private fun summaryCard(model: SpectraModel, navigator: Navigator, entry: NavBackStackEntry) {
+    val id = runCatching { java.util.UUID.fromString(entry.text("id")) }.getOrNull() ?: return
+    cattivole.spectra.assistant.ui.AssistantCardScreen(model, navigator, id)
+}
 
 private fun NavBackStackEntry.text(key: String): String = Uri.decode(arguments?.getString(key).orEmpty())
 private fun NavBackStackEntry.mac(key: String): MacAddress? = MacAddress.parse(text(key).replace('-', ':'))

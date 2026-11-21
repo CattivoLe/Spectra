@@ -20,8 +20,9 @@ import kotlinx.coroutines.withContext
  * продолжение начатого ответа, ленивая грамматика для вызова инструментов и сохранённый на диск системный промпт.
  *
  * @param promptCacheDir куда сохранять посчитанный системный промпт между чатами (см. [PromptCache]); `null` — не сохранять.
+ * @param promptCacheFiles сколько разных системных промптов хранить там одновременно.
  */
-class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = null) : InferenceEngine {
+class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = null, promptCacheFiles: Int = 1) : InferenceEngine {
     private val dispatcher = Executors.newSingleThreadExecutor { Thread(it, "LocalChat.LlamaEngine") }.asCoroutineDispatcher()
 
     // Состояние ниже меняется только в потоке движка.
@@ -38,7 +39,7 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
     private var cachedTokens = IntArray(0)
     /** Сообщения, уже выброшенные из начала текущего диалога: граница не «ползёт» с каждой репликой. */
     private var droppedHistory: List<ChatMessage> = emptyList()
-    private val promptCache = promptCacheDir?.let(::PromptCache)
+    private val promptCache = promptCacheDir?.let { PromptCache(it, promptCacheFiles) }
     /** От чего, кроме промпта, зависят сохранённые состояния: файл модели и настройки. */
     private var cacheIdentity: Triple<String, Long, String>? = null
     /** Системная часть последнего промпта в токенах, чтобы не рендерить её заново к каждой реплике. */
@@ -371,7 +372,10 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
         val loaded = LlamaNative.stateLoad(context, file.path, key.prefix)
         android.util.Log.i("LocalChatEngine", String.format(java.util.Locale.ROOT,
             "prompt cache: %s %d tokens in %.2fs", if (loaded) "loaded" else "failed to load", key.prefix.size, seconds(started)))
-        if (loaded) return Restore.Loaded
+        if (loaded) {
+            cache.touch(key)
+            return Restore.Loaded
+        }
         LlamaNative.memoryClear(context)
         cache.discard(key)
         return Restore.Failed

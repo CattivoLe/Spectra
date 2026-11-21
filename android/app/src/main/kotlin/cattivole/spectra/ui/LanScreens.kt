@@ -160,7 +160,7 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
         title = "LAN",
         actions = {
             if (lan.devices.isNotEmpty()) {
-                AskAssistantButton(model, nav, question = { tr("Analyze the devices on my local network: what each one is and what deserves attention?") })
+                AskAssistantButton(model, nav, subject = { cattivole.spectra.assistant.CardSubject.Lan })
             }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
@@ -521,11 +521,8 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
         subtitle = if (snapshot) entry?.let { tr("Saved %s", dateTime(it.savedAt)) } else device.ipAddress,
         onBack = nav::back,
         actions = {
-            // Worded without "open port" or "risk": those widen the question to every scanner and bury this host.
             if (!snapshot) {
-                AskAssistantButton(model, nav, question = {
-                    tr("What is the device %s (%s) on my local network, and what deserves attention about it?", device.displayName, device.ipAddress)
-                })
+                AskAssistantButton(model, nav, subject = { cattivole.spectra.assistant.CardSubject.Host(device.ipAddress) })
             }
         },
     ) {

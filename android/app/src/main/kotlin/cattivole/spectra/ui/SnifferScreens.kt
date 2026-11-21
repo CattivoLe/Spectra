@@ -223,10 +223,10 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
                 AskAssistantButton(
                     model,
                     nav,
-                    question = { tr("Analyze the recorded traffic of this phone: which servers and apps did it talk to, and is anything unusual?") },
+                    subject = { cattivole.spectra.assistant.CardSubject.Traffic },
                     prepare = {
-                        val name = session?.let { tr("saved session of %s", dateTime(it.stoppedAt)) }
-                            ?: if (traffic.running) "recording in progress" else "current recording"
+                        val name = session?.let { tr("Saved session of %s", dateTime(it.stoppedAt)) }
+                            ?: if (traffic.running) tr("Recording in progress") else tr("Current recording")
                         model.captures.keep(flows, name)
                     },
                 )

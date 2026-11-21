@@ -21,6 +21,30 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
         return AssistantDigest.attachment(question, current)
     }
 
+    /**
+     * What a summary card shows: its findings and steps, and the data its model actions read. Null when there is
+     * nothing to summarize (no recorded traffic or capture handed over).
+     */
+    fun cardFacts(subject: CardSubject, now: Long = System.currentTimeMillis()): CardFacts? = when (subject) {
+        CardSubject.Traffic -> captures.currentRecording?.let { recording ->
+            AssistantCards.traffic(recording.flows, recording.name, TrafficDigest.text(recording.flows, recording.name, "recorded on the phone (Traffic screen)"))
+        }
+        CardSubject.Capture -> captures.latest?.let { entry ->
+            AssistantCards.capture(entry.analysis, entry.name, CaptureDigest.text(entry.analysis, entry.name, entry.origin, ::describe))
+        }
+        else -> {
+            val base = snapshot(now)
+            val key = when (subject) {
+                is CardSubject.Host -> listOfNotNull(subject.ip, base.hosts.firstOrNull { it.ip == subject.ip }?.mac)
+                is CardSubject.Bluetooth -> listOf(subject.address)
+                is CardSubject.Wifi -> listOf(subject.bssid)
+                else -> base.hosts.flatMap { listOfNotNull(it.ip, it.mac) }
+            }
+            val subjects = key.mapNotNull { AssistantMemory.normalize(it) }.toSet()
+            AssistantCards.facts(subject, base.copy(memory = memory.digest(subjects)), now)
+        }
+    }
+
     /** Folds what is on screen into the long-term baselines. Cheap on purpose: no capture decode, no threat assessment. */
     fun recordBaselines(now: Long = System.currentTimeMillis()) {
         memory.observe(sightings(now), now)
@@ -95,7 +119,12 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
                 Threats.Kind.STREAMING -> "Steady data stream" to
                     "\"${finding.name ?: finding.ssid ?: "a network"}\" moves data the whole time, as a camera or microphone feed would"
             }
-            AssistantSnapshot.Finding(if (finding.severity == Threats.Severity.CRITICAL) "critical" else "warning", title, detail)
+            AssistantSnapshot.Finding(
+                if (finding.severity == Threats.Severity.CRITICAL) "critical" else "warning",
+                title,
+                detail,
+                finding.networks.map { it.text },
+            )
         }
         val hosts = model.lan.devices.map { device ->
             val risks = PortRisk.findings(device).filter { it.level >= RiskLevel.MEDIUM }
@@ -113,6 +142,7 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
                 isNew = device.isNew,
                 trust = device.trust.name.lowercase(),
                 note = device.note,
+                portRisks = risks.map { AssistantSnapshot.PortRiskItem(it.title, it.level >= RiskLevel.HIGH) },
             )
         }
         val bluetooth = model.ble.devices.values.map { device ->
@@ -126,6 +156,7 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
                 tracker = assessment?.kind?.label,
                 trackerLevel = assessment?.level?.name?.lowercase(),
                 away = assessment?.separated,
+                address = device.address,
             )
         }
         val sessions = model.history.entries.map {
@@ -188,6 +219,7 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
             link = link,
             capture = captureText(),
             gatt = gatt,
+            gattAddress = model.gatt.lastRead?.address,
         )
     }
 

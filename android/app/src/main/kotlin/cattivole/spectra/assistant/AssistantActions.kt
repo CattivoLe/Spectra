@@ -60,6 +60,16 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
             run = { name, args -> run(name, args) },
         )
 
+    /**
+     * Runs a summary card's step: a bare tool name or a whole call (`{"tool": "scan_ports", "host": …}`), the same
+     * way the model's call would run, but chosen by the app. Returns the tool's result text.
+     */
+    suspend fun perform(call: String): String {
+        if (!call.trimStart().startsWith("{")) return run(call.trim(), "{}")
+        val json = runCatching { JSONObject(call) }.getOrNull() ?: return "Bad call."
+        return run(json.optString("tool"), call)
+    }
+
     private suspend fun run(name: String, argsJson: String): String {
         val model = sources.model
         val tool = Name.of(name) ?: return "Unknown tool \"$name\"."

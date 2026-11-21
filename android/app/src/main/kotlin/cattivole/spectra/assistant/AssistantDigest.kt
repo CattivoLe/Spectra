@@ -31,6 +31,8 @@ data class AssistantSnapshot(
     val gatt: String? = null,
     /** Persistent dossier notes saved by the assistant across chats. */
     val memory: String? = null,
+    /** Which device [gatt] was read from. */
+    val gattAddress: String? = null,
 ) {
     data class Wifi(
         val name: String,
@@ -47,7 +49,8 @@ data class AssistantSnapshot(
         val streaming: Boolean = false,
     )
 
-    data class Finding(val severity: String, val title: String, val detail: String)
+    /** [bssids]: the access points the finding is about. */
+    data class Finding(val severity: String, val title: String, val detail: String, val bssids: List<String> = emptyList())
 
     data class Host(
         val ip: String,
@@ -64,7 +67,11 @@ data class AssistantSnapshot(
         val trust: String = "unknown",
         /** The user's own note about the host. */
         val note: String? = null,
+        /** [risks] with their weight: what the summary card ranks by. */
+        val portRisks: List<PortRiskItem> = emptyList(),
     )
+
+    data class PortRiskItem(val title: String, val high: Boolean)
 
     data class Bluetooth(
         val name: String,
@@ -76,6 +83,7 @@ data class AssistantSnapshot(
         /** "info", "watch" or "alert" for trackers. */
         val trackerLevel: String? = null,
         val away: Boolean? = null,
+        val address: String = "",
     )
 
     data class Session(val kind: String, val date: Long, val source: String, val place: String?, val count: Int)

@@ -58,6 +58,33 @@ class PromptCacheTest {
     }
 
     @Test
+    fun severalPromptsKeepTheirOwnFilesUpToTheLimit() {
+        val directory = Files.createTempDirectory("prompt-cache").toFile()
+        val cache = PromptCache(directory, keep = 2)
+        val keys = (1..3).map { n -> key.copy(prefix = IntArray(100) { it + n * 1000 }) }
+        for ((index, each) in keys.withIndex()) {
+            cache.temporaryFile(each).writeText("state $index")
+            assertTrue(cache.commit(each))
+            // Distinct times even on a file system that keeps whole seconds.
+            cache.file(each).setLastModified(1_000_000L * (index + 1))
+        }
+        // The oldest one went; the two latest stay side by side.
+        assertFalse(cache.file(keys[0]).exists())
+        assertTrue(cache.file(keys[1]).exists())
+        assertTrue(cache.file(keys[2]).exists())
+
+        // Using one makes it the freshest: the next new prompt pushes out the other.
+        cache.touch(keys[1])
+        val fourth = key.copy(prefix = IntArray(100) { it + 4000 })
+        cache.temporaryFile(fourth).writeText("state 4")
+        assertTrue(cache.commit(fourth))
+        assertTrue(cache.file(keys[1]).exists())
+        assertFalse(cache.file(keys[2]).exists())
+        assertEquals(2, directory.list()!!.size)
+        directory.deleteRecursively()
+    }
+
+    @Test
     fun commitWithoutAWrittenStateFails() {
         val directory = Files.createTempDirectory("prompt-cache").toFile()
         val cache = PromptCache(directory)

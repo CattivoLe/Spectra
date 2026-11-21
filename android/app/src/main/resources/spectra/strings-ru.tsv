@@ -1401,3 +1401,99 @@ What is the Bluetooth device “%s” (%s): what kind of device is it, and what 
 What is the device %s (%s) on my local network, and what deserves attention about it?	Что за устройство %s (%s) в моей локальной сети и на что в нём стоит обратить внимание?
 Open the page	Открыть страницу
 The answer did not finish.	Ответ не закончен.
+# Summary cards (✨): findings, buttons, journal
+The local network has not been scanned yet.	Локальная сеть ещё не сканировалась.
+Devices on %s: %d.	Устройств в сети %s: %d.
+Devices on the local network: %d.	Устройств в локальной сети: %d.
+Ports not checked on %d of them.	Порты не проверены у %d из них.
+Scan the network again	Просканировать сеть заново
+%s is not in the current device list: scan the network again.	%s нет в текущем списке устройств: просканируйте сеть заново.
+New on this network: not seen in earlier scans.	Новое в сети: в прошлых сканах его не было.
+This is the router: everything else reaches the internet through it.	Это роутер: через него все остальные выходят в интернет.
+Ports have not been checked yet.	Порты ещё не проверялись.
+No open ports among the usual ones.	Среди обычных портов открытых нет.
+Open ports: %s — nothing risky among them.	Открытые порты: %s — рискованных среди них нет.
+You marked it as yours.	Вы отметили его как своё.
+Your note: %s	Ваша заметка: %s
+you marked it as suspicious.	вы отметили его как подозрительное.
+You marked it as suspicious.	Вы отметили его как подозрительное.
+new on this network.	новое в сети.
+HTTPS certificates look re-signed on this connection: possible interception.	Сертификаты HTTPS в этом подключении похожи на переподписанные: возможен перехват.
+The DNS resolver answers for names that do not exist.	DNS-сервер отвечает на несуществующие имена.
+Ports reachable from the internet: %s.	Порты, доступные из интернета: %s.
+The device is not heard right now.	Устройство сейчас не слышно.
+%s nearby for %d min, away from its owner: it may be following you.	%s рядом уже %d мин, без владельца: возможно, за вами следят.
+%s away from its owner, nearby for %d min.	%s без владельца, рядом %d мин.
+%s near its owner: an ordinary tag.	%s рядом с владельцем: обычная метка.
+Nearby for %d min.	Рядом уже %d мин.
+Out of range now; this is what it said last.	Сейчас вне зоны; это последнее, что оно сообщало.
+Maker by its signal: %s.	Производитель по сигналу: %s.
+Signal %d dBm: %s.	Сигнал %d дБм: %s.
+Its GATT data was read: model, maker and services are in the data.	Данные GATT прочитаны: модель, производитель и сервисы есть в данных.
+Read “%s” over Bluetooth	Прочитать «%s» по Bluetooth
+Scan Bluetooth again	Просканировать Bluetooth заново
+very close, within a couple of metres	совсем близко, в паре метров
+in the same room or next door	в этой же комнате или за стеной
+far or behind walls	далеко или за стенами
+The network is not heard right now.	Сеть сейчас не слышна.
+Open network: anyone nearby can read unencrypted traffic.	Открытая сеть: любой рядом может читать незашифрованный трафик.
+%s encryption is broken: it is cracked in minutes.	Шифрование %s взломано: его подбирают за минуты.
+%s is outdated: WPA2 or WPA3 is safer.	%s устарел: WPA2 или WPA3 надёжнее.
+Encryption: %s.	Шифрование: %s.
+Data moves the whole time, as a camera or microphone feed would.	Данные идут непрерывно, как поток с камеры или микрофона.
+Hidden name: it does not hide the network, phones still reveal it.	Скрытое имя: сеть оно не прячет, телефоны всё равно его выдают.
+Weak signal (%d dBm): far away or behind walls.	Слабый сигнал (%d дБм): далеко или за стенами.
+Channel %d is crowded: %d networks share it.	Канал %d перегружен: сетей на нём — %d.
+%d devices connected to it.	Подключено устройств: %d.
+Without the sensor: no clients or deauth frames are seen.	Без сенсора: клиенты и кадры деаутентификации не видны.
+Capture a few seconds of its traffic	Записать несколько секунд её трафика
+Scan Wi‑Fi again	Просканировать Wi‑Fi заново
+Nothing was recorded: no connections went out.	Ничего не записано: соединений не было.
+Unencrypted HTTP to %s: what was sent can be read on the way.	Незашифрованный HTTP к %s: отправленное можно прочитать по пути.
+%d connections to %d servers.	Соединений: %d, серверов: %d.
+Apps: %d.	Приложений: %d.
+Most data went to %s.	Больше всего данных ушло к %s.
+%d connections refused Spectra's certificate.	Соединений, отвергших сертификат Spectra: %d.
+Everything went encrypted.	Всё шло в зашифрованном виде.
+The capture is empty: nothing was heard.	Запись пуста: ничего не слышно.
+%d deauthentication frames: someone may be knocking devices off the network.	Кадров деаутентификации: %d — кто-то может выбивать устройства из сети.
+%d deauthentication frames: usually a device leaving, many of them mean an attack.	Кадров деаутентификации: %d — обычно это уходящее устройство, а много таких кадров означает атаку.
+Unencrypted protocols: %s.	Незашифрованные протоколы: %s.
+%d packets over %s s, %d addresses.	Пакетов: %d за %s с, адресов: %d.
+%d packets, %d addresses.	Пакетов: %d, адресов: %d.
+Busiest address: %s.	Самый активный адрес: %s.
+No deauthentication frames or plain-text protocols.	Ни кадров деаутентификации, ни открытых протоколов.
+Scan every port of %s	Просканировать все порты %s
+The assistant's model is not downloaded yet: Assistant tab → ⋮ → Model.	Модель ассистента ещё не скачана: вкладка «Ассистент» → ⋮ → Модель.
+The model did not load: %s	Модель не загрузилась: %s
+Summary	Сводка
+Findings	Находки
+Next steps	Следующие шаги
+Ask the model	Спросить модель
+Deep analysis reads everything around this subject and writes at length: about 3–4 minutes on this phone.	Глубокий анализ читает всё вокруг и пишет подробно: на этом телефоне около 3–4 минут.
+More detail again	Подробнее ещё раз
+More detail	Подробнее
+Deep analysis	Глубокий анализ
+In plain words	Простыми словами
+A saved summary shows what was found then. A new one reads the current data.	Сохранённая сводка показывает, что было найдено тогда. Новая прочитает текущие данные.
+There is nothing to summarize for it now.	Сейчас для неё нечего сводить.
+New summary	Новая сводка
+Stopped	Остановлено
+Waiting for the model…	Жду модель…
+Reading the findings…	Читаю находки…
+First words in %s s, done in %s s	Первые слова через %s с, готово через %s с
+Done in %s s	Готово через %s с
+Critical	Критично
+Attention	Внимание
+Fine	В порядке
+Delete all summaries and chats	Удалить все сводки и чаты
+Hold a summary or chat in the list and choose Move to folder.	Удержите сводку или чат в списке и выберите «Переместить в папку».
+No summaries yet	Сводок пока нет
+Tap ✨ on a Wi‑Fi network, the LAN list, a device or recorded traffic: the findings show at once, and the model on this phone puts them into plain words.	Нажмите ✨ на Wi‑Fi-сети, списке LAN, устройстве или записанном трафике: находки появятся сразу, а модель на телефоне объяснит их простыми словами.
+Summaries	Сводки
+Hold a row to move it to a folder or delete it.	Удержите строку, чтобы переместить её в папку или удалить.
+Chats are read-only now. Tap ✨ on a network, device or traffic screen for a summary.	Чаты теперь только для чтения. Для сводки нажмите ✨ на экране сети, устройства или трафика.
+Saved session of %s	Сохранённая сессия от %s
+Recording in progress	Идёт запись
+Current recording	Текущая запись
+Scan ports of %s	Просканировать порты %s

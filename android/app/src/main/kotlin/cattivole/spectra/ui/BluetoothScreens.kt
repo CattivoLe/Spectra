@@ -426,16 +426,9 @@ fun BleDetail(model: SpectraModel, nav: Navigator, address: String, entryId: Str
         subtitle = if (snapshot) entry?.let { tr("Saved %s", dateTime(it.savedAt)) } else device.address,
         onBack = nav::back,
         actions = {
-            // Before a GATT read the assistant explains what the device advertises; after one, its services too
-            // (the read outlives the link this screen drops).
+            // The card reads what the device advertises, and its GATT services once they were read here.
             if (!snapshot) {
-                AskAssistantButton(model, nav, question = {
-                    if (model.gatt.lastRead?.address == device.address) {
-                        tr("Analyze the GATT services of “%s”: what is this device, and what does it tell about itself?", device.shownName())
-                    } else {
-                        tr("What is the Bluetooth device “%s” (%s): what kind of device is it, and what does it advertise about itself?", device.shownName(), device.address)
-                    }
-                })
+                AskAssistantButton(model, nav, subject = { cattivole.spectra.assistant.CardSubject.Bluetooth(device.address) })
             }
             if (!snapshot) {
                 val watched = model.isWatched(device.address)

@@ -53,12 +53,28 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
     private val modelsDirectory = File(base, "models").apply { mkdirs() }
 
     // The computed system prompt is kept in the cache folder: a new chat loads it instead of reading it for ~30 s.
-    val controller = EngineController(LlamaEngine(app.applicationInfo.nativeLibraryDir, File(app.cacheDir, "prompt-cache")))
+    val controller = EngineController(LlamaEngine(app.applicationInfo.nativeLibraryDir, File(app.cacheDir, "prompt-cache"), promptCacheFiles = PROMPT_CACHE_FILES))
     val store: ChatStore
     val library: ModelLibrary
     val web = WebAccess(PreferencesSettings(prefs), KeystoreSecretStore(File(base, "secrets")))
     val memory get() = sources.memory
     val actions = AssistantActions(sources, sources.memory)
+    /** The ✨ summary cards: findings at once, the model's plain words under them, buttons instead of a text field. */
+    val cards by lazy { AssistantCardRunner(this, store, controller, sources, actions, scope) }
+
+    /** The folder every summary card is saved in: the Assistant tab lists it as the journal. Made on first use. */
+    suspend fun summariesFolder(): UUID {
+        prefs.getString(SUMMARIES_FOLDER, null)?.let { saved ->
+            val id = runCatching { UUID.fromString(saved) }.getOrNull()
+            if (id != null && store.folders().any { it.id == id }) return id
+        }
+        val folder = store.createFolder(tr("Summaries"))
+        prefs.edit().putString(SUMMARIES_FOLDER, folder.id.toString()).apply()
+        return folder.id
+    }
+
+    /** The saved folder id, without making one: how the tab tells summaries from old chats. */
+    val summariesFolderId: UUID? get() = prefs.getString(SUMMARIES_FOLDER, null)?.let { runCatching { UUID.fromString(it) }.getOrNull() }
 
     /** A query waiting for the user's OK before it goes to the internet. */
     var pendingSearch by mutableStateOf<PendingSearch?>(null)
@@ -176,6 +192,7 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
     }
 
     suspend fun deleteChat(id: UUID) {
+        cards.forget(id)
         sessions.remove(id)?.stop()
         store.deleteChat(id)
     }
@@ -252,6 +269,7 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
     suspend fun eraseChats() {
         sessions.values.forEach { it.stop() }
         sessions.clear()
+        cards.forgetAll()
         store.deleteEverything()
     }
 
@@ -272,6 +290,10 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
         /** Soft prompt limit; the context itself stays 8192 so one long tool result still fits. */
         const val HISTORY_TOKENS = 4096
 
+        /** System prompts kept computed on disk: the chat's and one per card action and subject in recent use. */
+        const val PROMPT_CACHE_FILES = 6
+
+        private const val SUMMARIES_FOLDER = "summariesFolder"
         private const val SELECTED_MODEL = "selectedModel"
         private const val WIFI_ONLY = "wifiOnly"
 

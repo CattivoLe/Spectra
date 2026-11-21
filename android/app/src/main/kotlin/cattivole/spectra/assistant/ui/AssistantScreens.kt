@@ -85,8 +85,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
+import cattivole.spectra.assistant.AssistantCards
 import cattivole.spectra.assistant.AssistantModel
-import cattivole.spectra.assistant.AssistantStarters
+import cattivole.spectra.assistant.CardRisk
+import cattivole.spectra.assistant.CardSubjects
 import cattivole.spectra.assistant.AssistantText
 import cattivole.spectra.assistant.AssistantTopic
 import cattivole.spectra.ui.Pill
@@ -113,12 +115,17 @@ import java.util.UUID
 interface AssistantNav {
     fun back()
     fun chat(id: UUID)
+    /** A summary card, live or saved. */
+    fun card(id: UUID)
     fun models()
     fun internet()
     fun dossier()
 }
 
-/** The Assistant tab: chats sorted into folders, and the way to models, internet search and the dossier. */
+/**
+ * The Assistant tab: the journal of summary cards (✨ on a screen makes one), the old chats below them, read-only,
+ * and the way to models, internet search and the dossier.
+ */
 @Composable
 fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     if (!AssistantModel.isSupported) {
@@ -133,9 +140,15 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     var chats by remember { mutableStateOf<List<Chat>>(emptyList()) }
     var folders by remember { mutableStateOf<List<ChatFolder>>(emptyList()) }
     val changes = assistant.store.changes.collectAsStateValue()
+    /** Each saved card's worst finding, for the color of its row. */
+    var risks by remember { mutableStateOf<Map<UUID, CardRisk>>(emptyMap()) }
     LaunchedEffect(changes) {
         chats = runCatching { assistant.store.chats() }.getOrDefault(emptyList())
         folders = runCatching { assistant.store.folders() }.getOrDefault(emptyList())
+        risks = chats.filter { CardSubjects.isCard(it.systemPrompt) }.associate { chat ->
+            val head = runCatching { assistant.store.messages(chat.id) }.getOrDefault(emptyList()).firstOrNull { it.role == ChatMessage.Role.User }
+            chat.id to (head?.content?.let(AssistantCards::parse)?.second?.let(AssistantCards::worst) ?: CardRisk.OK)
+        }
     }
     // The folder shown; null is every chat. Kept as text so it survives the tab being recreated.
     var shownFolder by rememberSaveable { mutableStateOf<String?>(null) }
@@ -194,12 +207,6 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
             },
         )
     }
-    val newChat: () -> Unit = {
-        scope.launch {
-            val chat = assistant.store.createChat(folderID = folder?.id)
-            nav.chat(chat.id)
-        }
-    }
     val noModel = assistant.assistantModelFile == null
     val shown = if (folder == null) chats else chats.filter { it.folderID == folder.id }
     val folderNames = folders.associate { it.id to it.name }
@@ -208,7 +215,6 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
         subtitle = if (folder == null) assistant.currentModelName else tr("Folder"),
         onBack = if (folder != null) ({ shownFolder = null }) else null,
         actions = {
-            if (!noModel) IconButton(onClick = newChat) { Icon(Icons.Rounded.Add, contentDescription = tr("New chat")) }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("More")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -247,7 +253,7 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                     if (chats.isNotEmpty()) {
                         HorizontalDivider()
                         DropdownMenuItem(
-                            text = { Text(tr("Delete all chats"), color = MaterialTheme.colorScheme.error) },
+                            text = { Text(tr("Delete all summaries and chats"), color = MaterialTheme.colorScheme.error) },
                             leadingIcon = { Icon(Icons.Rounded.DeleteSweep, null, tint = MaterialTheme.colorScheme.error) },
                             onClick = {
                                 menu = false
@@ -270,16 +276,12 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                 folder != null && shown.isEmpty() -> EmptyState(
                     Icons.Rounded.Folder,
                     tr("The folder is empty"),
-                    tr("Hold a chat in the list and choose Move to folder, or start a new chat here."),
-                    action = tr("New chat"),
-                    onAction = newChat,
+                    tr("Hold a summary or chat in the list and choose Move to folder."),
                 )
-                chats.isEmpty() && folders.isEmpty() -> EmptyState(
+                chats.isEmpty() -> EmptyState(
                     Icons.Rounded.AutoAwesome,
-                    tr("Ask about what Spectra found"),
-                    tr("The assistant reads the app's own scans and can run fresh ones: Wi‑Fi, LAN, Bluetooth, the connection. It runs on this phone."),
-                    action = tr("New chat"),
-                    onAction = newChat,
+                    tr("No summaries yet"),
+                    tr("Tap ✨ on a Wi‑Fi network, the LAN list, a device or recorded traffic: the findings show at once, and the model on this phone puts them into plain words."),
                 )
             }
         },
@@ -291,17 +293,29 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                 FolderStrip(folders, chats, onOpen = { shownFolder = it.id.toString() }, onNew = { naming = null to null })
             }
         }
+        val summaries = shown.filter { CardSubjects.isCard(it.systemPrompt) }
+        val older = shown.filterNot { CardSubjects.isCard(it.systemPrompt) }
+        cardSection(summaries, header = tr("Summaries"), key = { it.id.toString() }, sectionKey = "summaries") { chat ->
+            ChatRow(
+                chat = chat,
+                folderName = null,
+                risk = risks[chat.id] ?: CardRisk.OK,
+                onOpen = { nav.card(chat.id) },
+                onMove = { moving = chat },
+                onDelete = { scope.launch { assistant.deleteChat(chat.id) } },
+            )
+        }
+        cardSection(older, header = tr("Earlier chats"), key = { it.id.toString() }, sectionKey = "chats") { chat ->
+            ChatRow(
+                chat = chat,
+                folderName = if (folder == null) chat.folderID?.let(folderNames::get) else null,
+                onOpen = { nav.chat(chat.id) },
+                onMove = { moving = chat },
+                onDelete = { scope.launch { assistant.deleteChat(chat.id) } },
+            )
+        }
         if (shown.isNotEmpty()) {
-            cardSection(shown, key = { it.id.toString() }, sectionKey = "chats") { chat ->
-                ChatRow(
-                    chat = chat,
-                    folderName = if (folder == null) chat.folderID?.let(folderNames::get) else null,
-                    onOpen = { nav.chat(chat.id) },
-                    onMove = { moving = chat },
-                    onDelete = { scope.launch { assistant.deleteChat(chat.id) } },
-                )
-            }
-            item(key = "hint") { cattivole.spectra.ui.SectionFooter(tr("Hold a chat to move it to a folder or delete it.")) }
+            item(key = "hint") { cattivole.spectra.ui.SectionFooter(tr("Hold a row to move it to a folder or delete it.")) }
         }
     }
 }
@@ -343,9 +357,9 @@ private fun FolderStrip(folders: List<ChatFolder>, chats: List<Chat>, onOpen: (C
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun ChatRow(chat: Chat, folderName: String?, onOpen: () -> Unit, onMove: () -> Unit, onDelete: () -> Unit) {
+private fun ChatRow(chat: Chat, folderName: String?, onOpen: () -> Unit, onMove: () -> Unit, onDelete: () -> Unit, risk: CardRisk? = null) {
     var menu by remember { mutableStateOf(false) }
-    val topics = remember(chat.title) { AssistantText.topics(chat.title) }
+    val topics = remember(chat.title) { if (risk != null) emptyList() else AssistantText.topics(chat.title) }
     Box {
         Column(
             Modifier
@@ -362,6 +376,7 @@ private fun ChatRow(chat: Chat, folderName: String?, onOpen: () -> Unit, onMove:
                 overflow = TextOverflow.Ellipsis,
             )
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (risk != null) Pill(risk.label(), risk.color())
                 for (topic in topics) Pill(topic.label, topic.color())
                 val meta = listOfNotNull(ago(chat.updatedAt), folderName).joinToString(" · ")
                 Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -467,8 +482,6 @@ fun AssistantChatScreen(model: SpectraModel, nav: AssistantNav, chatId: UUID) {
 private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session: ChatSession, nav: AssistantNav) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var draft by remember { mutableStateOf("") }
-    var editing by remember { mutableStateOf<StoredMessage?>(null) }
     val listState = rememberLazyListState()
     val engine = assistant.controller.state
     LaunchedEffect(assistant.selectedModel, assistant.library.installed) { session.modelName = assistant.currentModelName }
@@ -523,7 +536,10 @@ private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session:
                         // Also the moment between taking it and its message landing, so the starters never flash.
                         QueuedQuestion(queued, ready, assistant.loadError)
                     } else if (session.messages.isEmpty()) {
-                        Starters(model, assistant, ready) { session.send(it) }
+                        // No text field any more: an empty old chat only points to where summaries start.
+                        Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.Bottom) {
+                            Text(tr("Chats are read-only now. Tap ✨ on a network, device or traffic screen for a summary."), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     } else {
                         LazyColumn(
                             state = listState,
@@ -570,10 +586,6 @@ private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session:
                                     isGenerating = session.isGenerating,
                                     awaiting = session.awaitingText && index == session.messages.lastIndex,
                                     onCopy = { copy(context, message.content) },
-                                    onEdit = {
-                                        editing = message
-                                        draft = message.content
-                                    },
                                     onRegenerate = session::regenerate,
                                     onContinue = session::resume,
                                     offers = if (ready) session.offers[message.id].orEmpty() else emptyList(),
@@ -583,62 +595,9 @@ private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session:
                         }
                     }
                 }
-                Composer(
-                    draft = draft,
-                    onDraft = { draft = it },
-                    editing = editing != null,
-                    isGenerating = session.isGenerating,
-                    canSend = draft.isNotBlank() && ready,
-                    onCancelEdit = {
-                        editing = null
-                        draft = ""
-                    },
-                    onStop = session::stop,
-                    onSend = {
-                        val target = editing
-                        if (target != null) session.edit(target.id, draft) else session.send(draft)
-                        editing = null
-                        draft = ""
-                    },
-                )
             }
         },
     )
-}
-
-/** The opening questions of an empty chat, picked from what the app can work with right now. */
-@Composable
-private fun Starters(model: SpectraModel, assistant: AssistantModel, ready: Boolean, onAsk: (String) -> Unit) {
-    val questions = remember(model.generation) { AssistantStarters.questions(assistant.sources.readiness()) }
-    Column(
-        Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
-    ) {
-        if (assistant.assistantModelFile == null) {
-            Text(tr("Download the assistant's model under Model to start."), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            return@Column
-        }
-        // A failed load leaves the engine Empty: say so here instead of an endless "Loading…".
-        val failed = assistant.loadError?.takeIf { assistant.controller.state == EngineController.State.Empty }
-        if (failed != null) {
-            Text(tr("Could not load the model: %s", failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        } else if (!ready) {
-            BusyLine(tr("Loading the model…"))
-        }
-        Text(tr("Try asking"), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        for (question in questions) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.fillMaxWidth().clickable(enabled = ready) { onAsk(question) },
-            ) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Icon(Icons.Rounded.AutoAwesome, null, tint = Spectra.colors.revealed, modifier = Modifier.size(18.dp))
-                    Text(question, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-        }
-    }
 }
 
 /** A question handed over by another screen, waiting for the model: shown in place of the starters. */
@@ -701,7 +660,6 @@ private fun MessageRow(
     isGenerating: Boolean,
     awaiting: Boolean = false,
     onCopy: () -> Unit,
-    onEdit: () -> Unit,
     onRegenerate: () -> Unit,
     onContinue: () -> Unit,
     offers: List<alexcattivo.localchat.kit.tools.ToolOffer> = emptyList(),
@@ -712,7 +670,7 @@ private fun MessageRow(
             Surface(
                 shape = RoundedCornerShape(18.dp),
                 color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.widthIn(max = 320.dp).clickable(enabled = !isGenerating, onClick = onEdit),
+                modifier = Modifier.widthIn(max = 320.dp),
             ) {
                 Text(message.content, Modifier.padding(horizontal = 14.dp, vertical = 10.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
             }
@@ -769,45 +727,6 @@ private fun MessageRow(
                             Text(tr("Continue"), Modifier.padding(start = 4.dp))
                         }
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun Composer(
-    draft: String,
-    onDraft: (String) -> Unit,
-    editing: Boolean,
-    isGenerating: Boolean,
-    canSend: Boolean,
-    onCancelEdit: () -> Unit,
-    onStop: () -> Unit,
-    onSend: () -> Unit,
-) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-            if (editing) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Edit, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                    Text(tr("Editing the question"), Modifier.weight(1f).padding(start = 6.dp), style = MaterialTheme.typography.labelMedium)
-                    IconButton(onClick = onCancelEdit) { Icon(Icons.Rounded.Close, tr("Cancel")) }
-                }
-            }
-            Row(verticalAlignment = Alignment.Bottom) {
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = onDraft,
-                    placeholder = { Text(tr("Ask about your network…")) },
-                    modifier = Modifier.weight(1f),
-                    maxLines = 6,
-                    shape = RoundedCornerShape(20.dp),
-                )
-                if (isGenerating) {
-                    IconButton(onClick = onStop) { Icon(Icons.Rounded.StopCircle, tr("Stop"), tint = MaterialTheme.colorScheme.primary) }
-                } else {
-                    IconButton(onClick = onSend, enabled = canSend) { Icon(Icons.AutoMirrored.Filled.Send, tr("Send")) }
                 }
             }
         }
