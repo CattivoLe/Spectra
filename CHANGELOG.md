@@ -5,7 +5,7 @@ Each `## X.Y.Z` section is the text of the GitHub release for tag `vX.Y.Z`
 `versionName`; the sensor firmware keeps its own version, which the release
 notes name.
 
-## 1.0.0 (unreleased)
+## 1.0.0 (2026-11-22)
 
 First public release.
 
