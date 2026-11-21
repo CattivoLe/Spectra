@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**/*.md", "docs/**"]
+  pull_request:
+    paths-ignore: ["**/*.md", "docs/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Firmware host tests and the three boards, then the Android unit tests and
+    # an arm64 debug APK (uploaded as the run's artifact).
+    uses: ./.github/workflows/build.yml
+    with:
+      variant: debug

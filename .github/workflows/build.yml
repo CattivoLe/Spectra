@@ -1,0 +1,213 @@
+name: Build
+
+# Shared by ci.yml and release.yml: sensor firmware for every board first, then
+# the Android app, which carries those images as flashing bundles.
+on:
+  workflow_call:
+    inputs:
+      variant:
+        description: "debug (CI) or release"
+        type: string
+        default: debug
+    secrets:
+      SPECTRA_KEYSTORE_BASE64:
+        required: false
+      SPECTRA_KEYSTORE_PASSWORD:
+        required: false
+      SPECTRA_KEY_ALIAS:
+        required: false
+      SPECTRA_KEY_PASSWORD:
+        required: false
+    outputs:
+      signed:
+        description: "true when the release APK was signed with the release key"
+        value: ${{ jobs.android.outputs.signed }}
+
+permissions:
+  contents: read
+
+env:
+  PLATFORMIO_VERSION: "6.1.19"
+
+jobs:
+  firmware-tests:
+    name: Firmware host tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO
+        run: pip install "platformio==$PLATFORMIO_VERSION"
+
+      - name: pio test -e native
+        working-directory: firmware
+        run: pio test -e native
+
+  firmware:
+    name: Firmware (${{ matrix.env }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [m5stack-cardputer-adv, esp32-c5-n4, esp32-wroom32-ch340]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # The pioarduino platform and its toolchains are several hundred MB per chip.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.platformio
+            firmware/.pio/libdeps/${{ matrix.env }}
+          key: pio-${{ matrix.env }}-${{ env.PLATFORMIO_VERSION }}-${{ hashFiles('firmware/platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install "platformio==$PLATFORMIO_VERSION"
+
+      - name: pio run
+        working-directory: firmware
+        run: pio run -e "${{ matrix.env }}"
+
+      # The app's packFlashBundle task looks for the OTA data image next to the
+      # build; the Android job has no ~/.platformio to take it from.
+      - name: Add boot_app0.bin
+        run: |
+          src=~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin
+          test -f "$src" || { echo "::error::boot_app0.bin not found at $src"; exit 1; }
+          cp "$src" "firmware/.pio/build/${{ matrix.env }}/"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.env }}
+          path: |
+            firmware/.pio/build/${{ matrix.env }}/bootloader.bin
+            firmware/.pio/build/${{ matrix.env }}/partitions.bin
+            firmware/.pio/build/${{ matrix.env }}/boot_app0.bin
+            firmware/.pio/build/${{ matrix.env }}/firmware.bin
+          if-no-files-found: error
+          retention-days: 14
+
+  android:
+    name: Android (${{ inputs.variant }})
+    needs: firmware
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      signed: ${{ steps.key.outputs.signed }}
+    env:
+      VARIANT: ${{ inputs.variant }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Install the NDK and CMake the engine asks for
+        working-directory: android
+        run: |
+          ndk=$(sed -n 's/.*ndkVersion = "\(.*\)".*/\1/p' engine/build.gradle.kts)
+          cmake=$(sed -n 's/^ *version = "\(.*\)".*/\1/p' engine/build.gradle.kts)
+          echo "NDK $ndk, CMake $cmake"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk" "cmake;$cmake" > /dev/null
+
+      - name: Cache llama.cpp sources
+        id: llama
+        uses: actions/cache@v6
+        with:
+          path: android/engine/src/main/cpp/llama.cpp
+          key: llama-${{ hashFiles('android/scripts/fetch-llama.sh') }}
+
+      - name: Fetch llama.cpp sources
+        if: steps.llama.outputs.cache-hit != 'true'
+        run: android/scripts/fetch-llama.sh
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: firmware-*
+          path: firmware-artifacts
+
+      # Where pio would have put them: firmware/.pio/build/<env>/.
+      - name: Put the firmware where packFlashBundle looks
+        run: |
+          mkdir -p firmware/.pio/build
+          for dir in firmware-artifacts/firmware-*; do
+            mv "$dir" "firmware/.pio/build/$(basename "$dir" | sed 's/^firmware-//')"
+          done
+          ls -R firmware/.pio/build
+
+      - name: Restore the signing key
+        id: key
+        if: inputs.variant == 'release'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SPECTRA_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::Secret SPECTRA_KEYSTORE_BASE64 is not set: the APK stays unsigned and no GitHub release is published. See docs/releasing.md"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          echo "SPECTRA_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Test and build
+        working-directory: android
+        env:
+          SPECTRA_KEYSTORE_PASSWORD: ${{ secrets.SPECTRA_KEYSTORE_PASSWORD }}
+          SPECTRA_KEY_ALIAS: ${{ secrets.SPECTRA_KEY_ALIAS }}
+          SPECTRA_KEY_PASSWORD: ${{ secrets.SPECTRA_KEY_PASSWORD }}
+        # Phones only: x86_64 would double the APK and the native build time.
+        run: ./gradlew --no-daemon -Pabi=arm64-v8a testDebugUnitTest ":app:assemble${VARIANT^}"
+
+      - name: Check and collect the APK
+        env:
+          SIGNED: ${{ steps.key.outputs.signed }}
+        run: |
+          rm -f "$RUNNER_TEMP/release.jks"
+          mkdir dist
+          apk=$(ls android/app/build/outputs/apk/"$VARIANT"/*.apk)
+          echo "APK: $apk ($(du -h "$apk" | cut -f1))"
+          for zip in spectra-flash-esp32s3.zip spectra-flash-esp32c5.zip spectra-flash-esp32.zip; do
+            if ! unzip -l "$apk" "assets/$zip" > /dev/null; then
+              echo "::error::$zip is missing from the APK"
+              exit 1
+            fi
+            cp "android/app/build/generated/flashAssets/$zip" dist/
+          done
+          if unzip -l "$apk" | grep -q 'lib/x86'; then
+            echo "::error::The APK carries x86 libraries; expected arm64-v8a only"
+            exit 1
+          fi
+          cp "$apk" dist/
+          if [ "$SIGNED" = true ]; then
+            apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
+            "$apksigner" verify --print-certs "$apk" | tee dist/signing.txt
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-${{ inputs.variant }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: test-reports
+          path: android/*/build/reports/tests/
+          if-no-files-found: ignore

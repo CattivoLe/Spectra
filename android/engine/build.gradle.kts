@@ -18,7 +18,8 @@ android {
         }
         ndk {
             // Модели в разумное время считаются только на 64-битном ARM; x86_64 — для эмулятора на Intel.
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            // `-Pabi=arm64-v8a` (как у app) собирает llama.cpp под одну архитектуру: вдвое быстрее, так собирает CI.
+            abiFilters += providers.gradleProperty("abi").orNull?.let { listOf(it) } ?: listOf("arm64-v8a", "x86_64")
         }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -1,0 +1,154 @@
+name: Release
+
+# Push a tag like v1.2.3 to build the signed APK and the sensor firmware and
+# publish them as a GitHub release. Run it by hand for a dry run: everything is
+# built and kept as the run's artifacts, nothing is published. See docs/releasing.md.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.read.outputs.app }}
+      firmware: ${{ steps.read.outputs.firmware }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the versions and check the tag
+        id: read
+        run: |
+          app=$(sed -n 's/^ *versionName = "\(.*\)".*/\1/p' android/app/build.gradle.kts)
+          firmware=$(sed -n 's/.*"SPECTRA-FW:\([0-9.]*\)".*/\1/p' firmware/src/main.cpp)
+          if [ -z "$app" ] || [ -z "$firmware" ]; then
+            echo "::error::Could not read versionName ('$app') or the firmware tag ('$firmware')"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$app" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match versionName $app in android/app/build.gradle.kts"
+            exit 1
+          fi
+          echo "App $app, sensor firmware $firmware"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "firmware=$firmware" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    uses: ./.github/workflows/build.yml
+    with:
+      variant: release
+    secrets: inherit
+
+  unsigned:
+    name: Not published
+    needs: build
+    if: github.ref_type == 'tag' && needs.build.outputs.signed != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "::warning::The release key is not set up, so ${GITHUB_REF_NAME} was built but not published. The unsigned APK and the firmware are this run's artifacts. See docs/releasing.md"
+
+  publish:
+    name: Publish
+    needs: [version, build]
+    if: github.ref_type == 'tag' && needs.build.outputs.signed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      APP: ${{ needs.version.outputs.app }}
+      FW: ${{ needs.version.outputs.firmware }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: android-release
+          path: android-release
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: firmware-*
+          path: firmware-artifacts
+
+      - name: Name the release files
+        run: |
+          mkdir dist
+          cp android-release/app-release.apk "dist/Spectra-$APP.apk"
+          # Board env → chip, as in packFlashBundle (android/app/build.gradle.kts).
+          for pair in m5stack-cardputer-adv:esp32s3 esp32-c5-n4:esp32c5 esp32-wroom32-ch340:esp32; do
+            env=${pair%%:*}
+            chip=${pair##*:}
+            cp "android-release/spectra-flash-$chip.zip" "dist/spectra-flash-$chip-$FW.zip"
+            cp "firmware-artifacts/firmware-$env/firmware.bin" "dist/spectra-firmware-$chip-$FW.bin"
+          done
+          cp THIRD_PARTY_LICENSES.md dist/
+          (cd dist && sha256sum -- * > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.apk
+            dist/*.zip
+            dist/*.bin
+
+      - name: Write the release notes
+        run: |
+          # The CHANGELOG.md section for this version; without one, the commits since the previous tag.
+          notes=$(awk -v v="$APP" '
+            $0 ~ "^## \\[?" v "\\]?( |$)" { on=1; next }
+            on && /^## / { exit }
+            on { print }' CHANGELOG.md)
+          previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$GITHUB_REF_NAME^" 2>/dev/null || true)
+          {
+            if [ -n "$notes" ]; then
+              printf '%s\n' "$notes"
+            elif [ -n "$previous" ]; then
+              echo "Changes since $previous:"
+              echo
+              git log --no-merges --format='- %s' "$previous..$GITHUB_REF_NAME"
+            else
+              echo "First release."
+            fi
+            echo
+            echo "---"
+            echo
+            echo "**Sensor firmware $FW.** \`spectra-flash-<chip>-$FW.zip\` flashes a blank board over USB"
+            echo "(bootloader, partition table and app; esp32s3 is the M5Stack Cardputer ADV)."
+            echo "\`spectra-firmware-<chip>-$FW.bin\` is the app image alone, for an update from the app."
+            echo "The APK carries the same images."
+            echo
+            echo "**Signing certificate SHA-256:** \`$(grep -m1 'SHA-256 digest' android-release/signing.txt | sed 's/.*: //')\`"
+            echo
+            echo "**SHA-256**"
+            echo
+            echo '```'
+            cat dist/SHA256SUMS.txt
+            echo '```'
+            echo
+            echo "Check where a file was built: \`gh attestation verify <file> --repo $GITHUB_REPOSITORY\`"
+            if [ -n "$previous" ]; then
+              echo
+              echo "**Full diff:** $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$previous...$GITHUB_REF_NAME"
+            fi
+          } > notes.md
+          cat notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "Spectra $APP" --notes-file notes.md
