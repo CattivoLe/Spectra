@@ -32,7 +32,7 @@ struct TrafficProxyMITMTests {
     func theFirstDecryptedConnectionDoesNotStallTheLoop() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mitm-ca-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
-        let ca = try LocalCertificateAuthority.open(dir)
+        let ca = try LocalCertificateAuthority.open(dir, guard: PlainKeyGuard())
         let written = OSAllocatedUnfairLock<[[UInt8]]>(initialState: [])
         let proxy = TrafficProxy(writer: { packet, _ in written.withLock { $0.append([UInt8](packet)) } },
                                  decryptTLS: { true }, certificate: { ca }, onFlows: { _ in })

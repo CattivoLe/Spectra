@@ -2,16 +2,96 @@ import Foundation
 import CryptoKit
 import Security
 
+/// Seals the authority's private keys before they are written to disk.
+protocol CAKeyGuard {
+    func seal(_ plain: Data) throws -> Data
+    func open(_ sealed: Data) throws -> Data
+}
+
+enum CAKeyGuardError: Error {
+    /// The sealing key exists but cannot be read right now (for example before
+    /// the first unlock after a reboot). The keys on disk are still good.
+    case unavailable(OSStatus)
+}
+
+/// Writes keys as they are. Only for tests, which run without keychain
+/// entitlements.
+struct PlainKeyGuard: CAKeyGuard {
+    func seal(_ plain: Data) throws -> Data { plain }
+    func open(_ sealed: Data) throws -> Data { sealed }
+}
+
+/// Seals with an AES-GCM key kept in the keychain as
+/// `AfterFirstUnlockThisDeviceOnly`: readable by the app and its tunnel
+/// extension (through their shared App Group) once the phone has been unlocked,
+/// never synced, and never restored onto another device. Sealed files copied
+/// off this phone cannot be opened anywhere else.
+struct KeychainKeyGuard: CAKeyGuard {
+    let accessGroup: String
+    var service = "cattivole.spectra.traffic-ca"
+    private static let account = "seal"
+    private static let lock = NSLock()
+
+    func seal(_ plain: Data) throws -> Data {
+        guard let combined = try AES.GCM.seal(plain, using: key()).combined else { throw LocalCertificateAuthority.CAError.export }
+        return combined
+    }
+
+    func open(_ sealed: Data) throws -> Data {
+        try AES.GCM.open(AES.GCM.SealedBox(combined: sealed), using: key())
+    }
+
+    private var query: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: Self.account,
+            kSecAttrAccessGroup as String: accessGroup,
+            kSecAttrSynchronizable as String: false,
+        ]
+    }
+
+    private func key() throws -> SymmetricKey {
+        Self.lock.lock(); defer { Self.lock.unlock() }
+        if let existing = try read() { return existing }
+        let fresh = SymmetricKey(size: .bits256)
+        var add = query
+        add[kSecValueData as String] = fresh.withUnsafeBytes { Data($0) }
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let status = SecItemAdd(add as CFDictionary, nil)
+        if status == errSecDuplicateItem, let raced = try read() { return raced } // the other process won
+        guard status == errSecSuccess else { throw CAKeyGuardError.unavailable(status) }
+        return fresh
+    }
+
+    private func read() throws -> SymmetricKey? {
+        var find = query
+        find[kSecReturnData as String] = true
+        find[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(find as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data, data.count == 32 else {
+            throw CAKeyGuardError.unavailable(status)
+        }
+        return SymmetricKey(data: data)
+    }
+}
+
 /// The certificate this app signs for itself, and a per-host leaf signed by the
 /// same key. When the phone trusts the CA, a TLS connection opened with one of
 /// these leaves can be read. Mirrors the Android `core/LocalCa.kt`.
 ///
-/// Spike note (Phase 1): this is the Swift port of the Android DER/X.509 minter,
-/// with the Java `KeyPairGenerator`/`Signature` swapped for Security.framework
+/// The private keys stay on this phone: sealed by a `CAKeyGuard`, in a
+/// directory excluded from iCloud and computer backups. Keys that can no longer
+/// be opened (the sealing key is gone, the files came from elsewhere) are
+/// replaced by a new authority, which the phone then has to trust again.
+///
+/// This is the Swift port of the Android DER/X.509 minter, with the Java
+/// `KeyPairGenerator`/`Signature` swapped for Security.framework
 /// (`SecKeyCreateRandomKey`, `SecKeyCreateSignature`). It is proven by
 /// `LocalCertificateAuthorityTests` via `SecTrust`, which checks the whole
-/// chain the way a TLS client would. `secIdentity(for:)` is what the TLS bridge
-/// will present as the server identity.
+/// chain the way a TLS client would.
 final class LocalCertificateAuthority {
     static let authority = "Spectra"
 
@@ -89,66 +169,35 @@ final class LocalCertificateAuthority {
         return [UInt8](data)
     }
 
-    /// A `SecIdentity` (leaf key + cert) for `host`, for a SecureTransport server
-    /// endpoint to present. iOS has no in-memory identity API, so the key and
-    /// cert are placed in the keychain and the matching identity is read back.
-    /// Spike probe: this is the one remaining concrete iOS unknown for the
-    /// dependency-free (SecureTransport) TLS-bridge path.
-    func secIdentity(for host: String) throws -> SecIdentity {
-        guard let cert = leafCertificate(for: host) else { throw CAError.spki }
-        let tag = Data("cattivole.spectra.sniffer.leaf.\(host)".utf8)
-
-        // Place the private key (idempotent; a duplicate is fine).
-        let keyAdd: [String: Any] = [
-            kSecClass as String: kSecClassKey,
-            kSecValueRef as String: leafPrivate,
-            kSecAttrApplicationTag as String: tag,
-        ]
-        let keyStatus = SecItemAdd(keyAdd as CFDictionary, nil)
-        guard keyStatus == errSecSuccess || keyStatus == errSecDuplicateItem else { throw CAError.keychain(keyStatus) }
-
-        // Place the certificate.
-        let certAdd: [String: Any] = [
-            kSecClass as String: kSecClassCertificate,
-            kSecValueRef as String: cert,
-            kSecAttrLabel as String: "SpectraLeaf \(host)",
-        ]
-        let certStatus = SecItemAdd(certAdd as CFDictionary, nil)
-        guard certStatus == errSecSuccess || certStatus == errSecDuplicateItem else { throw CAError.keychain(certStatus) }
-
-        // Read back every identity and match ours by certificate bytes.
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassIdentity,
-            kSecReturnRef as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-        ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let identities = result as? [SecIdentity] else {
-            throw CAError.keychain(status)
-        }
-        let wantedDER = leafDER(for: host)
-        for identity in identities {
-            var identCert: SecCertificate?
-            guard SecIdentityCopyCertificate(identity, &identCert) == errSecSuccess,
-                  let identCert else { continue }
-            if [UInt8](SecCertificateCopyData(identCert) as Data) == wantedDER {
-                return identity
-            }
-        }
-        throw CAError.keychain(errSecItemNotFound)
-    }
-
     // MARK: Persistence
 
-    private func persist(to dir: URL) throws {
+    private static let certFile = "ca.crt"
+    private static let caSealed = "ca.sealed"
+    private static let leafSealed = "leaf.sealed"
+    /// PKCS#1 keys in the clear, as earlier versions wrote them.
+    private static let legacyKeys = ["ca.key", "leaf.key"]
+
+    private func persist(to dir: URL, guard keyGuard: CAKeyGuard) throws {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try Data(SecKeyCopyExternalRepresentation(caPrivate, nil)! as Data)
-            .write(to: dir.appendingPathComponent("ca.key"))
-        try Data(certificateDER).write(to: dir.appendingPathComponent("ca.crt"))
-        try Data(SecKeyCopyExternalRepresentation(leafPrivate, nil)! as Data)
-            .write(to: dir.appendingPathComponent("leaf.key"))
+        guard let ca = SecKeyCopyExternalRepresentation(caPrivate, nil) as Data?,
+              let leaf = SecKeyCopyExternalRepresentation(leafPrivate, nil) as Data? else { throw CAError.export }
+        try keyGuard.seal(ca).write(to: dir.appendingPathComponent(Self.caSealed), options: .atomic)
+        try keyGuard.seal(leaf).write(to: dir.appendingPathComponent(Self.leafSealed), options: .atomic)
+        // The certificate last: its presence marks the directory as complete.
+        try Data(certificateDER).write(to: dir.appendingPathComponent(Self.certFile), options: .atomic)
+        for name in Self.legacyKeys { try? FileManager.default.removeItem(at: dir.appendingPathComponent(name)) }
     }
+
+    /// Keeps `dir` out of iCloud and computer backups.
+    static func excludeFromBackup(_ dir: URL) {
+        var url = dir
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? url.setResourceValues(values)
+    }
+
+    /// The guard the app and its tunnel extension share.
+    static func deviceGuard(appGroup: String) -> CAKeyGuard { KeychainKeyGuard(accessGroup: appGroup) }
 
     // MARK: Construction
 
@@ -156,14 +205,32 @@ final class LocalCertificateAuthority {
     private static var openByDir: [String: LocalCertificateAuthority] = [:]
 
     /// Loads the authority kept in `dir`, creating it the first time.
-    static func open(_ dir: URL) throws -> LocalCertificateAuthority {
+    static func open(_ dir: URL, guard keyGuard: CAKeyGuard) throws -> LocalCertificateAuthority {
         openLock.lock(); defer { openLock.unlock() }
         let key = dir.standardizedFileURL.path
         if let existing = openByDir[key] { return existing }
-        let loaded = FileManager.default.fileExists(atPath: dir.appendingPathComponent("ca.crt").path)
-            ? try read(dir) : try create(dir)
-        openByDir[key] = loaded
-        return loaded
+        var loaded: LocalCertificateAuthority?
+        if FileManager.default.fileExists(atPath: dir.appendingPathComponent(certFile).path) {
+            do {
+                loaded = try read(dir, guard: keyGuard)
+            } catch let error as CAKeyGuardError {
+                // The keys may be fine and only locked away for now: keep them.
+                throw error
+            } catch {
+                loaded = nil
+            }
+        }
+        let authority: LocalCertificateAuthority
+        if let loaded {
+            authority = loaded
+        } else {
+            // Nothing usable on disk: drop it and start over.
+            try? FileManager.default.removeItem(at: dir)
+            authority = try create(dir, guard: keyGuard)
+        }
+        excludeFromBackup(dir)
+        openByDir[key] = authority
+        return authority
     }
 
     /// Drops the in-memory copy so the next `open` reads the files again (tests).
@@ -172,7 +239,7 @@ final class LocalCertificateAuthority {
         openByDir.removeValue(forKey: dir.standardizedFileURL.path)
     }
 
-    private static func create(_ dir: URL) throws -> LocalCertificateAuthority {
+    private static func create(_ dir: URL, guard keyGuard: CAKeyGuard) throws -> LocalCertificateAuthority {
         let ca = try generateRSAKeyPair()
         let leaf = try generateRSAKeyPair()
         let caSPKI = try spki(of: ca.publicKey)
@@ -198,21 +265,34 @@ final class LocalCertificateAuthority {
             caPrivate: ca.privateKey, caPublicSPKI: caSPKI,
             leafPrivate: leaf.privateKey, leafPublicSPKI: leafSPKI
         )
-        try authority.persist(to: dir)
+        try authority.persist(to: dir, guard: keyGuard)
         return authority
     }
 
-    private static func read(_ dir: URL) throws -> LocalCertificateAuthority {
-        let caKeyData = try Data(contentsOf: dir.appendingPathComponent("ca.key"))
-        let leafKeyData = try Data(contentsOf: dir.appendingPathComponent("leaf.key"))
-        let caDER = [UInt8](try Data(contentsOf: dir.appendingPathComponent("ca.crt")))
-        let caPriv = try importRSAPrivate(caKeyData)
-        let leafPriv = try importRSAPrivate(leafKeyData)
-        return LocalCertificateAuthority(
+    private static func read(_ dir: URL, guard keyGuard: CAKeyGuard) throws -> LocalCertificateAuthority {
+        let legacy = FileManager.default.fileExists(atPath: dir.appendingPathComponent(legacyKeys[0]).path)
+        func key(_ sealedName: String, _ legacyName: String) throws -> Data {
+            legacy
+                ? try Data(contentsOf: dir.appendingPathComponent(legacyName))
+                : try keyGuard.open(Data(contentsOf: dir.appendingPathComponent(sealedName)))
+        }
+        let caPriv = try importRSAPrivate(key(caSealed, legacyKeys[0]))
+        let leafPriv = try importRSAPrivate(key(leafSealed, legacyKeys[1]))
+        let caDER = [UInt8](try Data(contentsOf: dir.appendingPathComponent(certFile)))
+        guard let caPublic = SecKeyCopyPublicKey(caPriv), let leafPublic = SecKeyCopyPublicKey(leafPriv) else { throw CAError.keygen }
+        // The certificate must belong to the key, or the files are not one authority.
+        guard let cert = SecCertificateCreateWithData(nil, Data(caDER) as CFData),
+              let certKey = SecCertificateCopyKey(cert),
+              SecKeyCopyExternalRepresentation(certKey, nil) as Data? == SecKeyCopyExternalRepresentation(caPublic, nil) as Data?
+        else { throw CAError.spki }
+        let authority = LocalCertificateAuthority(
             certificateDER: caDER,
-            caPrivate: caPriv, caPublicSPKI: try spki(of: SecKeyCopyPublicKey(caPriv)!),
-            leafPrivate: leafPriv, leafPublicSPKI: try spki(of: SecKeyCopyPublicKey(leafPriv)!)
+            caPrivate: caPriv, caPublicSPKI: try spki(of: caPublic),
+            leafPrivate: leafPriv, leafPublicSPKI: try spki(of: leafPublic)
         )
+        // Keys from an earlier version were in the clear: seal them now.
+        if legacy { try authority.persist(to: dir, guard: keyGuard) }
+        return authority
     }
 
     // MARK: Crypto primitives (Security.framework)

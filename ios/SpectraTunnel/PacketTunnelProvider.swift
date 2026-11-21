@@ -170,7 +170,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func loadCA() -> LocalCertificateAuthority? {
         guard let dir = container()?.appendingPathComponent("ca", isDirectory: true) else { return nil }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return try? LocalCertificateAuthority.open(dir)
+        return try? LocalCertificateAuthority.open(dir, guard: LocalCertificateAuthority.deviceGuard(appGroup: Self.appGroup))
     }
 
     private func publish(_ flows: [TrafficFlow]) {
@@ -180,6 +180,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard let url = container()?.appendingPathComponent("live.json"),
               let data = try? JSONEncoder().encode(flows) else { return }
         try? data.write(to: url, options: .atomic)
+        // An atomic write makes a new file, so the flag is set again each time:
+        // live flows can hold decrypted HTTP and stay out of backups.
+        LocalCertificateAuthority.excludeFromBackup(url)
     }
 
     private func container() -> URL? {

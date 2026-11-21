@@ -35,8 +35,8 @@ struct TLSBridgeTests {
         step("start")
         let mitmDir = tempDir(); defer { try? FileManager.default.removeItem(at: mitmDir) }
         let originDir = tempDir(); defer { try? FileManager.default.removeItem(at: originDir) }
-        let mitmCA = try LocalCertificateAuthority.open(mitmDir)
-        let originCA = try LocalCertificateAuthority.open(originDir)
+        let mitmCA = try LocalCertificateAuthority.open(mitmDir, guard: PlainKeyGuard())
+        let originCA = try LocalCertificateAuthority.open(originDir, guard: PlainKeyGuard())
         step("cas")
 
         // Ciphertext queues between the three TLS endpoints.

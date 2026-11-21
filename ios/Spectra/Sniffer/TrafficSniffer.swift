@@ -239,13 +239,13 @@ final class TrafficSniffer {
 
     private func refreshCA() {
         guard let dir = caDir() else { return }
-        caFingerprint = (try? LocalCertificateAuthority.open(dir))?.fingerprint()
+        caFingerprint = (try? LocalCertificateAuthority.open(dir, guard: LocalCertificateAuthority.deviceGuard(appGroup: Self.appGroup)))?.fingerprint()
     }
 
     /// The CA certificate in DER, to export for the user to install + trust.
     func caCertificateDER() -> Data? {
         guard let dir = caDir() else { return nil }
-        return (try? LocalCertificateAuthority.open(dir)).map { Data($0.certificateDER) }
+        return (try? LocalCertificateAuthority.open(dir, guard: LocalCertificateAuthority.deviceGuard(appGroup: Self.appGroup))).map { Data($0.certificateDER) }
     }
 
     // MARK: Group container paths
@@ -257,6 +257,8 @@ final class TrafficSniffer {
     private func sessionsDir() -> URL? {
         guard let base = containerURL()?.appendingPathComponent("traffic", isDirectory: true) else { return nil }
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        // Saved sessions can hold decrypted HTTP: keep them out of backups.
+        LocalCertificateAuthority.excludeFromBackup(base)
         return base
     }
 
