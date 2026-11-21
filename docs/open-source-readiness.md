@@ -46,7 +46,7 @@
 | 3 | Публичный IP `93.86.12.40` (провайдер SBB, страна RS) в фикстуре | `android/app/src/test/kotlin/cattivole/spectra/AssistantEvalFixtures.kt`, добавлен в 4eaf4d4 | Средняя, **если это ваш настоящий адрес** (похоже на реальный: конкретный провайдер) | **Исправлено в дереве** в 23668a4 (`203.0.113.40`); в истории остаётся в 4eaf4d4 и последующих коммитах до 23668a4 |
 | 4 | Хоп трассировки `103.214.168.255` | `LinkParseTest.kt` | Низкая: адрес магистрального маршрутизатора, не ваш | Есть в дереве |
 | 5 | Идентификаторы `cattivole.Spectra`, `group.cattivole.Spectra`, пакеты `cattivole.spectra`, `alexcattivo.localchat` | весь код | Нет, если публикуете под ником CattivoLe; это и есть публичная идентичность | Есть в дереве |
-| 6 | Брендинг Probe Lab | `branding/ProbeLab/` | Не секрет, но это другой продукт | Есть в дереве. Решите, должен ли он быть в публичном репо Spectra |
+| 6 | Брендинг Probe Lab | `branding/ProbeLab/` | Не секрет, но это другой продукт | **Убран из дерева** 2026-11-21 (иконка живёт в проекте Probe Lab); в истории остаётся |
 
 Проверено и чисто:
 
@@ -308,8 +308,8 @@ AndroidKeyStore); на устройстве миграцию не проверя
    `user.email` на noreply-адрес GitHub.
 3. **Сырой захват кадров**: оставить с заявлением, ограничить по умолчанию
    management-кадрами или вырезать EAPOL.
-4. **Probe Lab**: убрать `branding/ProbeLab/` из публичного репо Spectra?
-   Также `data/tools/build_rdap.py` в docstring ссылается на пути ProbeLab.
+4. ~~**Probe Lab**~~: решено — `branding/ProbeLab/` убран из Spectra, пути в
+   docstring `data/tools/build_rdap.py` исправлены на свои.
 5. **Исправить до публикации** (отдельные небольшие задачи):
    - подпись OSM → «© OpenStreetMap contributors»;
    - закрепить версию M5Cardputer в `platformio.ini`;

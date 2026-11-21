@@ -1,6 +1,6 @@
 """Turns IANA's RDAP bootstrap (https://data.iana.org/rdap/dns.json) into
-ProbeLab/Links/RDAPServers.swift, so the app can ask each zone's registry
-directly. Usage: python3 -I Tools/build_rdap.py dns.json ProbeLab/Links/RDAPServers.swift"""
+ios/Spectra/Links/RDAPServers.swift, so the app can ask each zone's registry
+directly. Usage: python3 -I data/tools/build_rdap.py dns.json ios/Spectra/Links/RDAPServers.swift"""
 import json, sys
 
 source, target = sys.argv[1], sys.argv[2]
