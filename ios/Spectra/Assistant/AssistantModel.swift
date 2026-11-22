@@ -21,6 +21,9 @@ final class AssistantModel {
     var actions: AssistantActions?
     /// Persistent notes the assistant saves across chats.
     var memory: AssistantMemory?
+    /// The ✨ summary cards: findings at once, the model's plain words under them, buttons instead of a text field.
+    /// Set once by the app, with the sources it reads.
+    var cards: AssistantCardRunner?
     private let keyProvider = KeychainKeyProvider()
 
     static weak var shared: AssistantModel?
@@ -201,9 +204,63 @@ final class AssistantModel {
         }
     }
 
-    /// Erases every chat. Models and settings stay.
+    /// Erases every summary and folder. Models and settings stay.
     func eraseChats() async throws {
+        cards?.forgetAll()
         try await store.deleteEverything()
+    }
+
+    func deleteChat(_ id: UUID) async throws {
+        cards?.forget(id)
+        try await store.deleteChat(id)
+    }
+
+    // MARK: - Folders
+
+    private static let summariesFolderKey = "assistant.summariesFolder"
+    private static let recordingFolderKey = "assistant.recordingFolder"
+
+    /// The folder every summary card is saved in unless the user chose another. Made on first use.
+    func summariesFolder() async -> UUID? {
+        if let saved = UserDefaults.standard.string(forKey: Self.summariesFolderKey).flatMap(UUID.init(uuidString:)),
+           (try? await store.folders())?.contains(where: { $0.id == saved }) == true {
+            return saved
+        }
+        guard let folder = try? await store.createFolder(name: String(localized: "Summaries")) else { return nil }
+        UserDefaults.standard.set(folder.id.uuidString, forKey: Self.summariesFolderKey)
+        return folder.id
+    }
+
+    /// The folder new summaries go to: the last one the user made or chose, until another is made or chosen.
+    /// `nil` means the Summaries folder.
+    private(set) var recordingFolderID: UUID? = UserDefaults.standard.string(forKey: recordingFolderKey).flatMap(UUID.init(uuidString:))
+
+    func record(into folder: UUID?) {
+        recordingFolderID = folder
+        UserDefaults.standard.set(folder?.uuidString, forKey: Self.recordingFolderKey)
+    }
+
+    /// Where the next summary is saved: the recording folder while it exists, else Summaries.
+    func recordingFolder() async -> UUID? {
+        if let id = recordingFolderID {
+            if (try? await store.folders())?.contains(where: { $0.id == id }) == true { return id }
+            record(into: nil)
+        }
+        return await summariesFolder()
+    }
+
+    /// A new folder that new summaries are saved in from now on.
+    @discardableResult
+    func startFolder(named name: String) async -> UUID? {
+        guard let folder = try? await store.createFolder(name: name) else { return nil }
+        record(into: folder.id)
+        return folder.id
+    }
+
+    /// The name of the folder a summary is in, for its screen's subtitle.
+    func folderName(of chat: UUID) async -> String? {
+        guard let folder = try? await store.chat(chat)?.folderID else { return nil }
+        return (try? await store.folders())?.first { $0.id == folder }?.name
     }
 
     func setWifiOnly(_ value: Bool) {

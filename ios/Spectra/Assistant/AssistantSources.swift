@@ -80,6 +80,26 @@ struct AssistantSources {
         )
     }
 
+    /// What a summary card shows: its findings and steps, and the data its model actions read. `nil` when there is
+    /// nothing to summarize (no recorded traffic or capture handed over).
+    func cardFacts(_ subject: CardSubject, now: Date = .now) -> CardFacts? {
+        switch subject {
+        case .traffic:
+            guard let recording = captures.currentRecording else { return nil }
+            return AssistantCards.traffic(recording.flows, name: recording.name,
+                                          digest: TrafficDigest.text(recording.flows, name: recording.name,
+                                                                     origin: "recorded on the phone (Traffic screen)"))
+        case .capture:
+            guard let entry = captures.latest else { return nil }
+            return AssistantCards.capture(entry.analysis, name: entry.name,
+                                          digest: CaptureDigest.text(entry.analysis, name: entry.name, origin: entry.origin, describe: describe))
+        case .link(let link):
+            return links.facts(link, now: now)
+        default:
+            return AssistantCards.facts(subject, snapshot: snapshot(now: now), now: now)
+        }
+    }
+
     func snapshot(now: Date = Date()) -> AssistantSnapshot {
         var snapshot = AssistantSnapshot()
         snapshot.wifiName = joiner.currentSSID ?? lan.wifi.current?.ssid
@@ -98,7 +118,8 @@ struct AssistantSources {
                 rssi: reading.rssi,
                 channel: reading.channel,
                 band: reading.band.rawValue,
-                security: reading.auth.name,
+                // In English whatever the app language: the card rules and the model read it ("Open", "WEP").
+                security: reading.auth == .open ? "Open" : reading.auth.rawValue > 15 ? "Other" : reading.auth.name,
                 maker: reading.bssid.isLocallyAdministered ? nil : OUIDatabase.lookup(bytes: reading.bssid.bytes),
                 isCurrent: joiner.isCurrent(network),
                 isHidden: name == nil,
@@ -164,7 +185,8 @@ struct AssistantSources {
         let measured = speed.result
         if let report = probe.report, report.status != nil {
             var info = AssistantSnapshot.Link(checkedAt: report.checkedAt)
-            info.status = report.status?.rawValue
+            // Spelled as on Android: the card rules and the model read "no_network", "whitelist_only".
+            info.status = report.status.map { $0 == .noNetwork ? "no_network" : $0.rawValue }
             info.detail = report.detail
             info.gatewayMs = report.gateway?.millis
             info.dnsMs = report.dns?.millis
@@ -183,7 +205,7 @@ struct AssistantSources {
             info.intercepted = report.tls?.intercepted
             info.resolverLies = report.resolver?.liesAboutMissingNames
             info.exposedPorts = report.exposure?.openPorts.map(\.port) ?? []
-            info.access = report.access?.verdict.rawValue
+            info.access = report.access.map { $0.verdict == .whitelistOnly ? "whitelist_only" : $0.verdict.rawValue }
             info.gatewayOk = report.gateway?.ok
             info.dnsOk = report.dns?.ok
             info.webOk = report.web?.ok

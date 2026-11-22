@@ -52,7 +52,7 @@ struct AssistantActions {
     }
 
     /// The step button for a check that needs no argument; the cards trim the question mark.
-    static func button(for name: String) -> String? {
+    nonisolated static func button(for name: String) -> String? {
         switch Name(rawValue: name) {
         case .scanWifi: String(localized: "Scan Wi‑Fi?")
         case .scanLAN: String(localized: "Scan the local network?")
@@ -369,7 +369,7 @@ struct AssistantActions {
     }
 
     /// A tool that ran, in words, for the note under the answer: «Ran: network scan», not «scan_lan».
-    static func title(for name: String) -> String {
+    nonisolated static func title(for name: String) -> String {
         switch Name(rawValue: name) {
         case .scanWifi: String(localized: "Wi‑Fi scan")
         case .scanLAN: String(localized: "network scan")
@@ -391,7 +391,7 @@ struct AssistantActions {
         }
     }
 
-    static func runningLabel(for name: String) -> String {
+    nonisolated static func runningLabel(for name: String) -> String {
         switch Name(rawValue: name) {
         case .scanWifi: String(localized: "Scanning Wi‑Fi…")
         case .scanLAN: String(localized: "Scanning the network…")

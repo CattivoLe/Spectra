@@ -72,7 +72,9 @@ struct SpectraApp: App {
                     captures.recordedTraffic = { [weak sniffer] in sniffer?.assistantRecording }
                     assistant.dataSource = { question in sources.attachment(for: question) }
                     assistant.memory = assistantMemory
-                    assistant.actions = AssistantActions(sources: sources, memory: assistantMemory)
+                    let actions = AssistantActions(sources: sources, memory: assistantMemory)
+                    assistant.actions = actions
+                    assistant.cards = AssistantCardRunner(assistant: assistant, sources: sources, actions: actions)
                 }
         }
     }

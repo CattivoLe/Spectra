@@ -38,6 +38,13 @@ final class LinkShelf {
         if entries.count > Self.keep { entries.removeFirst(entries.count - Self.keep) }
     }
 
+    /// The link card for `link` with whatever either side found about it.
+    func facts(_ link: String, now: Date = .now) -> CardFacts {
+        let key = LinkInspector.inspect(link)?.link ?? link
+        let found = entry(key)
+        return InternetCards.link(link, site: found.site, redirects: found.redirects, now: now)
+    }
+
     /// Only a web link with a name has a certificate and a registry record to ask about.
     nonisolated static func isWeb(_ inspection: LinkInspection) -> Bool {
         (inspection.scheme == "https" || inspection.scheme == "http") && !inspection.host.isEmpty
