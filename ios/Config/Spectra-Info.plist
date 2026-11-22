@@ -10,6 +10,7 @@
 	</array>
 	<key>NSBonjourServices</key>
 	<array>
+		<string>_spectra._tcp</string>
 		<string>_device-info._tcp</string>
 		<string>_companion-link._tcp</string>
 		<string>_apple-mobdev2._tcp</string>

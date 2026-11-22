@@ -100,6 +100,20 @@ struct LANView: View {
                                 systemImage: "wifi.slash",
                                 description: Text("Connect to a Wi-Fi network to scan devices on it.")
                             )
+                        } else if case .localNetworkDenied = scanner.state {
+                            ContentUnavailableView {
+                                Label("No local network access", systemImage: "lock.shield")
+                            } description: {
+                                Text("iOS does not let Spectra reach devices on this Wi-Fi. Turn on Spectra in Settings → Privacy & Security → Local Network, then scan again.")
+                            } actions: {
+                                Button("Open Settings") {
+                                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                                        UIApplication.shared.open(url)
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                Button("Scan again", action: scanner.scan)
+                            }
                         } else if case .ipv6Only = scanner.state {
                             ContentUnavailableView {
                                 Label("IPv6-only network", systemImage: "network.badge.shield.half.filled")
@@ -286,6 +300,7 @@ struct LANStatusBar: View {
         if scanner.isScanning { return String(localized: "Scanning…") }
         if case .noNetwork = scanner.state { return String(localized: "No Wi-Fi") }
         if case .ipv6Only = scanner.state { return scanner.wifi.current?.ssid ?? String(localized: "IPv6 only") }
+        if case .localNetworkDenied = scanner.state { return String(localized: "No access") }
         if let ssid = scanner.wifi.current?.ssid { return ssid }
         if let ip = scanner.subnetInfo?.localIP { return ip }
         return String(localized: "LAN")
@@ -295,6 +310,7 @@ struct LANStatusBar: View {
         if case .scanning(_, let phase) = scanner.state { return phase }
         if case .noNetwork = scanner.state { return String(localized: "Join a network") }
         if case .ipv6Only = scanner.state { return String(localized: "No IPv4 to scan") }
+        if case .localNetworkDenied = scanner.state { return String(localized: "Local network access is off") }
         if let info = scanner.subnetInfo {
             var parts = ["/\(info.cidr)"]
             if let gateway = info.gateway { parts.append(gateway) }

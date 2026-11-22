@@ -197,6 +197,13 @@ assistant and the whole app can be locked with Face ID. If the matching
 `firmware.bin` for updating the sensor over Bluetooth; a git worktree takes
 them from the main checkout.
 
+iOS does not report local network access directly, so a LAN scan first
+publishes and browses for a throwaway Bonjour service, `_spectra._tcp`, and
+waits for the answer to the system prompt: until it is answered every packet
+to the subnet is dropped. If access was turned off, the LAN tab links to
+Settings. Addresses that stayed quiet in the first TCP pass are asked once
+more, because a cold ARP cache does not finish within the 1.5 s timeout.
+
 On the Sensor screen (the sensor capsule on the Wi‑Fi tab), **Find sensor**
 lists Cardputers in range; the app reconnects to the last one by itself. The **Demo sensor** switch feeds made-up
 networks through the same protocol, so the app can be worked on without the

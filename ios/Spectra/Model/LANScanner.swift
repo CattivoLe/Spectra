@@ -582,6 +582,8 @@ final class LANScanner {
         /// Wi-Fi is up but has no IPv4 subnet, as on an IPv6-only network:
         /// the scan walks IPv4 addresses, so there is nothing to sweep.
         case ipv6Only
+        /// The person turned down local network access: nothing on the subnet can be reached.
+        case localNetworkDenied
         case scanning(progress: Double, phase: String)
         case done
     }
@@ -850,6 +852,15 @@ final class LANScanner {
             return
         }
 
+        // Phase 0: local network access. On the first scan iOS shows its prompt and
+        // drops every packet to the subnet until it is answered, so wait for the answer.
+        state = .scanning(progress: 0, phase: String(localized: "Waiting for local network access…"))
+        if await LocalNetworkAccess.check() == .denied {
+            state = .localNetworkDenied
+            return
+        }
+        if Task.isCancelled { return }
+
         state = .scanning(progress: 0, phase: String(localized: "Probing the subnet…"))
 
         // Phase 1: UDP probe to populate ARP cache (works on older iOS).
@@ -912,16 +923,31 @@ final class LANScanner {
             Self.discoveryPorts.map { (ip: ip, port: $0) }
         }
         let discovery = await probeTCP(discoveryTargets, timeout: .milliseconds(1500)) { fraction in
-            self.state = .scanning(progress: 0.2 + 0.4 * fraction, phase: String(localized: "Discovering devices…"))
+            self.state = .scanning(progress: 0.2 + 0.25 * fraction, phase: String(localized: "Discovering devices…"))
+        }
+        for (target, outcome) in zip(discoveryTargets, discovery) where outcome != .silent {
+            aliveIPs.insert(target.ip)
+        }
+        if Task.isCancelled { return }
+
+        // A second pass over the addresses that stayed quiet. The first connects to
+        // a host wait on ARP, which a cold cache (the first scan after joining, or
+        // a phone asleep) may not finish in time; by now the answers are cached.
+        absorbARP()
+        let retryTargets = hosts.filter { !aliveIPs.contains($0) }.flatMap { ip in
+            Self.discoveryPorts.map { (ip: ip, port: $0) }
+        }
+        let retry = await probeTCP(retryTargets, timeout: .milliseconds(1500)) { fraction in
+            self.state = .scanning(progress: 0.45 + 0.1 * fraction, phase: String(localized: "Discovering devices…"))
+        }
+        for (target, outcome) in zip(retryTargets, retry) where outcome != .silent {
+            aliveIPs.insert(target.ip)
         }
         let bonjour = await bonjourResult
         let miio = await miioResult.intersection(hostSet)
         let bonjourNames = bonjour.names.filter { hostSet.contains($0.key) }
         let bonjourServices = bonjour.services.filter { hostSet.contains($0.key) }
         if Task.isCancelled { return }
-        for (target, outcome) in zip(discoveryTargets, discovery) where outcome != .silent {
-            aliveIPs.insert(target.ip)
-        }
         aliveIPs.formUnion(bonjourNames.keys)
         aliveIPs.formUnion(bonjourServices.keys)
         aliveIPs.formUnion(miio)
