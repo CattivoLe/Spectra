@@ -1,4 +1,5 @@
 import java.io.File
+import java.util.Properties
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -16,10 +17,32 @@ android {
         applicationId = "cattivole.spectra"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        // The release workflow refuses a `vX.Y.Z` tag that differs from versionName. versionCode follows from it:
+        // 1.2.3 → 10203, so a release only edits this one line.
         versionName = "1.0.0"
+        versionCode = versionName!!.split('.').map(String::toInt).let { (major, minor, patch) ->
+            major * 10_000 + minor * 100 + patch
+        }
         // `-Pabi=arm64-v8a` packs one architecture: a phone-only APK about half the size.
         providers.gradleProperty("abi").orNull?.let { only -> ndk { abiFilters += only } }
+    }
+
+    // Release signing. Values come from environment variables (CI, see docs/releasing.md) or from an
+    // untracked android/keystore.properties. Without them the release APK is built unsigned.
+    val keystoreProperties = Properties().apply {
+        rootProject.file("keystore.properties").takeIf { it.isFile }?.reader()?.use { load(it) }
+    }
+    fun signingValue(env: String, prop: String): String? =
+        System.getenv(env)?.takeIf { it.isNotBlank() } ?: keystoreProperties.getProperty(prop)
+
+    val releaseStoreFile = signingValue("SPECTRA_KEYSTORE_FILE", "storeFile")
+    if (releaseStoreFile != null) {
+        signingConfigs.create("release") {
+            storeFile = rootProject.file(releaseStoreFile)
+            storePassword = signingValue("SPECTRA_KEYSTORE_PASSWORD", "storePassword")
+            keyAlias = signingValue("SPECTRA_KEY_ALIAS", "keyAlias")
+            keyPassword = signingValue("SPECTRA_KEY_PASSWORD", "keyPassword")
+        }
     }
 
     // The OUI and Bluetooth SIG tables are shared with the iOS app and live in
@@ -34,6 +57,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
 

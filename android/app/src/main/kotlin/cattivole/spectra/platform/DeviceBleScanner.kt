@@ -63,6 +63,22 @@ class DeviceBleScanner(
         }
     }
 
+    /** Screenshot demo ([cattivole.spectra.DemoMode]): the list is fed by [absorbDemo], not by the radio. */
+    private var demo = false
+
+    /** One made-up advertisement, as if the radio had heard it. */
+    fun absorbDemo(address: String, fields: BleFields, rssi: Int, at: Long) {
+        if (!demo) {
+            demo = true
+            scanningSince = at
+            state = State.Scanning
+            ensureClock()
+        }
+        val device = rows.getOrPut(address) { BleDevice(address, "Random", rssi, at, BleDevice.Transport.LE) }
+        device.absorb(BleAdvertisement.parse(fields), null, rssi, at)
+        publishSoon()
+    }
+
     /** Gets devices just before they leave the list, so History can keep them. */
     var onEvict: ((List<BleDevice>) -> Unit)? = null
 
@@ -151,6 +167,7 @@ class DeviceBleScanner(
 
     /** Bluetooth was switched on or off, or a permission changed. */
     fun availabilityChanged() {
+        if (demo) return
         val missing = availability()
         when {
             missing != null -> {
@@ -214,6 +231,11 @@ class DeviceBleScanner(
     }
 
     private fun begin() {
+        if (demo) {
+            state = State.Scanning
+            publish()
+            return
+        }
         val missing = availability()
         if (missing != null) {
             state = State.Unavailable(missing)

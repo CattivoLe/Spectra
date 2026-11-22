@@ -197,6 +197,16 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         cattivole.spectra.platform.NewDeviceNotifier.notify(getApplication(), fresh, lan.networkLabel)
     }
 
+    /** Showing made-up data for screenshots ([DemoMode]); nothing is scanned. */
+    var demo: Boolean = false
+        private set
+
+    fun startDemo() {
+        if (demo) return
+        demo = true
+        DemoMode.start(this, viewModelScope)
+    }
+
     fun onForeground() {
         link.resumeFromForeground()
         ble.resumeIfWanted()

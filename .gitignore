@@ -18,6 +18,7 @@ firmware/*.bin
 
 # Android
 android/.gradle/
+android/.kotlin/
 android/build/
 android/app/build/
 android/local.properties
@@ -51,6 +52,7 @@ firmware/*.zip
 
 # Signing material
 *.jks
+keystore.properties
 *.keystore
 *.p12
 *.p8

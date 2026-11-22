@@ -1,11 +1,56 @@
-# Spectra
+<p align="center">
+  <img src="docs/images/icon.png" width="112" alt="Spectra icon">
+</p>
 
-Spectra audits your own wireless surroundings: the Wi-Fi networks around you,
-the devices on your local network, nearby Bluetooth devices and your phone's
-internet connection. It runs on iPhone and Android, optionally with a small
-ESP32 sensor that adds what a phone cannot do by itself, and it has an
-on-device assistant (llama.cpp) that explains what it found. Nothing is sent
-to a server: scans, history and the assistant all stay on the phone.
+<h1 align="center">Spectra</h1>
+
+<p align="center">
+  An audit of your own wireless surroundings: Wi‑Fi, the local network,<br>
+  Bluetooth and the internet connection. Android and iPhone, with an optional ESP32 sensor.
+</p>
+
+<p align="center">
+  <a href="../../releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/CattivoLe/Spectra?label=APK&color=4c1"></a>
+  <a href="../../actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/CattivoLe/Spectra/ci.yml?branch=main&label=tests"></a>
+  <img alt="Android 8.0+" src="https://img.shields.io/badge/Android-8.0%2B-3ddc84">
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
+</p>
+
+<p align="center">
+  <img src="docs/images/screen-wifi.png" width="200" alt="Wi-Fi networks heard by the sensor">
+  &nbsp;
+  <img src="docs/images/screen-lan.png" width="200" alt="Devices on the local network">
+  &nbsp;
+  <img src="docs/images/screen-lan-device.png" width="200" alt="A camera with Telnet and an open video stream">
+  &nbsp;
+  <img src="docs/images/screen-bluetooth.png" width="200" alt="Bluetooth devices and a Find My tag away from its owner">
+</p>
+
+<p align="center"><sub>Screenshots use made-up demo data (<a href="docs/screenshots.md">how they are made</a>).</sub></p>
+
+Spectra shows what is around you and what it says about your security, in
+plain words. Nothing is sent to a server: scans, history and the on-device
+assistant (llama.cpp) all stay on the phone.
+
+## What it does
+
+- **Wi‑Fi.** Networks with channel, security, Wi‑Fi generation, signal over
+  time and the clients on them. With the sensor: deauthentication attacks,
+  hidden networks, steady traffic that may be a camera, and phones probing for
+  networks they joined before.
+- **LAN.** Every device on your network, its maker, open ports and what they
+  mean: Telnet, open shares, camera streams, unencrypted web pages, UPnP port
+  forwarding on the router. A device new to the network gets a notification.
+- **Internet.** A connection check, a link checker for phishing and look-alike
+  names, a speed test, traceroute on a map and a recording of the phone's own
+  traffic.
+- **Bluetooth.** Nearby devices with their names, makers and signal, and
+  trackers (Find My, Tile, SmartTag, Chipolo, Pebblebee) that may be following
+  you.
+- **Assistant.** A language model on the phone that explains a scan and
+  answers questions about it (Android 12+, downloaded once).
+- **History.** Finished scans are kept per network and day; a saved network,
+  host or Bluetooth device opens the same card as a live one.
 
 iOS does not let apps list nearby networks, so on iPhone the Wi-Fi list comes
 from the sensor: an M5Stack Cardputer (ESP32-S3), an ESP32-C5 or an
@@ -26,6 +71,21 @@ data/       Catalogs shared by both apps (MAC vendors, Bluetooth IDs, RDAP) and 
 > port scans of the local network) can reveal other people's data if pointed
 > at a network that is not yours. Capturing or inspecting traffic you are not
 > authorised to see is illegal in many countries. See [SECURITY.md](SECURITY.md).
+
+## Download
+
+Get the APK (arm64 phones) and the sensor firmware for all three boards from
+[**Releases**](../../releases/latest), with checksums and build attestations.
+How they are built and how to check them: [docs/releasing.md](docs/releasing.md).
+
+The APK is signed with a certificate whose SHA-256 fingerprint is
+
+```
+D3:AD:5E:D1:B3:95:EB:0E:1C:0F:0A:47:DB:29:B6:A0:ED:29:95:69:EC:C9:AC:85:C8:63:B1:C0:C4:4F:F0:7E
+```
+
+(`apksigner verify --print-certs` prints it as `d3ad5ed1b395eb0e1c0f0a47db29b6a0ed299569ecc9ac85c863b1c0c44ff07e`.)
+An APK with any other signature was not built by this project.
 
 ## Quick start
 
