@@ -31,6 +31,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let decryptFlag = OSAllocatedUnfairLock(initialState: false)
     /// Which hosts are decrypted, read with the switch on the watchdog's tick.
     private let hostFilter = OSAllocatedUnfairLock(initialState: TlsHostFilter())
+    /// Throttle settings and Map Local rules, read with the switch on the watchdog's tick.
+    private let throttle = OSAllocatedUnfairLock(initialState: ThrottleSettings())
+    private let mapRules = OSAllocatedUnfairLock(initialState: [MapRule]())
     /// Written when decryption switched itself off for the run, for the app to explain.
     static let tlsNoticeKey = "traffic_tls_notice"
 
@@ -41,6 +44,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         decryptFlag.withLock { $0 = decrypt }
         let filter = TlsHostFilter.load(UserDefaults(suiteName: Self.appGroup))
         hostFilter.withLock { $0 = filter }
+        readTools()
         // A new run starts with no bodies: what is left belongs to the previous recording.
         let bodies = container().map { TrafficBodies(dir: $0.appendingPathComponent(PacketTunnelBodies.folder, isDirectory: true)) }
         bodies?.clear()
@@ -90,6 +94,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 certificate: { self.loadCA() },
                 hostFilter: { [hostFilter = self.hostFilter] in hostFilter.withLock { $0 } },
                 bodies: bodies,
+                throttle: { [throttle = self.throttle] in throttle.withLock { $0 } },
+                mapRules: { [mapRules = self.mapRules] in mapRules.withLock { $0 } },
                 onFlows: { [weak self] flows in self?.publish(flows) }
             )
             self.proxy = proxy
@@ -124,6 +130,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             self.decryptFlag.withLock { $0 = decrypt }
             let filter = TlsHostFilter.load(UserDefaults(suiteName: Self.appGroup))
             self.hostFilter.withLock { $0 = filter }
+            self.readTools()
             if state.decryptOff && !self.toldDecryptOff {
                 self.toldDecryptOff = true
                 UserDefaults(suiteName: Self.appGroup)?.set("untrusted", forKey: Self.tlsNoticeKey)
@@ -177,6 +184,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     // MARK: Shared App Group
+
+    private func readTools() {
+        let defaults = UserDefaults(suiteName: Self.appGroup)
+        let settings = ThrottleSettings.load(defaults)
+        let rules = MapRule.load(defaults)
+        throttle.withLock { $0 = settings }
+        mapRules.withLock { $0 = rules }
+    }
 
     private func decryptEnabled() -> Bool {
         UserDefaults(suiteName: Self.appGroup)?.bool(forKey: Self.tlsKey) ?? false

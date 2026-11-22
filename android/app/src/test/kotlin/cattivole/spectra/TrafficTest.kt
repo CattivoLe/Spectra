@@ -5,6 +5,11 @@ import cattivole.spectra.core.BodyPreview
 import cattivole.spectra.core.BodyView
 import cattivole.spectra.core.Curl
 import cattivole.spectra.core.Har
+import cattivole.spectra.core.MapLocal
+import cattivole.spectra.core.MapRule
+import cattivole.spectra.core.RepeatRequest
+import cattivole.spectra.core.Throttle
+import cattivole.spectra.core.ThrottleSettings
 import cattivole.spectra.core.HpackDecoder
 import cattivole.spectra.core.Http2Assembler
 import cattivole.spectra.core.Huffman
@@ -951,6 +956,76 @@ class TrafficTest {
         assertTrue(fromPhone.toByteArray().contentEquals(Http2Assembler.PREFACE))
         assertEquals(phoneEngine.applicationProtocol, chosen)
         return phoneEngine.applicationProtocol to server.applicationProtocol
+    }
+
+    @Test
+    fun mapLocalAnswersMatchingRequestsInsteadOfTheServer() {
+        val rule = MapRule("r1", host = "*.example.com", path = "/api/user*", status = 201, contentType = "application/json", body = """{"name":"local"}""")
+        val local = MapLocal(listOf(rule, MapRule("off", enabled = false, host = "other.com")))
+        assertTrue(local.coversHost("api.example.com"))
+        assertFalse(local.coversHost("other.com"))
+        assertEquals(rule, local.ruleFor("api.example.com", "/api/user/7?full=1"))
+        assertNull(local.ruleFor("api.example.com", "/api/orders"))
+        assertTrue(MapRule("r2", host = "example.com", path = "/a").matches("example.com", "/a?x=1"))
+        assertTrue(MapRule("r3", host = "example.com").matches("example.com", "/anything"))
+
+        val answers = mutableListOf<ByteArray>()
+        val strip = AcceptEncodingStrip("api.example.com", local, onLocal = { answers += it })
+        val mapped = "POST /api/user HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: 5\r\n\r\nhello"
+        val passed = "GET /api/orders HTTP/1.1\r\nHost: api.example.com\r\nAccept-Encoding: gzip\r\n\r\n"
+        val forwarded = strip.feed((mapped + passed).toByteArray()).fold(ByteArray(0)) { a, b -> a + b }
+        assertEquals(passed.replace("gzip", "identity"), String(forwarded, Charsets.ISO_8859_1))
+        val answer = String(answers.single(), Charsets.ISO_8859_1)
+        assertTrue(answer.startsWith("HTTP/1.1 201 Created\r\n"))
+        assertTrue(answer.contains("Content-Length: 16\r\n"))
+        assertTrue(answer.contains("${MapLocal.HEADER}: *.example.com/api/user*"))
+        assertTrue(answer.endsWith("""{"name":"local"}"""))
+        // The local answer reads back as an ordinary exchange.
+        val recorder = Recorder()
+        recorder.client(mapped.toByteArray())
+        recorder.server(answers.single())
+        assertEquals(201, recorder.exchanges().single().status)
+        assertEquals("""{"name":"local"}""", recorder.responseText(0)?.replace("\\s".toRegex(), ""))
+        assertTrue(String(MapLocal.response(rule, "HEAD"), Charsets.ISO_8859_1).endsWith("\r\n\r\n"))
+        val rules = MapRule.listFromJson(MapRule.listToJson(listOf(rule)))
+        assertEquals(listOf(rule), rules)
+        assertTrue(MapRule.listFromJson("not json").isEmpty())
+    }
+
+    @Test
+    fun throttleBucketsPaceBytes() {
+        val settings = ThrottleSettings.preset("3g")
+        assertEquals(780, settings.downKbps)
+        assertTrue(settings.enabled)
+        assertEquals(settings, ThrottleSettings.fromJson(settings.toJson()))
+        assertFalse(ThrottleSettings.fromJson(null).enabled)
+        val throttle = Throttle(ThrottleSettings(ThrottleSettings.CUSTOM, downKbps = 800, upKbps = 0, latencyMs = 120))
+        assertEquals(120L, throttle.latencyMs)
+        // 800 kbit/s is 100 bytes a millisecond; the bucket holds 50 ms of that.
+        assertEquals(5_000, throttle.down.take(100_000, now = 1_000))
+        assertEquals(0, throttle.down.take(100, now = 1_000))
+        assertEquals(1_000, throttle.down.take(100_000, now = 1_010))
+        assertEquals(100_000, throttle.up.take(100_000, now = 1_010))
+        assertEquals(0L, Throttle(ThrottleSettings()).latencyMs)
+    }
+
+    @Test
+    fun repeatRequestKeepsWhatTheServerNeeds() {
+        val exchange = HttpExchange(
+            method = "POST", path = "/api", query = emptyList(),
+            requestHeaders = listOf(
+                HttpField(":authority", "example.com"), HttpField("Host", "example.com"), HttpField("Content-Length", "3"),
+                HttpField("Authorization", "Bearer x"), HttpField("Content-Encoding", "gzip"), HttpField("Connection", "keep-alive"),
+            ),
+            parameters = emptyList(), status = 200, responseHeaders = emptyList(), target = "/api?x=1",
+        )
+        val flow = TrafficFlow(1, "TCP", "10.0.0.1", 1, "1.2.3.4", 443, "example.com", null, null, true, 0, 0, 0, 0, false)
+        val repeat = RepeatRequest.from(flow, exchange, "abc".toByteArray())
+        assertEquals("https://example.com/api?x=1", repeat.url)
+        assertEquals(listOf("Authorization"), repeat.headers.map { it.name })
+        assertEquals("Authorization: Bearer x", repeat.headerText())
+        assertEquals(listOf(HttpField("X-A", "1 2"), HttpField("Y", "")), RepeatRequest.parseHeaders("X-A: 1 2\nnot a header\nY:\nHost: h"))
+        assertNull(RepeatRequest.from(flow, exchange, ByteArray(0)).body)
     }
 }
 

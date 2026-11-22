@@ -75,6 +75,21 @@ struct SnifferView: View {
                 }
             }
 
+            Section {
+                NavigationLink { ThrottleView() } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Throttling")
+                        Text(throttleSummary(sniffer.throttle)).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                NavigationLink { MapLocalView() } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Map Local")
+                        Text(mapLocalSummary(sniffer)).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             if !sniffer.flows.isEmpty {
                 Section(filtered.count == sniffer.flows.count
                         ? "\(sniffer.flows.count) connections"
@@ -313,6 +328,17 @@ struct ExchangeDetailView: View {
                 }
             }
             Section {
+                NavigationLink {
+                    RepeatView(draft: RepeatRequest.from(flow, exchange, body: exchange.requestBodyStored
+                        ? sniffer.body(sessionID: sessionID, flowID: flow.id, index: index, request: true) : nil))
+                } label: {
+                    Label("Repeat request", systemImage: "arrow.clockwise")
+                }
+                NavigationLink {
+                    MapRuleView(rule: localRule(), isNew: true)
+                } label: {
+                    Label("Map locally", systemImage: "arrow.left.arrow.right")
+                }
                 Button {
                     let body = exchange.requestBodyStored
                         ? sniffer.body(sessionID: sessionID, flowID: flow.id, index: index, request: true) : nil
@@ -326,6 +352,22 @@ struct ExchangeDetailView: View {
         .navigationTitle("Exchange")
         .navigationBarTitleDisplayMode(.inline)
         .sensoryFeedback(.success, trigger: copied)
+    }
+
+    /// A Map Local rule that answers this request with the response it got.
+    private func localRule() -> MapRule {
+        var text = exchange.responseJson ?? ""
+        if exchange.responseBodyStored,
+           let data = sniffer.body(sessionID: sessionID, flowID: flow.id, index: index, request: false) {
+            switch BodyPreview.of([UInt8](data), contentType: exchange.header("Content-Type", response: true)) {
+            case .json(let value), .text(let value): text = value
+            default: break
+            }
+        }
+        let type = exchange.header("Content-Type", response: true)?.components(separatedBy: ";").first?
+            .trimmingCharacters(in: .whitespaces) ?? "application/json"
+        return MapRule(host: flow.host ?? flow.destination, path: exchange.path, status: exchange.status ?? 200,
+                       contentType: type, body: text)
     }
 
     private func fields(_ title: LocalizedStringKey, _ fields: [HttpField]) -> some View {
@@ -662,6 +704,320 @@ struct TLSHostsView: View {
                 .onDelete { indexes in indexes.map { hosts[$0] }.forEach(remove) }
         }
     }
+}
+
+/// Sends a request again, as recorded or edited, and shows what came back.
+struct RepeatView: View {
+    let draft: RepeatRequest
+    @State private var method = ""
+    @State private var url = ""
+    @State private var headers = ""
+    @State private var bodyText = ""
+    @State private var started = false
+    @State private var sending = false
+    @State private var result: RepeatResult?
+
+    /// The recorded body as text, or nil when it is binary and goes out as recorded.
+    private var textBody: String? { draft.body.flatMap { String(data: $0, encoding: .utf8) } }
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Method", text: $method).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                TextField(text: $url, axis: .vertical) { Text(verbatim: "URL") }
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                TextField("Headers, one per line", text: $headers, axis: .vertical)
+                    .font(.caption.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
+                if let data = draft.body, textBody == nil {
+                    Text("The body is binary, \(bytes(Int64(data.count))), and is sent as recorded.").foregroundStyle(.secondary)
+                } else {
+                    TextField("Body", text: $bodyText, axis: .vertical)
+                        .font(.caption.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
+                }
+                Button {
+                    send()
+                } label: {
+                    if sending { ProgressView() } else { Label("Send", systemImage: "paperplane") }
+                }
+                .disabled(sending || !url.hasPrefix("http"))
+            } header: {
+                Text("Request")
+            } footer: {
+                Text("Sent from this app. While recording, it shows up in the list like any other request.")
+            }
+            if let result {
+                Section("Response") {
+                    if let error = result.error {
+                        Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                    }
+                    if let status = result.status { InfoRow("Status", value: "\(status)") }
+                    InfoRow("Duration", value: millis(result.durationMs))
+                    InfoRow("Size", value: bytes(Int64(result.body.count)))
+                    ForEach(Array(result.headers.enumerated()), id: \.offset) { _, field in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(field.name).font(.caption).foregroundStyle(.secondary)
+                            Text(field.value).font(.callout).textSelection(.enabled)
+                        }
+                    }
+                }
+                if !result.body.isEmpty {
+                    Section("Response body") {
+                        if result.cut {
+                            Label("Only the first \(bytes(Int64(HttpAssembler.responseCap))) of this body were kept.", systemImage: "exclamationmark.triangle")
+                                .font(.footnote).foregroundStyle(.orange)
+                        }
+                        let type = result.headers.first { $0.name.lowercased() == "content-type" }?.value
+                        switch BodyPreview.of(result.body, contentType: type) {
+                        case .json(let text), .text(let text):
+                            MonoText(text: text, full: true) { EmptyView() }
+                        case .binary(_, let hex):
+                            Text(hex).font(.caption2.monospaced()).textSelection(.enabled)
+                        case .image(let data):
+                            if let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFit() }
+                        case .empty:
+                            EmptyView()
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Repeat request")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            guard !started else { return }
+            started = true
+            method = draft.method
+            url = draft.url
+            headers = draft.headerText
+            bodyText = textBody ?? ""
+        }
+    }
+
+    private func send() {
+        sending = true
+        let trimmed = method.trimmingCharacters(in: .whitespaces).uppercased()
+        let request = RepeatRequest(
+            method: trimmed.isEmpty ? "GET" : trimmed,
+            url: url.trimmingCharacters(in: .whitespacesAndNewlines),
+            headers: RepeatRequest.parseHeaders(headers),
+            body: draft.body != nil && textBody == nil ? draft.body : (bodyText.isEmpty ? nil : Data(bodyText.utf8))
+        )
+        Task {
+            result = await RequestRepeater.send(request)
+            sending = false
+        }
+    }
+}
+
+/// How fast connections may go while recording, like Throttle Settings in Charles.
+struct ThrottleView: View {
+    @Environment(TrafficSniffer.self) private var sniffer
+    @State private var down = ""
+    @State private var up = ""
+    @State private var latency = ""
+
+    var body: some View {
+        let current = sniffer.throttle
+        Form {
+            Section {
+                Picker("Throttling", selection: Binding(
+                    get: { sniffer.throttle.preset },
+                    set: { name in
+                        if name == ThrottleSettings.off {
+                            sniffer.throttle = ThrottleSettings()
+                        } else if name == ThrottleSettings.custom {
+                            sniffer.throttle = custom()
+                        } else {
+                            let preset = ThrottleSettings.preset(name)
+                            sniffer.throttle = preset
+                            fill(preset)
+                        }
+                    }
+                )) {
+                    Text("Off").tag(ThrottleSettings.off)
+                    ForEach(ThrottleSettings.presets, id: \.preset) { Text(presetName($0.preset)).tag($0.preset) }
+                    Text("Custom").tag(ThrottleSettings.custom)
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } footer: {
+                if current.enabled {
+                    Text("Download \(rate(current.downKbps)), upload \(rate(current.upKbps)), delay \(millis(Int64(current.latencyMs))). Applies to the recorded connections right away.")
+                } else {
+                    Text("Connections go at full speed.")
+                }
+            }
+            Section {
+                TextField("Download, kbit/s", text: $down).keyboardType(.numberPad)
+                TextField("Upload, kbit/s", text: $up).keyboardType(.numberPad)
+                TextField("Delay, ms", text: $latency).keyboardType(.numberPad)
+                Button("Apply") { sniffer.throttle = custom() }
+            } header: {
+                Text("Custom")
+            } footer: {
+                Text("Empty or 0 leaves that direction unlimited.")
+            }
+        }
+        .navigationTitle("Throttling")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { fill(sniffer.throttle) }
+    }
+
+    private func fill(_ settings: ThrottleSettings) {
+        down = settings.downKbps > 0 ? "\(settings.downKbps)" : ""
+        up = settings.upKbps > 0 ? "\(settings.upKbps)" : ""
+        latency = settings.latencyMs > 0 ? "\(settings.latencyMs)" : ""
+    }
+
+    private func custom() -> ThrottleSettings {
+        ThrottleSettings(preset: ThrottleSettings.custom, downKbps: Int(down) ?? 0, upKbps: Int(up) ?? 0,
+                         latencyMs: min(Int(latency) ?? 0, 10_000))
+    }
+}
+
+/// Map Local rules: requests they match are answered by the phone.
+struct MapLocalView: View {
+    @Environment(TrafficSniffer.self) private var sniffer
+
+    var body: some View {
+        @Bindable var sniffer = sniffer
+        List {
+            Section {
+                Text("A matching request over decrypted HTTPS gets this answer from the phone and never reaches the server. Hosts with rules are kept on HTTP/1.1. Changes apply to new connections.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if sniffer.mapRules.isEmpty {
+                Text("Open a request and choose Map locally, or add a rule here.").foregroundStyle(.secondary)
+            }
+            ForEach($sniffer.mapRules) { $rule in
+                NavigationLink { MapRuleView(rule: rule, isNew: false) } label: {
+                    Toggle(isOn: $rule.enabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: rule.host + (rule.path.isEmpty ? "/*" : rule.path)).lineLimit(1)
+                            Text(verbatim: "\(rule.status) · \(rule.contentType.isEmpty ? "—" : rule.contentType) · \(bytes(Int64(rule.body.utf8.count)))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .onDelete { sniffer.mapRules.remove(atOffsets: $0) }
+        }
+        .navigationTitle("Map Local")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink { MapRuleView(rule: MapRule(host: ""), isNew: true) } label: {
+                    Label("Add rule", systemImage: "plus")
+                }
+            }
+        }
+    }
+}
+
+/// One Map Local rule, new or existing.
+struct MapRuleView: View {
+    let rule: MapRule
+    let isNew: Bool
+    @Environment(TrafficSniffer.self) private var sniffer
+    @Environment(\.dismiss) private var dismiss
+    @State private var host = ""
+    @State private var path = ""
+    @State private var status = ""
+    @State private var type = ""
+    @State private var bodyText = ""
+    @State private var started = false
+
+    private var valid: Bool { TlsHostFilter.normalize(host) != nil && (100...599).contains(Int(status) ?? 0) }
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Host or pattern", text: $host, prompt: Text(verbatim: "api.example.com"))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                TextField("Path", text: $path, prompt: Text(verbatim: "/api/user*"))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+            } header: {
+                Text("Requests")
+            } footer: {
+                Text("Path: * stands for any characters; empty matches every path. The query is compared too when the path has one.")
+            }
+            Section("Answer") {
+                TextField("Status", text: $status).keyboardType(.numberPad)
+                TextField(text: $type) { Text(verbatim: "Content-Type") }
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("Body", text: $bodyText, axis: .vertical)
+                    .font(.caption.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .lineLimit(6...)
+            }
+            Section {
+                Button("Save", action: save).disabled(!valid)
+                if !isNew {
+                    Button("Delete", role: .destructive) {
+                        sniffer.mapRules.removeAll { $0.id == rule.id }
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .navigationTitle(isNew ? "New rule" : "Rule")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            guard !started else { return }
+            started = true
+            host = rule.host
+            path = rule.path
+            status = "\(rule.status)"
+            type = rule.contentType
+            bodyText = rule.body
+        }
+    }
+
+    private func save() {
+        guard let clean = TlsHostFilter.normalize(host) else { return }
+        var saved = rule
+        saved.host = clean
+        saved.path = path.trimmingCharacters(in: .whitespaces)
+        saved.status = Int(status) ?? 200
+        saved.contentType = type.trimmingCharacters(in: .whitespaces)
+        saved.body = bodyText
+        if let index = sniffer.mapRules.firstIndex(where: { $0.id == saved.id }) {
+            sniffer.mapRules[index] = saved
+        } else {
+            sniffer.mapRules.append(saved)
+        }
+        dismiss()
+    }
+}
+
+private func presetName(_ name: String) -> String {
+    switch name {
+    case "edge": "EDGE"
+    case "3g": "3G"
+    case "fast3g": String(localized: "Fast 3G")
+    case "4g": "4G"
+    default: name
+    }
+}
+
+private func rate(_ kbps: Int) -> String {
+    if kbps <= 0 { return String(localized: "unlimited") }
+    if kbps >= 1000 { return String(localized: "\(Double(kbps) / 1000, specifier: "%.1f") Mbit/s") }
+    return String(localized: "\(kbps) kbit/s")
+}
+
+private func throttleSummary(_ settings: ThrottleSettings) -> String {
+    switch settings.preset {
+    case ThrottleSettings.off: String(localized: "Off")
+    case ThrottleSettings.custom: String(localized: "Custom: \(rate(settings.downKbps)) down, \(rate(settings.upKbps)) up")
+    default: presetName(settings.preset)
+    }
+}
+
+@MainActor private func mapLocalSummary(_ sniffer: TrafficSniffer) -> String {
+    let on = sniffer.mapRules.filter(\.enabled).count
+    if sniffer.mapRules.isEmpty { return String(localized: "Answer chosen requests from the phone") }
+    if !sniffer.decryptTLS { return String(localized: "Rules on: \(on). Works only with Decrypt TLS on.") }
+    return String(localized: "Rules on: \(on)")
 }
 
 /// Every saved recording, newest first, with its time so two from the same day can be told apart.

@@ -24,7 +24,6 @@
       }
     },
     "%.1f Mbit/s": {
-      "extractionState": "stale",
       "localizations": {
         "ru": {
           "stringUnit": {
@@ -17167,6 +17166,356 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ · %@ · %@"
+          }
+        }
+      }
+    },
+    "Throttling": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ограничение скорости"
+          }
+        }
+      }
+    },
+    "Map Local": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Map Local"
+          }
+        }
+      }
+    },
+    "Repeat request": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторить запрос"
+          }
+        }
+      }
+    },
+    "Map locally": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подменить ответ (Map Local)"
+          }
+        }
+      }
+    },
+    "Method": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Метод"
+          }
+        }
+      }
+    },
+    "Headers, one per line": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заголовки, по одному в строке"
+          }
+        }
+      }
+    },
+    "The body is binary, %@, and is sent as recorded.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тело двоичное, %@, отправляется как записано."
+          }
+        }
+      }
+    },
+    "Send": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправить"
+          }
+        }
+      }
+    },
+    "Sent from this app. While recording, it shows up in the list like any other request.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправляется из этого приложения. Во время записи появится в списке, как любой другой запрос."
+          }
+        }
+      }
+    },
+    "Response body": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тело ответа"
+          }
+        }
+      }
+    },
+    "Custom": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Свои"
+          }
+        }
+      }
+    },
+    "Download %@, upload %@, delay %@. Applies to the recorded connections right away.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приём %@, отдача %@, задержка %@. Действует на записываемые соединения сразу."
+          }
+        }
+      }
+    },
+    "Connections go at full speed.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Соединения идут на полной скорости."
+          }
+        }
+      }
+    },
+    "Download, kbit/s": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приём, кбит/с"
+          }
+        }
+      }
+    },
+    "Upload, kbit/s": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отдача, кбит/с"
+          }
+        }
+      }
+    },
+    "Delay, ms": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Задержка, мс"
+          }
+        }
+      }
+    },
+    "Apply": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Применить"
+          }
+        }
+      }
+    },
+    "Empty or 0 leaves that direction unlimited.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пусто или 0 — без ограничения в эту сторону."
+          }
+        }
+      }
+    },
+    "A matching request over decrypted HTTPS gets this answer from the phone and never reaches the server. Hosts with rules are kept on HTTP/1.1. Changes apply to new connections.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подходящий запрос по расшифрованному HTTPS получает этот ответ от телефона и до сервера не доходит. Хосты с правилами остаются на HTTP/1.1. Изменения действуют на новые соединения."
+          }
+        }
+      }
+    },
+    "Open a request and choose Map locally, or add a rule here.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Откройте запрос и выберите «Подменить ответ» или добавьте правило здесь."
+          }
+        }
+      }
+    },
+    "Add rule": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавить правило"
+          }
+        }
+      }
+    },
+    "Path": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Путь"
+          }
+        }
+      }
+    },
+    "Requests": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запросы"
+          }
+        }
+      }
+    },
+    "Path: * stands for any characters; empty matches every path. The query is compared too when the path has one.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Путь: * означает любые символы, пусто — любой путь. Если в пути есть запрос (?…), сравнивается и он."
+          }
+        }
+      }
+    },
+    "Answer": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответ"
+          }
+        }
+      }
+    },
+    "New rule": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новое правило"
+          }
+        }
+      }
+    },
+    "Rule": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Правило"
+          }
+        }
+      }
+    },
+    "Fast 3G": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Быстрый 3G"
+          }
+        }
+      }
+    },
+    "unlimited": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "без ограничения"
+          }
+        }
+      }
+    },
+    "%lld kbit/s": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld кбит/с"
+          }
+        }
+      }
+    },
+    "Custom: %@ down, %@ up": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Свои: приём %@, отдача %@"
+          }
+        }
+      }
+    },
+    "Answer chosen requests from the phone": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отвечать на выбранные запросы с телефона"
+          }
+        }
+      }
+    },
+    "Rules on: %lld. Works only with Decrypt TLS on.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включено правил: %lld. Работает только с расшифровкой TLS."
+          }
+        }
+      }
+    },
+    "Rules on: %lld": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включено правил: %lld"
+          }
+        }
+      }
+    },
+    "Not a URL": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Это не URL"
           }
         }
       }

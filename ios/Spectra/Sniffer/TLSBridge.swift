@@ -44,6 +44,8 @@ nonisolated final class TLSBridge {
     private var originChose: String??
     /// The origin's TLS failed before the phone was answered: not the phone refusing our certificate.
     private(set) var originFailed = false
+    /// Answers requests Map Local rules match, on HTTP/1.1; nil forwards everything as it came.
+    private var gate: AcceptEncodingStrip?
 
     /// The origin's handshake runs first: the phone is answered only once the origin has chosen its protocol,
     /// and is offered exactly that one, so both legs speak the same HTTP version. `phoneContext` makes the
@@ -59,7 +61,8 @@ nonisolated final class TLSBridge {
         toServer: @escaping ([UInt8]) -> Void,
         onPhoneVerdict: @escaping (Bool) -> Void = { _ in },
         onProtocol: @escaping (String) -> Void = { _ in },
-        onOriginFailed: @escaping () -> Void = {}
+        onOriginFailed: @escaping () -> Void = {},
+        mapLocal: MapLocal? = nil
     ) throws {
         self.phoneContext = phoneContext
         self.onClientPlain = onClientPlain
@@ -72,6 +75,9 @@ nonisolated final class TLSBridge {
         self.onOriginFailed = onOriginFailed
 
         originSide = EmbeddedChannel(loop: loop)
+        if let mapLocal, !mapLocal.isEmpty {
+            gate = AcceptEncodingStrip(host: host, mapLocal: mapLocal, rewriteEncoding: false)
+        }
 
         // Origin side: open our own TLS to the origin, surface its response.
         let hostname = host.isEmpty || isIPLiteral(host) ? nil : host
@@ -134,6 +140,7 @@ nonisolated final class TLSBridge {
     /// The phone closed; tell the origin.
     func clientClosed() {
         guard !dead else { return }
+        if protocolName == Self.http1, let gate { for piece in gate.finish() { writeApp(originSide, piece) } }
         originSide.close(mode: .output, promise: nil)
         drain()
     }
@@ -182,9 +189,18 @@ nonisolated final class TLSBridge {
     private func clientPlain(_ bytes: [UInt8]) {
         snifferLog.debug("TLSBridge request plaintext \(bytes.count) B → origin")
         onClientPlain(bytes)
-        // The forwarded copy is where Accept-Encoding stripping will go (not yet
-        // ported); for now the request is forwarded unchanged to the origin.
-        writeApp(originSide, bytes)
+        guard protocolName == Self.http1, let gate else {
+            writeApp(originSide, bytes)
+            return
+        }
+        // Map Local: a matched request is answered here and its bytes never reach the origin.
+        var answers: [[UInt8]] = []
+        let pieces = gate.feed(bytes, onLocal: { answers.append($0) })
+        for piece in pieces { writeApp(originSide, piece) }
+        for answer in answers {
+            onServerPlain(answer)
+            if let phoneSide { writeApp(phoneSide, answer) }
+        }
     }
 
     private func serverPlain(_ bytes: [UInt8]) {

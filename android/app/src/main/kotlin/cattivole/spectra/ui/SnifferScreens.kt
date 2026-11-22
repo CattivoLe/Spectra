@@ -54,6 +54,15 @@ import cattivole.spectra.core.Har
 import cattivole.spectra.core.HttpAssembler
 import cattivole.spectra.core.Http2Assembler
 import cattivole.spectra.core.WsMessage
+import cattivole.spectra.core.MapRule
+import cattivole.spectra.core.RepeatRequest
+import cattivole.spectra.core.RepeatResult
+import cattivole.spectra.core.ThrottleSettings
+import cattivole.spectra.platform.RequestRepeater
+import androidx.compose.material.icons.rounded.Replay
+import androidx.compose.material.icons.rounded.Send
+import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import cattivole.spectra.core.TlsHostFilter
@@ -428,6 +437,27 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
                     }
                 },
             )
+            card(
+                key = "tools",
+                rows = listOf(
+                    {
+                        ListRow(
+                            title = tr("Throttling"),
+                            subtitle = throttleSummary(traffic.throttle),
+                            leading = { IconTile(Icons.Rounded.Speed, if (traffic.throttle.enabled) Spectra.colors.warning else MaterialTheme.colorScheme.secondary) },
+                            onClick = nav::trafficThrottle,
+                        )
+                    },
+                    {
+                        ListRow(
+                            title = tr("Map Local"),
+                            subtitle = mapLocalSummary(traffic),
+                            leading = { IconTile(Icons.Rounded.SwapHoriz, if (traffic.mapRules.any { it.enabled }) Spectra.colors.warning else MaterialTheme.colorScheme.secondary) },
+                            onClick = nav::trafficMapLocal,
+                        )
+                    },
+                ),
+            )
         }
         if (flows.isNotEmpty()) {
             item(key = "proto-filters") {
@@ -592,6 +622,42 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
                     )
                 }
                 if (http != null) {
+                    add {
+                        ActionRow(tr("Repeat request"), Icons.Rounded.Replay, onClick = {
+                            coroutines.launch {
+                                val body = withContext(Dispatchers.IO) {
+                                    if (http.requestBodyStored) traffic.body(sessionId, flow.id, exchange!!, true) else null
+                                }
+                                traffic.repeatDraft = RepeatRequest.from(flow, http, body)
+                                nav.trafficRepeat()
+                            }
+                        })
+                    }
+                    add {
+                        ActionRow(tr("Map locally"), Icons.Rounded.SwapHoriz, onClick = {
+                            coroutines.launch {
+                                val body = withContext(Dispatchers.IO) {
+                                    if (http.responseBodyStored) traffic.body(sessionId, flow.id, exchange!!, false) else null
+                                }
+                                val text = body?.let { BodyPreview.of(it, http.header("Content-Type", response = true)) }.let { view ->
+                                    when (view) {
+                                        is BodyView.Json -> view.text
+                                        is BodyView.Text -> view.text
+                                        else -> http.responseJson.orEmpty()
+                                    }
+                                }
+                                traffic.ruleDraft = MapRule(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    host = flow.host ?: flow.destination,
+                                    path = http.path,
+                                    status = http.status ?: 200,
+                                    contentType = http.header("Content-Type", response = true)?.substringBefore(';')?.trim() ?: "application/json",
+                                    body = text,
+                                )
+                                nav.trafficMapRule(null)
+                            }
+                        })
+                    }
                     add {
                         ActionRow(tr("Copy as cURL"), Icons.Rounded.Terminal, onClick = {
                             coroutines.launch {
@@ -1080,6 +1146,292 @@ fun TrafficMessageScreen(model: SpectraModel, nav: Navigator, flowId: Long, exch
 
 private const val PREVIEW_TEXT = 3_000
 private const val FULL_TEXT = 400_000
+
+/** Sends a request again, as recorded or edited, and shows what came back. */
+@Composable
+fun TrafficRepeatScreen(model: SpectraModel, nav: Navigator) {
+    model.generation
+    val traffic = model.traffic
+    val draft = traffic.repeatDraft
+    if (draft == null) {
+        SpectraScreen(tr("Repeat request"), onBack = nav::back, overlay = {
+            EmptyState(Icons.Rounded.Replay, tr("Gone"), tr("This connection is no longer in the list."))
+        }) {}
+        return
+    }
+    var method by rememberSaveable { mutableStateOf(draft.method) }
+    var url by rememberSaveable { mutableStateOf(draft.url) }
+    var headers by rememberSaveable { mutableStateOf(draft.headerText()) }
+    val textBody = draft.body?.let { body -> String(body, Charsets.UTF_8).takeIf { it.toByteArray(Charsets.UTF_8).contentEquals(body) } }
+    var body by rememberSaveable { mutableStateOf(textBody.orEmpty()) }
+    var sending by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<RepeatResult?>(null) }
+    val coroutines = rememberCoroutineScope()
+    val copy = rememberCopier()
+    fun send() {
+        sending = true
+        val request = RepeatRequest(
+            method = method.trim().uppercase().ifEmpty { "GET" },
+            url = url.trim(),
+            headers = RepeatRequest.parseHeaders(headers),
+            body = when {
+                draft.body != null && textBody == null -> draft.body
+                body.isEmpty() -> null
+                else -> body.toByteArray(Charsets.UTF_8)
+            },
+        )
+        coroutines.launch {
+            result = withContext(Dispatchers.IO) { RequestRepeater.send(request) }
+            sending = false
+        }
+    }
+    SpectraScreen(title = tr("Repeat request"), onBack = nav::back) {
+        freeCard(
+            key = "request",
+            header = tr("Request"),
+            footer = tr("Sent from this app. While recording, it shows up in the list like any other request."),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(method, { method = it.take(16) }, label = { Text(tr("Method")) }, singleLine = true, modifier = Modifier.weight(0.3f))
+                    OutlinedTextField(url, { url = it }, label = { Text("URL") }, singleLine = true, modifier = Modifier.weight(0.7f))
+                }
+                OutlinedTextField(headers, { headers = it }, label = { Text(tr("Headers, one per line")) },
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), modifier = Modifier.fillMaxWidth())
+                if (draft.body != null && textBody == null) {
+                    NoteRow(tr("The body is binary, %s, and is sent as recorded.", byteSize(draft.body.size.toLong())), warning = false)
+                } else {
+                    OutlinedTextField(body, { body = it }, label = { Text(tr("Body")) },
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), modifier = Modifier.fillMaxWidth())
+                }
+                TextButton(onClick = ::send, enabled = !sending && url.startsWith("http")) {
+                    Icon(Icons.Rounded.Send, null)
+                    Text(if (sending) tr("Sending…") else tr("Send"))
+                }
+            }
+        }
+        result?.let { answer ->
+            card(
+                header = tr("Response"),
+                key = "result",
+                rows = buildList {
+                    if (answer.error != null) add { NoteRow(answer.error, warning = true) }
+                    answer.status?.let { status -> add { InfoRow(tr("Status"), listOfNotNull(status.toString(), answer.statusText).joinToString(" "), mono = true) } }
+                    add { InfoRow(tr("Duration"), millis(answer.durationMs)) }
+                    add { InfoRow(tr("Size"), byteSize(answer.body.size.toLong())) }
+                    for (field in answer.headers) add { FieldRow(field) }
+                },
+            )
+            if (answer.body.isNotEmpty()) {
+                freeCard("result-body", header = tr("Response body")) {
+                    if (answer.cut) {
+                        NoteRow(tr("Only the first %s of this body were kept.", byteSize(HttpAssembler.RESPONSE_CAP.toLong())), warning = true)
+                    }
+                    val type = answer.headers.firstOrNull { it.name.equals("Content-Type", true) }?.value
+                    when (val view = remember(answer) { BodyPreview.of(answer.body, type) }) {
+                        is BodyView.Json -> MonoText(view.text, full = true, onOpen = null, copy = copy)
+                        is BodyView.Text -> MonoText(view.text, full = true, onOpen = null, copy = copy)
+                        is BodyView.Binary -> SelectionContainer {
+                            Text(view.hex, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                        }
+                        is BodyView.Image -> {
+                            val bitmap = remember(view) { BitmapFactory.decodeByteArray(view.bytes, 0, view.bytes.size) }
+                            if (bitmap != null) Image(bitmap.asImageBitmap(), null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth())
+                        }
+                        BodyView.Empty -> Unit
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** How fast connections may go while recording, like Throttle Settings in Charles. */
+@Composable
+fun TrafficThrottleScreen(model: SpectraModel, nav: Navigator) {
+    model.generation
+    val traffic = model.traffic
+    val current = traffic.throttle
+    var down by rememberSaveable { mutableStateOf(current.downKbps.takeIf { it > 0 }?.toString().orEmpty()) }
+    var up by rememberSaveable { mutableStateOf(current.upKbps.takeIf { it > 0 }?.toString().orEmpty()) }
+    var latency by rememberSaveable { mutableStateOf(current.latencyMs.takeIf { it > 0 }?.toString().orEmpty()) }
+    SpectraScreen(title = tr("Throttling"), onBack = nav::back) {
+        item(key = "presets") {
+            ChipRow(contentPadding = FilterChipPadding) {
+                ToggleChip(tr("Off"), !current.enabled, { traffic.setThrottle(ThrottleSettings()) })
+                ThrottleSettings.PRESETS.forEach { preset ->
+                    ToggleChip(presetName(preset.preset), current.preset == preset.preset, {
+                        traffic.setThrottle(preset)
+                        down = preset.downKbps.toString()
+                        up = preset.upKbps.toString()
+                        latency = preset.latencyMs.toString()
+                    })
+                }
+                ToggleChip(tr("Custom"), current.preset == ThrottleSettings.CUSTOM, {
+                    traffic.setThrottle(customThrottle(down, up, latency))
+                })
+            }
+        }
+        card(key = "throttle-note", rows = listOf {
+            NoteRow(
+                if (current.enabled) {
+                    tr("Download %s, upload %s, delay %s. Applies to the recorded connections right away.",
+                        rate(current.downKbps), rate(current.upKbps), millis(current.latencyMs.toLong()))
+                } else {
+                    tr("Connections go at full speed.")
+                },
+                warning = current.enabled,
+            )
+        })
+        freeCard(key = "custom", header = tr("Custom"), footer = tr("Empty or 0 leaves that direction unlimited.")) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(down, { down = it.filter(Char::isDigit).take(7) }, label = { Text(tr("Download, kbit/s")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(up, { up = it.filter(Char::isDigit).take(7) }, label = { Text(tr("Upload, kbit/s")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(latency, { latency = it.filter(Char::isDigit).take(5) }, label = { Text(tr("Delay, ms")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                TextButton(onClick = { traffic.setThrottle(customThrottle(down, up, latency)) }) { Text(tr("Apply")) }
+            }
+        }
+    }
+}
+
+private fun customThrottle(down: String, up: String, latency: String) = ThrottleSettings(
+    ThrottleSettings.CUSTOM,
+    downKbps = down.toIntOrNull() ?: 0,
+    upKbps = up.toIntOrNull() ?: 0,
+    latencyMs = latency.toIntOrNull() ?: 0,
+)
+
+private fun presetName(name: String): String = when (name) {
+    "edge" -> "EDGE"
+    "3g" -> "3G"
+    "fast3g" -> tr("Fast 3G")
+    "4g" -> "4G"
+    else -> name
+}
+
+private fun rate(kbps: Int): String = when {
+    kbps <= 0 -> tr("unlimited")
+    kbps >= 1000 -> tr("%.1f Mbit/s", kbps / 1000.0)
+    else -> tr("%d kbit/s", kbps)
+}
+
+private fun throttleSummary(settings: ThrottleSettings): String = when (settings.preset) {
+    ThrottleSettings.OFF -> tr("Off")
+    ThrottleSettings.CUSTOM -> tr("Custom: %s down, %s up", rate(settings.downKbps), rate(settings.upKbps))
+    else -> presetName(settings.preset)
+}
+
+private fun mapLocalSummary(traffic: TrafficSniffer): String {
+    val on = traffic.mapRules.count { it.enabled }
+    return when {
+        traffic.mapRules.isEmpty() -> tr("Answer chosen requests from the phone")
+        !traffic.decryptTls -> tr("Rules on: %d. Works only with Decrypt TLS on.", on)
+        else -> tr("Rules on: %d", on)
+    }
+}
+
+/** Map Local rules: requests they match are answered by the phone. */
+@Composable
+fun TrafficMapLocalScreen(model: SpectraModel, nav: Navigator) {
+    model.generation
+    val traffic = model.traffic
+    val rules = traffic.mapRules
+    SpectraScreen(
+        title = tr("Map Local"),
+        onBack = nav::back,
+        actions = {
+            IconButton(onClick = {
+                traffic.ruleDraft = MapRule(java.util.UUID.randomUUID().toString(), host = "", body = "")
+                nav.trafficMapRule(null)
+            }) { Icon(Icons.Rounded.Add, contentDescription = tr("Add rule")) }
+        },
+        overlay = {
+            if (rules.isEmpty()) {
+                EmptyState(Icons.Rounded.SwapHoriz, tr("No rules"), tr("Open a request and choose Map locally, or add a rule here."))
+            }
+        },
+    ) {
+        card(key = "map-note", rows = listOf {
+            NoteRow(
+                tr("A matching request over decrypted HTTPS gets this answer from the phone and never reaches the server. Hosts with rules are kept on HTTP/1.1. Changes apply to new connections."),
+                warning = false,
+            )
+        })
+        cardSection(rules, key = { it.id }, sectionKey = "rules") { rule ->
+            ListRow(
+                title = rule.host + rule.path.ifEmpty { "/*" },
+                subtitle = "${rule.status} · ${rule.contentType.ifBlank { "—" }} · ${byteSize(rule.body.toByteArray().size.toLong())}",
+                dimmed = !rule.enabled,
+                trailing = {
+                    Switch(checked = rule.enabled, onCheckedChange = { on ->
+                        traffic.setMapRules(rules.map { if (it.id == rule.id) it.copy(enabled = on) else it })
+                    })
+                },
+                onClick = { nav.trafficMapRule(rule.id) },
+            )
+        }
+    }
+}
+
+/** One Map Local rule, new or existing. */
+@Composable
+fun TrafficMapRuleScreen(model: SpectraModel, nav: Navigator, ruleId: String?) {
+    model.generation
+    val traffic = model.traffic
+    val existing = ruleId?.let { id -> traffic.mapRules.firstOrNull { it.id == id } }
+    val start = existing ?: traffic.ruleDraft ?: MapRule(java.util.UUID.randomUUID().toString(), host = "")
+    var host by rememberSaveable { mutableStateOf(start.host) }
+    var path by rememberSaveable { mutableStateOf(start.path) }
+    var status by rememberSaveable { mutableStateOf(start.status.toString()) }
+    var type by rememberSaveable { mutableStateOf(start.contentType) }
+    var body by rememberSaveable { mutableStateOf(start.body) }
+    val valid = TlsHostFilter.normalize(host) != null && (status.toIntOrNull() ?: 0) in 100..599
+    fun save() {
+        val rule = start.copy(
+            host = TlsHostFilter.normalize(host) ?: return,
+            path = path.trim(),
+            status = status.toIntOrNull() ?: 200,
+            contentType = type.trim(),
+            body = body,
+        )
+        val rules = traffic.mapRules
+        traffic.setMapRules(if (rules.any { it.id == rule.id }) rules.map { if (it.id == rule.id) rule else it } else rules + rule)
+        traffic.ruleDraft = null
+        nav.back()
+    }
+    SpectraScreen(
+        title = if (existing == null) tr("New rule") else tr("Rule"),
+        onBack = nav::back,
+        actions = {
+            if (existing != null) {
+                IconButton(onClick = {
+                    traffic.setMapRules(traffic.mapRules.filterNot { it.id == existing.id })
+                    nav.back()
+                }) { Icon(Icons.Rounded.Delete, contentDescription = tr("Delete")) }
+            }
+        },
+    ) {
+        freeCard(key = "match", header = tr("Requests"), footer = tr("Path: * stands for any characters; empty matches every path. The query is compared too when the path has one.")) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(host, { host = it.take(253) }, label = { Text(tr("Host or pattern")) }, placeholder = { Text("api.example.com") },
+                    singleLine = true, isError = host.isNotBlank() && TlsHostFilter.normalize(host) == null, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(path, { path = it }, label = { Text(tr("Path")) }, placeholder = { Text("/api/user*") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+        }
+        freeCard(key = "answer", header = tr("Answer")) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(status, { status = it.filter(Char::isDigit).take(3) }, label = { Text(tr("Status")) }, singleLine = true, modifier = Modifier.weight(0.3f))
+                    OutlinedTextField(type, { type = it }, label = { Text("Content-Type") }, singleLine = true, modifier = Modifier.weight(0.7f))
+                }
+                OutlinedTextField(body, { body = it }, label = { Text(tr("Body")) },
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp))
+                TextButton(onClick = ::save, enabled = valid) { Text(tr("Save")) }
+            }
+        }
+    }
+}
 
 /** Which hosts get decrypted, like SSL Proxying in Charles. */
 @Composable

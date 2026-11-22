@@ -47,6 +47,14 @@ final class TrafficSniffer {
     var hostFilter: TlsHostFilter {
         didSet { hostFilter.save(defaults) }
     }
+    /// How fast connections may go while recording, like Throttle Settings in Charles.
+    var throttle: ThrottleSettings {
+        didSet { throttle.save(defaults) }
+    }
+    /// Map Local rules: requests they match are answered by the phone itself.
+    var mapRules: [MapRule] {
+        didSet { MapRule.save(mapRules, defaults) }
+    }
 
     private var manager: NETunnelProviderManager?
     private var pollTask: Task<Void, Never>?
@@ -62,6 +70,8 @@ final class TrafficSniffer {
     init() {
         decryptTLS = UserDefaults(suiteName: TrafficSniffer.appGroup)?.bool(forKey: Self.tlsKey) ?? false
         hostFilter = TlsHostFilter.load(UserDefaults(suiteName: TrafficSniffer.appGroup))
+        throttle = ThrottleSettings.load(UserDefaults(suiteName: TrafficSniffer.appGroup))
+        mapRules = MapRule.load(UserDefaults(suiteName: TrafficSniffer.appGroup))
         loadSaved()
         refreshCA()
         // The tunnel outlives the app: after a relaunch, pick up one that is still recording, so it can be

@@ -5,6 +5,8 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import cattivole.spectra.core.MapRule
+import cattivole.spectra.core.ThrottleSettings
 import cattivole.spectra.core.TlsHostFilter
 import cattivole.spectra.core.TrafficBodies
 import cattivole.spectra.core.TrafficFlow
@@ -32,6 +34,12 @@ internal object CaptureBus {
 
     /** Which hosts are decrypted. Read by the proxy for every new TLS connection. */
     val hostFilter: AtomicReference<TlsHostFilter> = AtomicReference(TlsHostFilter())
+
+    /** How fast connections may go while recording. */
+    val throttle: AtomicReference<ThrottleSettings> = AtomicReference(ThrottleSettings())
+
+    /** Map Local rules, for new decrypted connections. */
+    val mapRules: AtomicReference<List<MapRule>> = AtomicReference(emptyList())
 
     /** Where the live recording writes HTTP bodies. */
     @Volatile
@@ -151,6 +159,8 @@ class TrafficSniffer(context: Context) {
             ),
         )
         CaptureBus.bodies = liveBodies
+        CaptureBus.throttle.set(ThrottleSettings.fromJson(prefs.getString(KEY_THROTTLE, null)))
+        CaptureBus.mapRules.set(MapRule.listFromJson(prefs.getString(KEY_MAP_LOCAL, null)))
         running = CaptureBus.running
         flows = CaptureBus.flows
         startedAt = CaptureBus.startedAt
@@ -207,6 +217,30 @@ class TrafficSniffer(context: Context) {
             .putString(KEY_TLS_EXCEPT, filter.except.joinToString("\n"))
             .apply()
         CaptureBus.hostFilter.set(filter)
+        changed()
+    }
+
+    /** How fast connections may go while recording, like Throttle Settings in Charles. */
+    val throttle: ThrottleSettings get() = CaptureBus.throttle.get()
+
+    fun setThrottle(settings: ThrottleSettings) {
+        prefs.edit().putString(KEY_THROTTLE, settings.toJson()).apply()
+        CaptureBus.throttle.set(settings)
+        changed()
+    }
+
+    /** The request the Repeat screen opens with. */
+    var repeatDraft: cattivole.spectra.core.RepeatRequest? = null
+
+    /** The rule a new Map Local rule screen opens with, made from a recorded response. */
+    var ruleDraft: MapRule? = null
+
+    /** Map Local rules: requests they match are answered by the phone itself. */
+    val mapRules: List<MapRule> get() = CaptureBus.mapRules.get()
+
+    fun setMapRules(rules: List<MapRule>) {
+        prefs.edit().putString(KEY_MAP_LOCAL, MapRule.listToJson(rules)).apply()
+        CaptureBus.mapRules.set(rules)
         changed()
     }
 
@@ -312,5 +346,7 @@ class TrafficSniffer(context: Context) {
         const val KEY_TLS_MODE = "traffic_tls_mode"
         const val KEY_TLS_ONLY = "traffic_tls_only"
         const val KEY_TLS_EXCEPT = "traffic_tls_except"
+        const val KEY_THROTTLE = "traffic_throttle"
+        const val KEY_MAP_LOCAL = "traffic_map_local"
     }
 }

@@ -1680,3 +1680,38 @@ Time	Время
 Compression	Сжатие
 Only the start of this message was kept.	Сохранено только начало сообщения.
 This message is empty.	Сообщение пустое.
+%d kbit/s	%d кбит/с
+A matching request over decrypted HTTPS gets this answer from the phone and never reaches the server. Hosts with rules are kept on HTTP/1.1. Changes apply to new connections.	Подходящий запрос по расшифрованному HTTPS получает этот ответ от телефона и до сервера не доходит. Хосты с правилами остаются на HTTP/1.1. Изменения действуют на новые соединения.
+Add rule	Добавить правило
+Answer	Ответ
+Answer chosen requests from the phone	Отвечать на выбранные запросы с телефона
+Apply	Применить
+Connections go at full speed.	Соединения идут на полной скорости.
+Custom	Свои
+Custom: %s down, %s up	Свои: приём %s, отдача %s
+Delay, ms	Задержка, мс
+Download %s, upload %s, delay %s. Applies to the recorded connections right away.	Приём %s, отдача %s, задержка %s. Действует на записываемые соединения сразу.
+Download, kbit/s	Приём, кбит/с
+Empty or 0 leaves that direction unlimited.	Пусто или 0 — без ограничения в эту сторону.
+Fast 3G	Быстрый 3G
+Headers, one per line	Заголовки, по одному в строке
+Map Local	Map Local
+Map locally	Подменить ответ (Map Local)
+Method	Метод
+New rule	Новое правило
+No rules	Правил нет
+Open a request and choose Map locally, or add a rule here.	Откройте запрос и выберите «Подменить ответ» или добавьте правило здесь.
+Path	Путь
+Path: * stands for any characters; empty matches every path. The query is compared too when the path has one.	Путь: * означает любые символы, пусто — любой путь. Если в пути есть запрос (?…), сравнивается и он.
+Repeat request	Повторить запрос
+Requests	Запросы
+Response body	Тело ответа
+Rule	Правило
+Rules on: %d	Включено правил: %d
+Rules on: %d. Works only with Decrypt TLS on.	Включено правил: %d. Работает только с расшифровкой TLS.
+Sending…	Отправка…
+Sent from this app. While recording, it shows up in the list like any other request.	Отправляется из этого приложения. Во время записи появится в списке, как любой другой запрос.
+The body is binary, %s, and is sent as recorded.	Тело двоичное, %s, отправляется как записано.
+Throttling	Ограничение скорости
+Upload, kbit/s	Отдача, кбит/с
+unlimited	без ограничения

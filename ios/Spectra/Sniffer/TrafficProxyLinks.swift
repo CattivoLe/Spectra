@@ -28,6 +28,12 @@ final class TCPLink {
 
     private var outbound: [[UInt8]] = []   // pending bytes for the upstream (pre-connect)
     private var inbound: [[UInt8]] = []     // bytes waiting to be sent to the phone
+    /// When each `inbound` chunk may go to the phone: now, or later by the throttle's delay.
+    private var inboundReady: [Int64] = []
+    /// Bytes for the upstream held back by the throttle, in order.
+    private var upQueue: [[UInt8]] = []
+    /// The phone finished sending while `upQueue` still held data: the FIN goes after it.
+    private var finPending = false
     private var unackedBytes = 0
     private var prelude: [UInt8] = []
     /// HTTP/1.1 until a decrypted connection turns out to speak HTTP/2.
@@ -101,13 +107,51 @@ final class TCPLink {
         guard connected, let conn = connection else { return }
         let pending = outbound
         outbound.removeAll(keepingCapacity: true)
-        for chunk in pending {
-            conn.send(content: Data(chunk), completion: .contentProcessed { [weak self] error in
-                guard let self, error != nil else { return }
-                self.proxy.loop.execute { self.fail() }
-            })
+        for chunk in pending { sendUpstream(chunk) }
+        if clientFin {
+            if upQueue.isEmpty { conn.send(content: nil, isComplete: true, completion: .contentProcessed { _ in }) } else { finPending = true }
         }
-        if clientFin { conn.send(content: nil, isComplete: true, completion: .contentProcessed { _ in }) }
+    }
+
+    private func send(_ conn: NWConnection, _ bytes: [UInt8]) {
+        conn.send(content: Data(bytes), completion: .contentProcessed { [weak self] error in
+            guard let self, error != nil else { return }
+            self.proxy.loop.execute { self.fail() }
+        })
+    }
+
+    /// Sends what the throttle allows of `upQueue`; the rest waits for the proxy's next tick.
+    private func flushUp() {
+        guard connected, let conn = connection else { return }
+        let now = TrafficProxyNow()
+        while !upQueue.isEmpty {
+            let chunk = upQueue[0]
+            let allowed = proxy.throttle?.up.take(chunk.count, now: now) ?? chunk.count
+            if allowed <= 0 { proxy.holdBack(self); return }
+            send(conn, Array(chunk[0..<allowed]))
+            if allowed < chunk.count {
+                upQueue[0] = Array(chunk[allowed...])
+                proxy.holdBack(self)
+                return
+            }
+            upQueue.removeFirst()
+        }
+        if finPending {
+            finPending = false
+            conn.send(content: nil, isComplete: true, completion: .contentProcessed { _ in })
+        }
+    }
+
+    /// The throttle let more through: carry on in both directions.
+    func resume() {
+        if flow.closed { return }
+        flushUp()
+        pumpToClient()
+    }
+
+    private func queueInbound(_ bytes: [UInt8]) {
+        inbound.append(bytes)
+        inboundReady.append(TrafficProxyNow() + (proxy.throttle?.latencyMs ?? 0))
     }
 
     private func receiveLoop() {
@@ -122,7 +166,7 @@ final class TCPLink {
                         bridge.fromServer(bytes)
                     } else {
                         self.noteServer(bytes)
-                        self.inbound.append(bytes)
+                        self.queueInbound(bytes)
                         self.flow.received += Int64(bytes.count); self.flow.lastAt = TrafficProxyNow(); self.proxy.markDirty()
                         self.pumpToClient()
                     }
@@ -140,10 +184,12 @@ final class TCPLink {
 
     private func sendUpstream(_ bytes: [UInt8]) {
         if connected, let conn = connection {
-            conn.send(content: Data(bytes), completion: .contentProcessed { [weak self] error in
-                guard let self, error != nil else { return }
-                self.proxy.loop.execute { self.fail() }
-            })
+            if proxy.throttle?.up.limited == true || !upQueue.isEmpty {
+                upQueue.append(bytes)
+                flushUp()
+            } else {
+                send(conn, bytes)
+            }
         } else {
             outbound.append(bytes)
         }
@@ -189,7 +235,10 @@ final class TCPLink {
                 clientFin = true
                 theirNext = theirNext &+ 1
                 if let bridge = mitm { bridge.clientClosed() }
-                else if connected { connection?.send(content: nil, isComplete: true, completion: .contentProcessed { _ in }) }
+                else if connected {
+                    if upQueue.isEmpty { connection?.send(content: nil, isComplete: true, completion: .contentProcessed { _ in }) }
+                    else { finPending = true }
+                }
             }
         }
         if !payload.isEmpty || tcp.flags & IPCodec.FIN != 0 { sendAck() }
@@ -232,8 +281,11 @@ final class TCPLink {
         proxy.phase("mitm \(host)")
         defer { proxy.phase("packet") }
         do {
-            // HTTP/2 is offered to the origin only when the phone asked for it; the phone then gets what the origin chose.
-            let offer = TrafficHints.tlsAlpn(hello).contains(TLSBridge.h2) ? [TLSBridge.h2, TLSBridge.http1] : [TLSBridge.http1]
+            // HTTP/2 is offered to the origin only when the phone asked for it; the phone then gets what the origin
+            // chose. A host with Map Local rules stays on HTTP/1.1, where single requests can be answered here.
+            let mapLocal = MapLocal(proxy.mapRules())
+            let wantsH2 = TrafficHints.tlsAlpn(hello).contains(TLSBridge.h2) && !mapLocal.covers(host: sni)
+            let offer = wantsH2 ? [TLSBridge.h2, TLSBridge.http1] : [TLSBridge.http1]
             let bridge = try TLSBridge(
                 host: host,
                 phoneContext: { chosen in try ca.makeServerContext(for: host, protocols: [chosen]) },
@@ -241,7 +293,7 @@ final class TCPLink {
                 onClientPlain: { [weak self] in self?.http.client($0); self?.applyHTTP() },
                 onServerPlain: { [weak self] in self?.http.server($0); self?.applyHTTP() },
                 onServerClosed: { [weak self] in self?.http.serverClosed(); self?.applyHTTP() },
-                toClient: { [weak self] in self?.inbound.append($0); self?.pumpToClient() },
+                toClient: { [weak self] in self?.queueInbound($0); self?.pumpToClient() },
                 toServer: { [weak self] in self?.sendUpstream($0) },
                 onPhoneVerdict: { [weak self] accepted in
                     guard let self else { return }
@@ -256,7 +308,8 @@ final class TCPLink {
                     // The origin's TLS failed before the phone was answered: nothing to read, the phone gets a reset.
                     guard let self else { return }
                     self.proxy.loop.execute { self.fail() }
-                }
+                },
+                mapLocal: mapLocal.isEmpty ? nil : mapLocal
             )
             mitm = bridge
             held = nil
@@ -281,11 +334,20 @@ final class TCPLink {
     private func pumpToClient() {
         if flow.closed { return }
         var room = clientWindow - unackedBytes
+        let now = TrafficProxyNow()
+        let limit = proxy.throttle
         while room > 0 && !inbound.isEmpty {
+            if inboundReady[0] > now { proxy.holdBack(self); break }
+            let wanted = min(inbound[0].count, min(room, mss()))
+            let size = limit?.down.take(wanted, now: now) ?? wanted
+            if size <= 0 { proxy.holdBack(self); break }
             var chunk = inbound.removeFirst()
-            let size = min(chunk.count, min(room, mss()))
+            let ready = inboundReady.removeFirst()
             let piece = Array(chunk[0..<size])
-            if size != chunk.count { inbound.insert(Array(chunk[size...]), at: 0) }
+            if size != chunk.count {
+                inbound.insert(Array(chunk[size...]), at: 0)
+                inboundReady.insert(ready, at: 0)
+            }
             emit(seq: ourSeq, flags: IPCodec.ACK | IPCodec.PSH, payload: piece, advance: true)
             unackedBytes += size
             room -= size

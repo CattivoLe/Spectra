@@ -27,6 +27,14 @@ nonisolated final class TrafficProxy {
     private let decryptTLS: () -> Bool
     private let certificate: () -> LocalCertificateAuthority?
     private let hostFilter: () -> TlsHostFilter
+    private let throttleSettings: () -> ThrottleSettings
+    let mapRules: () -> [MapRule]
+    /// The buckets for the settings in force; rebuilt when the settings change. Loop only.
+    private(set) var throttle: Throttle?
+    private var throttleFor: ThrottleSettings?
+    /// Links holding data back for the throttle, and whether a tick to resume them is scheduled.
+    private var heldBack: [ObjectIdentifier: TCPLink] = [:]
+    private var tickScheduled = false
     /// Where finished HTTP bodies are written; nil keeps none. Writes go to their own queue, off the loop.
     private let bodies: TrafficBodies?
     private let bodyQueue = DispatchQueue(label: "cattivole.spectra.proxy.bodies", qos: .utility)
@@ -66,9 +74,13 @@ nonisolated final class TrafficProxy {
         certificate: @escaping () -> LocalCertificateAuthority?,
         hostFilter: @escaping () -> TlsHostFilter = { TlsHostFilter() },
         bodies: TrafficBodies? = nil,
+        throttle: @escaping () -> ThrottleSettings = { ThrottleSettings() },
+        mapRules: @escaping () -> [MapRule] = { [] },
         onFlows: @escaping ([TrafficFlow]) -> Void
     ) {
         self.hostFilter = hostFilter
+        self.throttleSettings = throttle
+        self.mapRules = mapRules
         self.bodies = bodies
         self.loop = group.next()
         self.writer = writer
@@ -119,7 +131,31 @@ nonisolated final class TrafficProxy {
 
     // MARK: Dispatch
 
+    /// Holds `link` until the next throttle tick, about 10 ms away.
+    func holdBack(_ link: TCPLink) {
+        heldBack[ObjectIdentifier(link)] = link
+        guard !tickScheduled else { return }
+        tickScheduled = true
+        loop.scheduleTask(in: .milliseconds(10)) { [weak self] in
+            guard let self else { return }
+            self.tickScheduled = false
+            self.refreshThrottle()
+            let waiting = Array(self.heldBack.values)
+            self.heldBack.removeAll(keepingCapacity: true)
+            for link in waiting { link.resume() }
+            self.publish(force: false)
+        }
+    }
+
+    private func refreshThrottle() {
+        let settings = throttleSettings()
+        guard settings != throttleFor else { return }
+        throttleFor = settings
+        throttle = settings.enabled ? Throttle(settings) : nil
+    }
+
     private func process(_ raw: [UInt8]) {
+        refreshThrottle()
         guard let ip = IPCodec.parse(raw), IPCodec.unicast(ip.dst) else { return }
         switch ip.protocolNumber {
         case IPCodec.tcp:

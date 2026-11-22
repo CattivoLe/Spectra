@@ -29,6 +29,8 @@ class TlsBridge(
     private val toServer: (ByteArray) -> Unit,
     offerHttp2: Boolean = false,
     private val onProtocol: (String) -> Unit = {},
+    /** Requests these rules match are answered here and never reach the server (HTTP/1.1 only). */
+    mapLocal: MapLocal? = null,
 ) {
     private val clientEngine = clientContext.createSSLEngine().also { engine ->
         engine.useClientMode = false
@@ -49,7 +51,10 @@ class TlsBridge(
         private set
     private val fromClient = PacketBuf()
     private val fromServer = PacketBuf()
-    private val requests = AcceptEncodingStrip()
+    private val requests = AcceptEncodingStrip(host, mapLocal, onLocal = { answer ->
+        toClientApp.add(ByteBuffer.wrap(answer))
+        onServerPlain(answer)
+    })
     private val toServerApp = ArrayDeque<ByteBuffer>()
     private val toClientApp = ArrayDeque<ByteBuffer>()
     private var dead = false

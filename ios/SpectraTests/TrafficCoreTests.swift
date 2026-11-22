@@ -529,6 +529,86 @@ struct TrafficCoreTests {
         #expect(TrafficHints.tlsAlpn(bytes("GET / HTTP/1.1")).isEmpty)
     }
 
+    @Test func mapLocalAnswersMatchingRequestsInsteadOfTheServer() throws {
+        let rule = MapRule(id: "r1", host: "*.example.com", path: "/api/user*", status: 201, contentType: "application/json", body: #"{"name":"local"}"#)
+        let local = MapLocal([rule, MapRule(id: "off", enabled: false, host: "other.com")])
+        #expect(local.covers(host: "api.example.com"))
+        #expect(!local.covers(host: "other.com"))
+        #expect(local.rule(host: "api.example.com", target: "/api/user/7?full=1") == rule)
+        #expect(local.rule(host: "api.example.com", target: "/api/orders") == nil)
+        #expect(MapRule(host: "example.com", path: "/a").matches(host: "example.com", target: "/a?x=1"))
+        #expect(MapRule(host: "example.com").matches(host: "example.com", target: "/anything"))
+
+        var answers: [[UInt8]] = []
+        let strip = AcceptEncodingStrip(host: "api.example.com", mapLocal: local, rewriteEncoding: false)
+        let mapped = "POST /api/user HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: 5\r\n\r\nhello"
+        let passed = "GET /api/orders HTTP/1.1\r\nHost: api.example.com\r\nAccept-Encoding: gzip\r\n\r\n"
+        let forwarded = strip.feed(bytes(mapped + passed), onLocal: { answers.append($0) }).flatMap { $0 }
+        #expect(String(decoding: forwarded, as: UTF8.self) == passed)
+        let answer = String(decoding: try #require(answers.first), as: UTF8.self)
+        #expect(answers.count == 1)
+        #expect(answer.hasPrefix("HTTP/1.1 201 Created\r\n"))
+        #expect(answer.contains("Content-Length: 16\r\n"))
+        #expect(answer.contains("\(MapLocal.header): *.example.com/api/user*"))
+        #expect(answer.hasSuffix(#"{"name":"local"}"#))
+        let r = Recorder()
+        r.client(bytes(mapped))
+        r.server(answers[0])
+        #expect(r.exchanges()[0].status == 201)
+        #expect(r.exchanges()[0].header(MapLocal.header, response: true) != nil)
+        #expect(String(decoding: MapLocal.response(rule, method: "HEAD"), as: UTF8.self).hasSuffix("\r\n\r\n"))
+        let defaults = try #require(UserDefaults(suiteName: "spectra-tests-\(UUID().uuidString)"))
+        MapRule.save([rule], defaults)
+        #expect(MapRule.load(defaults) == [rule])
+    }
+
+    @Test func throttleBucketsPaceBytes() throws {
+        let preset = ThrottleSettings.preset("3g")
+        #expect(preset.downKbps == 780 && preset.enabled)
+        let defaults = try #require(UserDefaults(suiteName: "spectra-tests-\(UUID().uuidString)"))
+        #expect(!ThrottleSettings.load(defaults).enabled)
+        preset.save(defaults)
+        #expect(ThrottleSettings.load(defaults) == preset)
+        let throttle = Throttle(ThrottleSettings(preset: ThrottleSettings.custom, downKbps: 800, upKbps: 0, latencyMs: 120))
+        #expect(throttle.latencyMs == 120)
+        // 800 kbit/s is 100 bytes a millisecond; the bucket holds 50 ms of that.
+        #expect(throttle.down.take(100_000, now: 1_000) == 5_000)
+        #expect(throttle.down.take(100, now: 1_000) == 0)
+        #expect(throttle.down.take(100_000, now: 1_010) == 1_000)
+        #expect(throttle.up.take(100_000, now: 1_010) == 100_000)
+        #expect(Throttle(ThrottleSettings()).latencyMs == 0)
+    }
+
+    @Test func repeatRequestKeepsWhatTheServerNeeds() {
+        let exchange = HttpExchange(
+            method: "POST", path: "/api", query: [],
+            requestHeaders: [
+                HttpField(name: ":authority", value: "example.com"), HttpField(name: "Host", value: "example.com"),
+                HttpField(name: "Content-Length", value: "3"), HttpField(name: "Authorization", value: "Bearer x"),
+                HttpField(name: "Content-Encoding", value: "gzip"), HttpField(name: "Connection", value: "keep-alive"),
+            ],
+            parameters: [], status: 200, responseHeaders: [], target: "/api?x=1"
+        )
+        let flow = TrafficFlow(id: 1, proto: "TCP", source: "10.0.0.1", sourcePort: 1, destination: "1.2.3.4",
+                               destinationPort: 443, host: "example.com", tls: true, startedAt: 0, lastAt: 0)
+        let again = RepeatRequest.from(flow, exchange, body: Data("abc".utf8))
+        #expect(again.url == "https://example.com/api?x=1")
+        #expect(again.headers.map(\.name) == ["Authorization"])
+        #expect(again.headerText == "Authorization: Bearer x")
+        #expect(RepeatRequest.parseHeaders("X-A: 1 2\nnot a header\nY:\nHost: h") == [HttpField(name: "X-A", value: "1 2"), HttpField(name: "Y", value: "")])
+        #expect(RepeatRequest.from(flow, exchange, body: Data()).body == nil)
+    }
+
+    @Test func acceptEncodingStripStepsAsideAfterAnUpgrade() {
+        let strip = AcceptEncodingStrip()
+        let frame: [UInt8] = [0x81, 0x82, 1, 2, 3, 4, 0x69 ^ 1, 0x69 ^ 2]
+        let out = strip.feed(bytes("GET /chat HTTP/1.1\r\nHost: h\r\nUpgrade: websocket\r\n\r\n") + frame).flatMap { $0 }
+        #expect(Array(out.suffix(frame.count)) == frame)
+        #expect(strip.feed(frame).flatMap { $0 } == frame)
+        let other = AcceptEncodingStrip()
+        #expect(other.feed([0x16, 3, 3, 0, 5]).flatMap { $0 } == [0x16, 3, 3, 0, 5])
+    }
+
     private func harLog(_ text: String) throws -> [String: Any] {
         let object = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
         return try #require(object?["log"] as? [String: Any])

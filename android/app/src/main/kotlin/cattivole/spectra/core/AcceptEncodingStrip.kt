@@ -7,8 +7,20 @@ import kotlin.math.min
  * Rewrites cleartext requests so the server sends an uncompressed body.
  * `Accept-Encoding` becomes `identity`. The bytes the phone sent are left
  * untouched for the recording; only the copy forwarded to the server changes.
+ *
+ * With [mapLocal], a request a rule matches is not forwarded at all, body
+ * included: [onLocal] gets the response to give the phone instead. Responses go
+ * out in order only while the phone waits for each answer before the next
+ * request, as HTTP/1.1 clients do (pipelining is practically unused).
  */
-class AcceptEncodingStrip {
+class AcceptEncodingStrip(
+    private val host: String? = null,
+    private val mapLocal: MapLocal? = null,
+    private val onLocal: (ByteArray) -> Unit = {},
+    private val rewriteEncoding: Boolean = true,
+) {
+    /** The body being read belongs to a request answered locally: it is dropped, not forwarded. */
+    private var dropping = false
     private val pending = ByteArrayOutputStream()
     private var mode = Mode.HEADERS
     private var fixedLeft = 0
@@ -62,7 +74,18 @@ class AcceptEncodingStrip {
                         offset = buf.size
                         break
                     }
-                    out += (rewrite(text) + "\r\n\r\n").toByteArray(Charsets.ISO_8859_1)
+                    dropping = false
+                    val target = first.split(' ').getOrNull(1).orEmpty()
+                    val rule = if (method != "CONNECT") mapLocal?.ruleFor(host, target) else null
+                    if (rule != null) {
+                        onLocal(MapLocal.response(rule, method))
+                        offset = end + HEADER_END.size
+                        mode = bodyMode(text)
+                        dropping = mode != Mode.HEADERS
+                        continue
+                    }
+                    val sent = if (rewriteEncoding) rewrite(text) else text
+                    out += (sent + "\r\n\r\n").toByteArray(Charsets.ISO_8859_1)
                     offset = end + HEADER_END.size
                     if (method == "CONNECT" || text.contains("\r\nUpgrade:", ignoreCase = true)) {
                         passthrough = true
@@ -74,7 +97,7 @@ class AcceptEncodingStrip {
                 }
                 Mode.FIXED -> {
                     val take = min(fixedLeft, buf.size - offset)
-                    if (take > 0) out += buf.copyOfRange(offset, offset + take)
+                    if (take > 0) keep(out, buf.copyOfRange(offset, offset + take))
                     offset += take
                     fixedLeft -= take
                     if (fixedLeft == 0) mode = Mode.HEADERS else break
@@ -83,12 +106,12 @@ class AcceptEncodingStrip {
                     val end = indexOf(buf, offset, LINE_END)
                     if (end < 0) break
                     val line = String(buf, offset, end - offset, Charsets.US_ASCII).substringBefore(';').trim()
-                    out += buf.copyOfRange(offset, end + LINE_END.size)
+                    keep(out, buf.copyOfRange(offset, end + LINE_END.size))
                     offset = end + LINE_END.size
                     val size = line.toIntOrNull(16)
                     if (size == null) {
                         passthrough = true
-                        if (offset < buf.size) out += buf.copyOfRange(offset, buf.size)
+                        if (offset < buf.size) keep(out, buf.copyOfRange(offset, buf.size))
                         offset = buf.size
                     } else if (size == 0) {
                         mode = Mode.CHUNK_TRAILERS
@@ -99,26 +122,26 @@ class AcceptEncodingStrip {
                 }
                 Mode.CHUNK_DATA -> {
                     val take = min(chunkLeft, buf.size - offset)
-                    if (take > 0) out += buf.copyOfRange(offset, offset + take)
+                    if (take > 0) keep(out, buf.copyOfRange(offset, offset + take))
                     offset += take
                     chunkLeft -= take
                     if (chunkLeft == 0) mode = Mode.CHUNK_CRLF else break
                 }
                 Mode.CHUNK_CRLF -> {
                     if (buf.size - offset < 2) break
-                    out += buf.copyOfRange(offset, offset + 2)
+                    keep(out, buf.copyOfRange(offset, offset + 2))
                     offset += 2
                     mode = Mode.CHUNK_SIZE
                 }
                 Mode.CHUNK_TRAILERS -> {
                     if (buf.size - offset >= 2 && buf[offset] == 13.toByte() && buf[offset + 1] == 10.toByte()) {
-                        out += buf.copyOfRange(offset, offset + 2)
+                        keep(out, buf.copyOfRange(offset, offset + 2))
                         offset += 2
                         mode = Mode.HEADERS
                     } else {
                         val end = indexOf(buf, offset, HEADER_END)
                         if (end < 0) break
-                        out += buf.copyOfRange(offset, end + HEADER_END.size)
+                        keep(out, buf.copyOfRange(offset, end + HEADER_END.size))
                         offset = end + HEADER_END.size
                         mode = Mode.HEADERS
                     }
@@ -127,6 +150,10 @@ class AcceptEncodingStrip {
         }
         if (offset < buf.size) pending.write(buf, offset, buf.size - offset)
         return out
+    }
+
+    private fun keep(out: MutableList<ByteArray>, bytes: ByteArray) {
+        if (!dropping) out += bytes
     }
 
     private enum class Mode { HEADERS, FIXED, CHUNK_SIZE, CHUNK_DATA, CHUNK_CRLF, CHUNK_TRAILERS }
