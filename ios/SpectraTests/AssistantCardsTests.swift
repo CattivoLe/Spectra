@@ -383,3 +383,21 @@ struct AssistantCardsTests {
         #expect(AssistantText.polish("Plain text") == "Plain text")
     }
 }
+
+/// The dossier is gone: its file is deleted at start, and nothing else in the folder is touched.
+@MainActor
+struct DossierRemovalTests {
+    @Test func theOldDossierFileIsDeleted() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "dossier-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let dossier = dir.appending(path: "assistant_memory.json")
+        let chats = dir.appending(path: "assistant.sqlite")
+        try Data("{}".utf8).write(to: dossier)
+        try Data("db".utf8).write(to: chats)
+        AssistantModel.removeDossier(in: dir)
+        #expect(!FileManager.default.fileExists(atPath: dossier.path))
+        #expect(FileManager.default.fileExists(atPath: chats.path))
+        AssistantModel.removeDossier(in: dir)
+    }
+}

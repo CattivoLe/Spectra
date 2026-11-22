@@ -120,22 +120,21 @@ struct AssistantActionsTests {
         let link = SensorLink(store: store, history: history)
         let sources = AssistantSources(
             store: store, lan: LANScanner(), ble: BLEScanner(), history: history,
-            link: link, probe: LinkProbe(), joiner: WiFiJoiner(), speed: SpeedTester(), captures: CaptureShelf(),
-            memory: AssistantMemory()
+            link: link, probe: LinkProbe(), joiner: WiFiJoiner(), speed: SpeedTester(), captures: CaptureShelf()
         )
         return (sources, link)
     }
 
     @Test func needsAConnectedSensor() async throws {
         let (sources, _) = makeSources()
-        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).perform("{\"tool\": \"capture_pcap\", \"bssid\": \"\(Self.demoHomeBSSID)\"}"
+        let result = await AssistantActions(sources: sources).perform("{\"tool\": \"capture_pcap\", \"bssid\": \"\(Self.demoHomeBSSID)\"}"
         )
         #expect(result.contains("No sensor connected"))
     }
 
     @Test func connectBluetoothNeedsADeviceName() async throws {
         let (sources, _) = makeSources()
-        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).perform("{\"tool\": \"connect_bluetooth\"}"
+        let result = await AssistantActions(sources: sources).perform("{\"tool\": \"connect_bluetooth\"}"
         )
         #expect(result.contains("Missing"))
     }
@@ -144,7 +143,7 @@ struct AssistantActionsTests {
     /// than left to invent what the headphones said.
     @Test func connectBluetoothRejectsADeviceThePhoneHasNotHeard() async throws {
         let (sources, _) = makeSources()
-        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).perform("{\"tool\": \"connect_bluetooth\", \"text\": \"Momentum 3\"}"
+        let result = await AssistantActions(sources: sources).perform("{\"tool\": \"connect_bluetooth\", \"text\": \"Momentum 3\"}"
         )
         #expect(result.contains("Momentum 3"))
         #expect(result.contains("scan_bluetooth"))
@@ -153,7 +152,7 @@ struct AssistantActionsTests {
     /// No LAN scan has run, so there is no router to ask.
     @Test func portForwardingNeedsTheRouterFirst() async throws {
         let (sources, _) = makeSources()
-        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).perform("{\"tool\": \"check_port_forwarding\"}"
+        let result = await AssistantActions(sources: sources).perform("{\"tool\": \"check_port_forwarding\"}"
         )
         #expect(result.contains("scan_lan"))
     }
@@ -170,14 +169,14 @@ struct AssistantActionsTests {
     @Test func needsTheBSSIDField() async throws {
         let (sources, link) = makeSources()
         link.setDemo(true)
-        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).perform("{\"tool\": \"capture_pcap\"}")
+        let result = await AssistantActions(sources: sources).perform("{\"tool\": \"capture_pcap\"}")
         #expect(result.contains("Missing or invalid"))
     }
 
     @Test func rejectsABSSIDThePhoneHasNotSeen() async throws {
         let (sources, link) = makeSources()
         link.setDemo(true)
-        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).perform("{\"tool\": \"capture_pcap\", \"bssid\": \"AA:BB:CC:DD:EE:FF\"}"
+        let result = await AssistantActions(sources: sources).perform("{\"tool\": \"capture_pcap\", \"bssid\": \"AA:BB:CC:DD:EE:FF\"}"
         )
         #expect(result.contains("not a BSSID"))
     }
@@ -188,7 +187,7 @@ struct AssistantActionsTests {
         link.startRawCapture(channel: 6, network: BSSID(string: Self.demoHomeBSSID))
         defer { link.stopRawCapture() }
 
-        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).perform("{\"tool\": \"capture_pcap\", \"bssid\": \"\(Self.demoHomeBSSID)\"}"
+        let result = await AssistantActions(sources: sources).perform("{\"tool\": \"capture_pcap\", \"bssid\": \"\(Self.demoHomeBSSID)\"}"
         )
         #expect(result.contains("already running"))
     }
@@ -201,7 +200,7 @@ struct AssistantActionsTests {
         let (sources, link) = makeSources()
         link.setDemo(true)   // this already runs one scan, synchronously populating store.networks
 
-        let result = await AssistantActions(sources: sources, memory: AssistantMemory()).perform("{\"tool\": \"capture_pcap\", \"bssid\": \"\(Self.demoHomeBSSID)\"}"
+        let result = await AssistantActions(sources: sources).perform("{\"tool\": \"capture_pcap\", \"bssid\": \"\(Self.demoHomeBSSID)\"}"
         )
 
         #expect(result.contains("Home"))

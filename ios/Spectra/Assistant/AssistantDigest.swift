@@ -188,8 +188,6 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
     var sites: [SiteReach] = []
     /// The last traceroute, when one was run.
     var route: Route?
-    /// Persistent dossier notes saved by the assistant across chats.
-    var memory: String?
 }
 
 /// The parts of the app's data a summary card reads.

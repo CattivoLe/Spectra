@@ -112,7 +112,7 @@ struct CardDataTests {
         let speed = SpeedTester()
         let sources = AssistantSources(store: store, lan: LANScanner(), ble: BLEScanner(), history: history,
                                        link: SensorLink(store: store, history: history), probe: probe, joiner: WiFiJoiner(),
-                                       speed: speed, captures: CaptureShelf(), memory: AssistantMemory())
+                                       speed: speed, captures: CaptureShelf())
         #expect(sources.snapshot().link == nil)
         #expect(sources.snapshot().route == nil)
     }
@@ -129,9 +129,9 @@ struct CardDataTests {
         let history = HistoryStore()
         let sources = AssistantSources(store: store, lan: LANScanner(), ble: BLEScanner(), history: history,
                                        link: SensorLink(store: store, history: history), probe: LinkProbe(), joiner: WiFiJoiner(),
-                                       speed: SpeedTester(), captures: CaptureShelf(), memory: AssistantMemory(),
+                                       speed: SpeedTester(), captures: CaptureShelf(),
                                        resources: ResourceWatch(defaults: UserDefaults(suiteName: "sites-\(UUID().uuidString)")!))
-        let actions = AssistantActions(sources: sources, memory: AssistantMemory())
+        let actions = AssistantActions(sources: sources)
         #expect(await actions.perform(#"{"tool": "check_site", "text": "mailto:a@b.c"}"#).contains("Missing or invalid"))
         #expect(await actions.perform(#"{"tool": "expand_redirects"}"#).contains("Missing or invalid"))
         #expect(await actions.perform("not json {").contains("Unknown tool"))

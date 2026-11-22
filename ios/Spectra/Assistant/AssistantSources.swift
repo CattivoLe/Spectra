@@ -14,51 +14,12 @@ struct AssistantSources {
     let joiner: WiFiJoiner
     let speed: SpeedTester
     let captures: CaptureShelf
-    let memory: AssistantMemory
     /// The user's own sites (Internet → Resources) and their last answers.
     var resources = ResourceWatch()
     /// The Traceroute screen's last run.
     var tracer = RouteTracer()
     /// What the Check a link screen and the link card's buttons found about recent links.
     var links = LinkShelf()
-
-    /// Folds what is on screen into the long-term baselines. Called on the app's own save tick, so it skips the
-    /// expensive parts of a snapshot: no capture is decoded and no threat assessment runs.
-    func recordBaselines(now: Date = Date()) {
-        memory.observe(sightings(), now: now)
-    }
-
-    private func sightings() -> [AssistantMemory.Sighting] {
-        var found: [AssistantMemory.Sighting] = []
-        for device in lan.sortedDevices where !device.isLocalDevice {
-            found.append(AssistantMemory.Sighting(
-                subject: device.macAddress?.description ?? device.ipAddress,
-                label: device.displayName,
-                kind: .host,
-                rssi: nil,
-                ports: device.openPorts.map(\.number),
-                portsKnown: device.portsScanned
-            ))
-        }
-        for network in store.networks.values where network.isInRange {
-            let reading = network.latest
-            found.append(AssistantMemory.Sighting(
-                subject: reading.bssid.description,
-                label: network.revealedSSID ?? reading.ssid ?? reading.bssid.description,
-                kind: .wifi,
-                rssi: reading.rssi
-            ))
-        }
-        for device in ble.devices.values where device.isNearby(at: Date()) {
-            found.append(AssistantMemory.Sighting(
-                subject: device.id.uuidString,
-                label: device.displayName,
-                kind: .bluetooth,
-                rssi: device.rssi
-            ))
-        }
-        return found
-    }
 
     /// What a summary card shows: its findings and steps, and the data its model actions read. `nil` when there is
     /// nothing to summarize (no recorded traffic or capture handed over).

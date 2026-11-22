@@ -50,7 +50,7 @@ struct AssistantHandoverTests {
         let sources = AssistantSources(
             store: store, lan: LANScanner(), ble: BLEScanner(), history: history,
             link: SensorLink(store: store, history: history), probe: LinkProbe(), joiner: WiFiJoiner(),
-            speed: SpeedTester(), captures: shelf, memory: AssistantMemory()
+            speed: SpeedTester(), captures: shelf
         )
         let facts = sources.cardFacts(.traffic)
         #expect(facts?.data.contains("Recorded traffic of this phone") == true)
@@ -60,7 +60,7 @@ struct AssistantHandoverTests {
         let empty = AssistantSources(
             store: store, lan: LANScanner(), ble: BLEScanner(), history: history,
             link: SensorLink(store: store, history: history), probe: LinkProbe(), joiner: WiFiJoiner(),
-            speed: SpeedTester(), captures: CaptureShelf(), memory: AssistantMemory()
+            speed: SpeedTester(), captures: CaptureShelf()
         )
         #expect(empty.cardFacts(.traffic) == nil)
     }

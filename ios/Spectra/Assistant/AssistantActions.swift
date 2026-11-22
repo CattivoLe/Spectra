@@ -13,7 +13,6 @@ import LocalChatKit
 @MainActor
 struct AssistantActions {
     let sources: AssistantSources
-    let memory: AssistantMemory
 
     enum Name: String, CaseIterable {
         case scanWifi = "scan_wifi"
@@ -25,8 +24,6 @@ struct AssistantActions {
         case checkPortForwarding = "check_port_forwarding"
         case capturePcap = "capture_pcap"
         case connectBluetooth = "connect_bluetooth"
-        case remember
-        case forget
         /// A traceroute to "host". Card steps only.
         case traceRoute = "trace_route"
         /// The user's own list of sites (Internet → Resources), each tried once. Card steps only.
@@ -41,11 +38,11 @@ struct AssistantActions {
     /// card's rules wrote it. Returns the tool's result text.
     func perform(_ call: String) async -> String {
         let trimmed = call.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("{") else { return await Self.run(trimmed, argsJSON: "{}", sources: sources, memory: memory) }
+        guard trimmed.hasPrefix("{") else { return await Self.run(trimmed, argsJSON: "{}", sources: sources) }
         guard let data = trimmed.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tool = object["tool"] as? String else { return "Bad call." }
-        return await Self.run(tool, argsJSON: trimmed, sources: sources, memory: memory)
+        return await Self.run(tool, argsJSON: trimmed, sources: sources)
     }
 
     /// The step button for a check that needs no argument; the cards trim the question mark.
@@ -78,8 +75,6 @@ struct AssistantActions {
         case .checkPortForwarding: String(localized: "port forwarding check")
         case .capturePcap: String(localized: "traffic capture")
         case .connectBluetooth: String(localized: "device connection")
-        case .remember: String(localized: "saving a note")
-        case .forget: String(localized: "removing a note")
         case .traceRoute: String(localized: "traceroute")
         case .checkSites: String(localized: "check of your sites")
         case .checkSite: String(localized: "certificate and domain check")
@@ -99,8 +94,6 @@ struct AssistantActions {
         case .checkPortForwarding: String(localized: "Asking the router about port forwarding…")
         case .capturePcap: String(localized: "Capturing traffic…")
         case .connectBluetooth: String(localized: "Connecting to the device…")
-        case .remember: String(localized: "Saving a note…")
-        case .forget: String(localized: "Removing a note…")
         case .traceRoute: String(localized: "Tracing the path…")
         case .checkSites: String(localized: "Trying your sites…")
         case .checkSite: String(localized: "Asking the site and the registry…")
@@ -109,7 +102,7 @@ struct AssistantActions {
         }
     }
 
-    private static func run(_ name: String, argsJSON: String, sources: AssistantSources, memory: AssistantMemory) async -> String {
+    private static func run(_ name: String, argsJSON: String, sources: AssistantSources) async -> String {
         guard let tool = Name(rawValue: name) else { return "Unknown tool \"\(name)\"." }
         switch tool {
         case .scanWifi:
@@ -261,22 +254,6 @@ struct AssistantActions {
             let report = gattReport(for: device, scanner: sources.ble)
             sources.ble.disconnectGATT()
             return report
-
-        case .remember:
-            guard let text = decodeArg(argsJSON, keys: ["text"]) else {
-                return "Missing \"text\". Provide the note to save."
-            }
-            let subject = decodeArg(argsJSON, keys: ["host", "bssid"])
-            memory.add(text, subject: subject)
-            return subject.map { "Saved to the dossier, filed under \($0)." } ?? "Saved to the dossier."
-
-        case .forget:
-            guard let text = decodeArg(argsJSON, keys: ["text"]) else {
-                return "Missing \"text\". Provide text to find the note to remove."
-            }
-            return memory.remove(matching: text)
-                ? "Removed from the dossier."
-                : "No matching note found in the dossier."
         }
     }
 

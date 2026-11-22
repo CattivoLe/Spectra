@@ -17,8 +17,6 @@ final class AssistantModel {
     var pendingSearch: PendingSearch?
     /// The checks a summary card's step buttons run. Set once by the app.
     var actions: AssistantActions?
-    /// Persistent notes the assistant saves across chats.
-    var memory: AssistantMemory?
     /// The ✨ summary cards: findings at once, the model's plain words under them, buttons instead of a text field.
     /// Set once by the app, with the sources it reads.
     var cards: AssistantCardRunner?
@@ -89,6 +87,7 @@ final class AssistantModel {
         library.backgroundEventsCompletion = Self.pendingBackgroundCompletion
         Self.pendingBackgroundCompletion = nil
         Self.shared = self
+        Self.removeDossier()
         Task { await removeOldChats() }
         library.onInstalledChanged = { [weak self] in
             guard let self else { return }
@@ -102,6 +101,12 @@ final class AssistantModel {
     func start() async {
         refreshModels()
         await loadSelectedModel()
+    }
+
+    /// The dossier the chat used to keep: its notes and the baselines of every device ever seen. Nothing reads it
+    /// since the assistant became summary cards, so the file goes at start (it was rewritten on every autosave tick).
+    static func removeDossier(in directory: URL = URL.applicationSupportDirectory.appending(path: "Spectra")) {
+        try? FileManager.default.removeItem(at: directory.appending(path: "assistant_memory.json"))
     }
 
     private static let oldChatsRemovedKey = "assistant.oldChatsRemoved"

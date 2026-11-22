@@ -59,7 +59,7 @@ struct CaptureAssistantTests {
         let sources = AssistantSources(
             store: store, lan: LANScanner(), ble: BLEScanner(), history: history,
             link: SensorLink(store: store, history: history), probe: LinkProbe(), joiner: WiFiJoiner(), speed: SpeedTester(),
-            captures: shelf, memory: AssistantMemory()
+            captures: shelf
         )
         #expect(sources.snapshot().capture == nil)
         shelf.keep(name: "office.pcap", analysis: try Self.sample, fromSensor: false)
