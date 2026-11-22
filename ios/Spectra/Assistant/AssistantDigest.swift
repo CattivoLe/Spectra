@@ -23,6 +23,58 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
         var severity: String
         var title: String
         var detail: String
+        /// The access points the finding is about.
+        var bssids: [String] = []
+    }
+
+    /// One characteristic of the last GATT read. `vendor`: in a service the Bluetooth catalog does not name, i.e.
+    /// the maker's own.
+    struct GattItem: Equatable, Sendable {
+        var service: String
+        var name: String
+        var value: String?
+        var writable: Bool
+        var vendor: Bool
+    }
+
+    /// The router's answer to a port-forwarding check: `rules` as "TCP 8080 → 192.168.1.50:80".
+    struct Forwarding: Equatable, Sendable {
+        var supported: Bool
+        var rules: [String]
+    }
+
+    struct PortRiskItem: Equatable, Sendable {
+        var title: String
+        var high: Bool
+    }
+
+    /// One of the user's own sites (Internet → Resources), as it answered last.
+    struct SiteReach: Equatable, Sendable {
+        var host: String
+        var ok: Bool
+        var millis: Int?
+    }
+
+    /// `place`: "Frankfurt, DE · Cloudflare" when the hop is public and placed.
+    struct RouteHop: Equatable, Sendable {
+        var address: String?
+        var millis: Int?
+        var place: String?
+    }
+
+    /// The last traceroute from the Traceroute screen. `failure` is the app's sentence when it did not run.
+    struct Route: Equatable, Sendable {
+        var target: String
+        var address: String?
+        var hops: [RouteHop] = []
+        var failure: String?
+        var running = false
+
+        /// The last hop answered from the target's own address.
+        var reached: Bool { address != nil && hops.last(where: { $0.address != nil })?.address == address }
+
+        /// Hops at the end that never answered: a firewall dropping probes, more often than a break.
+        var silentTail: Int { hops.reversed().prefix { $0.address == nil }.count }
     }
 
     struct Host: Equatable, Sendable {
@@ -33,6 +85,8 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
         var system: String?
         var ports: [String] = []
         var portsScanned = false
+        /// All 65535 TCP ports were checked, not only the common list.
+        var allPortsScanned = false
         var risks: [String] = []
         var isGateway = false
         var isThisPhone = false
@@ -40,6 +94,10 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
         var trust = "unknown"
         /// The user's own note about the host.
         var note: String?
+        /// `risks` with their weight: what the summary card ranks by.
+        var portRisks: [PortRiskItem] = []
+        /// The router's forwarding table once a check read it; `nil` before that. Gateway only.
+        var forwarding: Forwarding?
     }
 
     struct Bluetooth: Equatable, Sendable {
@@ -52,6 +110,8 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
         /// "info", "watch" or "alert" for trackers.
         var trackerLevel: String?
         var away: Bool?
+        /// The system's identifier of the device: what a Bluetooth summary is about.
+        var id = ""
     }
 
     struct Session: Equatable, Sendable {
@@ -80,6 +140,26 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
         var resolverLies: Bool?
         var exposedPorts: [Int] = []
         var access: String?
+        /// Whether the router, the name lookup and a web page answered at all; `nil` when not asked.
+        var gatewayOk: Bool?
+        var dnsOk: Bool?
+        var webOk: Bool?
+        /// Who really answers the name lookups: the resolver the authoritative servers see.
+        var resolverName: String?
+        var resolverCountry: String?
+        /// Often-blocked services that did not open (access check).
+        var blocked: [String] = []
+        /// How many reference sites the TLS check could reach; `nil` when it did not run.
+        var tlsReached: Int?
+        /// The ports reachable from outside were asked about (an empty `exposedPorts` then means none).
+        var exposureChecked = false
+        /// Bufferbloat grade A–F: how much latency grows under a full load.
+        var bufferbloat: String?
+        var speedFailed = false
+        /// "wifi", "cellular" or "vpn": which way the check went out.
+        var via: String?
+        /// Traffic left through Cloudflare WARP.
+        var warp = false
     }
 
     var wifiName: String?
@@ -100,6 +180,14 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
     var capture: String?
     /// The last GATT read of a Bluetooth device, already written up (see `GATTDigest`). `nil` when none was made.
     var gatt: String?
+    /// Which device `gatt` was read from (`Bluetooth.id`).
+    var gattDeviceID: String?
+    /// The same read, one entry per characteristic: what the summary card turns into findings.
+    var gattItems: [GattItem] = []
+    /// The user's own sites that were checked, with their last answer.
+    var sites: [SiteReach] = []
+    /// The last traceroute, when one was run.
+    var route: Route?
     /// Persistent dossier notes saved by the assistant across chats.
     var memory: String?
 }
@@ -350,9 +438,9 @@ nonisolated enum AssistantDigest {
 
     /// One topic's section rendered from a fresh snapshot, for a tool call's result rather than a question's
     /// attachment: no header, no topic routing, just that one part of the picture, as current as the snapshot.
-    static func section(_ topic: AssistantTopic, snapshot: AssistantSnapshot, now: Date = Date()) -> String {
+    static func section(_ topic: AssistantTopic, snapshot: AssistantSnapshot, now: Date = Date(), focus: String = "") -> String {
         let lines: [String] = switch topic {
-        case .wifi: wifiSection(snapshot, overview: false)
+        case .wifi: wifiSection(snapshot, overview: false, focus: focus)
         case .threats: threatSection(snapshot, keepEmpty: true)
         case .lan: lanSection(snapshot, overview: false)
         case .bluetooth: bluetoothSection(snapshot, overview: false)
@@ -453,7 +541,8 @@ nonisolated enum AssistantDigest {
             if host.isNew { parts.append("NEW") }
             if host.trust != "unknown" { parts.append(host.trust) }
             if host.portsScanned {
-                parts.append(host.ports.isEmpty ? "no open ports" : "open: " + host.ports.prefix(8).joined(separator: ","))
+                let scope = host.allPortsScanned ? " (all 65535 ports checked)" : ""
+                parts.append((host.ports.isEmpty ? "no open ports" : "open: " + host.ports.prefix(8).joined(separator: ",")) + scope)
             }
             if let note = host.note, !note.isEmpty { parts.append("note: \(clean(note, limit: 50))") }
             lines.append("- " + parts.joined(separator: " · "))
@@ -500,15 +589,19 @@ nonisolated enum AssistantDigest {
     private static func captureSection(_ s: AssistantSnapshot) -> [String] {
         guard let capture = s.capture else {
             return ["Traffic capture: none yet. The user can take one from a Wi‑Fi network's card (Capture traffic), open a .pcap "
-                    + "under History → Decode pcap, or record the phone's own traffic on the LAN tab → Traffic; you can also "
-                    + "take a short Wi‑Fi capture yourself with capture_pcap."]
+                    + "under Wi‑Fi → ⋯ → Decode pcap, or record the phone's own traffic on the Internet tab → Traffic."]
         }
         return [capture]
     }
 
     private static func linkSection(_ s: AssistantSnapshot, now: Date) -> [String] {
-        guard let link = s.link else { return ["Connection check: not run yet (Wi-Fi tab → connection check on the LAN tab)."] }
+        guard let link = s.link else { return ["Connection check: not run yet (Internet tab → Connection)."] + siteLines(s.sites) }
         var lines = ["Latest connection check, \(clock(link.checkedAt)):"]
+        switch link.via {
+        case "vpn": lines.append("- Checked through the VPN: the public address and provider are the VPN's")
+        case "cellular": lines.append("- Checked over the mobile network, not Wi‑Fi")
+        default: break
+        }
         if let status = link.status { lines.append("- Status: \(status)\(link.detail.map { " — \(clean($0, limit: 120))" } ?? "")") }
         var latency: [String] = []
         if let ms = link.gatewayMs { latency.append("gateway \(ms) ms") }
@@ -525,7 +618,95 @@ nonisolated enum AssistantDigest {
             if let jitter = link.jitterMs { speed += ", jitter \(jitter) ms" }
             lines.append(speed)
         }
+        if let grade = link.bufferbloat {
+            lines.append("- Latency under load: grade \(grade) (A is best, F means calls stutter while something downloads)")
+        }
+        if link.speedFailed, link.downMbps == nil { lines.append("- Speed test: did not finish") }
+        let failed = [link.gatewayOk == false ? "router" : nil, link.dnsOk == false ? "DNS" : nil, link.webOk == false ? "web" : nil].compactMap { $0 }
+        if !failed.isEmpty { lines.append("- Did not answer: " + failed.joined(separator: ", ")) }
+        if let name = link.resolverName {
+            lines.append("- DNS resolver the servers see: \(clean(name, limit: 40))\(link.resolverCountry.map { " · \($0)" } ?? "")")
+        }
+        if link.resolverLies == true {
+            lines.append("- The DNS resolver answers for names that do not exist (redirects typos to its own page or filters)")
+        }
+        switch link.intercepted {
+        case true?: lines.append("- HTTPS: certificates are re-signed on the way — interception by a proxy, an antivirus or an attacker")
+        case false?: lines.append("- HTTPS: genuine certificates\(link.tlsReached.map { " on \($0) reference sites" } ?? ""), nothing re-signs them")
+        case nil: break
+        }
+        if !link.exposedPorts.isEmpty {
+            lines.append("- Ports of the public address reachable from the internet: \(link.exposedPorts.map(String.init).joined(separator: ", "))")
+        } else if link.exposureChecked {
+            lines.append("- No usual port of the public address answers from the internet")
+        }
         if let access = link.access { lines.append("- Internet access: \(access)") }
+        if !link.blocked.isEmpty {
+            lines.append("- Often-blocked services that did not open: \(link.blocked.map { clean($0, limit: 40) }.joined(separator: ", "))")
+        }
+        if link.warp { lines.append("- Traffic leaves through Cloudflare WARP") }
+        return lines + siteLines(s.sites)
+    }
+
+    /// The user's own sites, as they answered last. Two plain lists with an explicit "none": read as one run-on line
+    /// ("a opens; b opens; …") a small model took the last site for one that failed.
+    static func siteLines(_ sites: [AssistantSnapshot.SiteReach]) -> [String] {
+        guard !sites.isEmpty else { return [] }
+        let open = sites.filter(\.ok).map { site in clean(site.host, limit: 40) + (site.millis.map { " (\($0) ms)" } ?? "") }
+        let closed = sites.filter { !$0.ok }.map { clean($0.host, limit: 40) }
+        return [
+            "The user's own sites, \(sites.count) tried:",
+            "- Open: " + (open.isEmpty ? "none" : open.joined(separator: ", ")),
+            "- Do not open: " + (closed.isEmpty ? "none" : closed.joined(separator: ", ")),
+        ]
+    }
+
+    /// A delay that grows this much between two answering hops is where the path slows down.
+    static let hopJumpMs = 80
+
+    /// The hop where the delay jumps the most over the previous answering hop, when the jump is large.
+    static func slowestHop(_ hops: [AssistantSnapshot.RouteHop]) -> (index: Int, jump: Int)? {
+        var previous: Int?
+        var best: (index: Int, jump: Int)?
+        for (index, hop) in hops.enumerated() {
+            guard let ms = hop.millis else { continue }
+            if let before = previous {
+                let jump = ms - before
+                if jump >= hopJumpMs, jump > (best?.jump ?? 0) { best = (index, jump) }
+            }
+            previous = ms
+        }
+        return best
+    }
+
+    /// A traceroute, hop by hop: what a "trace" check returns and the deep analysis reads. `compact` keeps the
+    /// outcome and the places along the way only: every hop costs the short summary seconds of reading.
+    static func routeLines(_ route: AssistantSnapshot.Route, compact: Bool = false) -> [String] {
+        let target = clean(route.target, limit: 60) + (route.address.flatMap { $0 == route.target ? nil : " (\($0))" } ?? "")
+        guard !route.hops.isEmpty else {
+            return ["Traceroute to \(target): " + (route.failure ?? (route.running ? "still running" : "no hops recorded"))]
+        }
+        let outcome = route.reached ? "reached in \(route.hops.count) hops"
+            : route.silentTail > 0 ? "did not reach it; the last \(route.silentTail) hops did not answer (often a firewall dropping probes)"
+            : "did not reach it"
+        var lines = ["Traceroute to \(target): \(outcome)"]
+        if let failure = route.failure { lines.append("- Note: \(failure)") }
+        if compact {
+            var places: [String] = []
+            for place in route.hops.compactMap({ $0.place.map { clean($0, limit: 50) } }) where !places.contains(place) { places.append(place) }
+            if !places.isEmpty { lines.append("- Places along the way: " + places.joined(separator: " → ")) }
+            if let last = route.hops.last(where: { $0.millis != nil }), let ms = last.millis {
+                lines.append("- Last answering hop: \(last.address ?? "?") · \(ms) ms")
+            }
+            if let slow = slowestHop(route.hops) {
+                lines.append("- The delay grows most at hop \(slow.index + 1) (\(route.hops[slow.index].address ?? "?")): +\(slow.jump) ms")
+            }
+            return lines
+        }
+        for (index, hop) in route.hops.enumerated() {
+            let parts = [hop.address ?? "*", hop.millis.map { "\($0) ms" }, hop.place.map { clean($0, limit: 50) }].compactMap { $0 }
+            lines.append("\(index + 1). " + parts.joined(separator: " · "))
+        }
         return lines
     }
 
@@ -543,7 +724,7 @@ nonisolated enum AssistantDigest {
         value >= 100 ? String(Int(value.rounded())) : String(format: "%.1f", value)
     }
 
-    private static func clock(_ date: Date) -> String {
+    static func clock(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HH:mm"

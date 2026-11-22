@@ -87,6 +87,9 @@ final class LANDevice: Identifiable {
     }
     /// Set while a manual port scan of this host is in progress, 0...1.
     var portScanFraction: Double?
+    /// When every TCP port of this host was last checked, not only the common list.
+    var allPortsScannedAt: Date?
+    var allPortsScanned: Bool { allPortsScannedAt != nil }
     var firstSeen: Date
     var lastSeen: Date
 

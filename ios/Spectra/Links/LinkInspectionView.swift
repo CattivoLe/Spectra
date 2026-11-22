@@ -83,14 +83,7 @@ struct LinkInspectionView: View {
     /// The registered name the registry should be asked about: none for an
     /// address or for an account on a shared platform, whose age is the
     /// platform's and says nothing about the account.
-    private var registryDomain: String? {
-        let ascii = inspection.asciiHost ?? inspection.host
-        guard IPv4Address(ascii) == nil, IPv6Address(ascii) == nil else { return nil }
-        let labels = ascii.lowercased().split(separator: ".").map(String.init)
-        guard labels.count >= 2 else { return nil }
-        let (site, platform) = LinkInspector.siteOf(labels)
-        return platform == nil ? site : nil
-    }
+    private var registryDomain: String? { LinkShelf.registryName(inspection) }
 
     @ViewBuilder
     private var siteSection: some View {

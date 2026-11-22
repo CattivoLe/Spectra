@@ -67,7 +67,7 @@ struct SpectraApp: App {
                     let sources = AssistantSources(
                         store: store, lan: lanScanner, ble: bleScanner, history: history,
                         link: link, probe: linkProbe, joiner: joiner, speed: speedTester, captures: captures,
-                        memory: assistantMemory
+                        memory: assistantMemory, resources: resourceWatch, tracer: routeTracer
                     )
                     captures.recordedTraffic = { [weak sniffer] in sniffer?.assistantRecording }
                     assistant.dataSource = { question in sources.attachment(for: question) }

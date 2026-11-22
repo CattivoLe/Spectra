@@ -30,6 +30,38 @@ struct AssistantActions {
         case searchHistory = "search_history"
         case remember
         case forget
+        /// A traceroute to "host". Card steps only.
+        case traceRoute = "trace_route"
+        /// The user's own list of sites (Internet → Resources), each tried once. Card steps only.
+        case checkSites = "check_sites"
+        /// The certificate and the registry record of the link in "text". Card steps only.
+        case checkSite = "check_site"
+        /// The redirects of the link in "text", followed by their headers only. Card steps only.
+        case expandRedirects = "expand_redirects"
+    }
+
+    /// Runs a summary card's step: a bare tool name or a whole call (`{"tool": "scan_ports", "host": …}`), as the
+    /// card's rules wrote it. Returns the tool's result text.
+    func perform(_ call: String) async -> String {
+        let trimmed = call.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{") else { return await Self.run(trimmed, argsJSON: "{}", sources: sources, memory: memory) }
+        guard let data = trimmed.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tool = object["tool"] as? String else { return "Bad call." }
+        return await Self.run(tool, argsJSON: trimmed, sources: sources, memory: memory)
+    }
+
+    /// The step button for a check that needs no argument; the cards trim the question mark.
+    static func button(for name: String) -> String? {
+        switch Name(rawValue: name) {
+        case .scanWifi: String(localized: "Scan Wi‑Fi?")
+        case .scanLAN: String(localized: "Scan the local network?")
+        case .scanBluetooth: String(localized: "Scan Bluetooth?")
+        case .checkConnection: String(localized: "Check the connection?")
+        case .speedTest: String(localized: "Measure the speed?")
+        case .checkPortForwarding: String(localized: "Check port forwarding?")
+        default: nil
+        }
     }
 
     /// How long one on-demand traffic capture listens before it is analyzed. Short on purpose: it pins the sensor
@@ -332,7 +364,7 @@ struct AssistantActions {
         case .capturePcap: ToolOffer(name: name, mention: String(localized: "a traffic capture"))
         case .connectBluetooth: ToolOffer(name: name, mention: String(localized: "a connection to the device"))
         case .searchHistory: ToolOffer(name: name, mention: String(localized: "a search through History"))
-        case .remember, .forget, nil: nil
+        case .remember, .forget, .traceRoute, .checkSites, .checkSite, .expandRedirects, nil: nil
         }
     }
 
@@ -351,6 +383,10 @@ struct AssistantActions {
         case .searchHistory: String(localized: "History search")
         case .remember: String(localized: "saving a note")
         case .forget: String(localized: "removing a note")
+        case .traceRoute: String(localized: "traceroute")
+        case .checkSites: String(localized: "check of your sites")
+        case .checkSite: String(localized: "certificate and domain check")
+        case .expandRedirects: String(localized: "redirects")
         case nil: name
         }
     }
@@ -369,6 +405,10 @@ struct AssistantActions {
         case .searchHistory: String(localized: "Looking through History…")
         case .remember: String(localized: "Saving a note…")
         case .forget: String(localized: "Removing a note…")
+        case .traceRoute: String(localized: "Tracing the path…")
+        case .checkSites: String(localized: "Trying your sites…")
+        case .checkSite: String(localized: "Asking the site and the registry…")
+        case .expandRedirects: String(localized: "Following redirects…")
         case nil: String(localized: "Running \(name)…")
         }
     }
@@ -405,8 +445,39 @@ struct AssistantActions {
         case .speedTest:
             sources.speed.start(viaVpn: ProbeRoute.current() == .vpn)
             try? await Task.sleep(for: .milliseconds(400))
-            await waitWhile(timeout: 30) { sources.speed.running }
+            await waitWhile(timeout: 60) { sources.speed.running }
             return section(.link, sources: sources)
+
+        case .traceRoute:
+            let host = decodeArg(argsJSON, keys: ["host", "text"]) ?? RouteTrace.defaultTarget
+            sources.tracer.run(host)
+            try? await Task.sleep(for: .milliseconds(400))
+            await waitWhile(timeout: 120) { sources.tracer.running }
+            return sources.snapshot().route.map { AssistantDigest.routeLines($0).joined(separator: "\n") } ?? "The traceroute did not start."
+
+        case .checkSites:
+            guard !sources.resources.hosts.isEmpty else {
+                return "The user's list of sites is empty (Internet → Resources), so there is nothing to try."
+            }
+            sources.resources.checkAll()
+            try? await Task.sleep(for: .milliseconds(400))
+            await waitWhile(timeout: 30) { sources.resources.isChecking }
+            let lines = AssistantDigest.siteLines(sources.snapshot().sites)
+            return lines.isEmpty ? "None of the sites answered in time." : lines.joined(separator: "\n")
+
+        case .checkSite:
+            guard let target = webLink(argsJSON) else { return "Missing or invalid \"text\": give the link to check." }
+            let report = await SiteProbe.probe(host: target.asciiHost ?? target.host, domain: LinkShelf.registryName(target))
+            sources.links.keep(site: report, for: target.link)
+            return InternetCards.siteText(report)
+
+        case .expandRedirects:
+            guard let target = webLink(argsJSON), let start = LinkShelf.start(target) else {
+                return "Missing or invalid \"text\": give the link to expand."
+            }
+            let trace = await RedirectTracer.trace(start)
+            sources.links.keep(redirects: trace, for: target.link)
+            return InternetCards.redirectText(trace)
 
         case .scanPorts:
             guard let host = decodeArg(argsJSON, keys: ["host", "bssid"]) else {
@@ -588,6 +659,13 @@ struct AssistantActions {
         var text = GATTDigest.text(read, intro: "Read just now over Bluetooth from")
         if scanner.gattState == .ended { text += "\nThe device closed the link after answering, which is normal." }
         return text
+    }
+
+    /// The web link with a name in the call's "text": only such a link has a certificate and redirects.
+    private static func webLink(_ argsJSON: String) -> LinkInspection? {
+        guard let text = decodeArg(argsJSON, keys: ["text"]), let inspection = LinkInspector.inspect(text),
+              LinkShelf.isWeb(inspection) else { return nil }
+        return inspection
     }
 
     private static func decodeArg(_ argsJSON: String, keys: [String]) -> String? {

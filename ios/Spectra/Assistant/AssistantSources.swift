@@ -15,6 +15,12 @@ struct AssistantSources {
     let speed: SpeedTester
     let captures: CaptureShelf
     let memory: AssistantMemory
+    /// The user's own sites (Internet → Resources) and their last answers.
+    var resources = ResourceWatch()
+    /// The Traceroute screen's last run.
+    var tracer = RouteTracer()
+    /// What the Check a link screen and the link card's buttons found about recent links.
+    var links = LinkShelf()
 
     func attachment(for question: String) -> AppDataAttachment? {
         var current = snapshot()
@@ -102,7 +108,8 @@ struct AssistantSources {
             )
         }
         snapshot.findings = Threats.assess(networks: networks, deauths: store.deauthEvents).map {
-            AssistantSnapshot.Finding(severity: $0.severity == .critical ? "critical" : "warning", title: $0.title, detail: $0.detail)
+            AssistantSnapshot.Finding(severity: $0.severity == .critical ? "critical" : "warning", title: $0.title, detail: $0.detail,
+                                      bssids: $0.networks.map(\.description))
         }
         snapshot.deauthFrames = store.deauthEvents.reduce(0) { $0 + $1.count }
         snapshot.probingDevices = store.probingDevices.count
@@ -118,12 +125,20 @@ struct AssistantSources {
                 system: device.identity.operatingSystem,
                 ports: device.openPorts.map { "\($0.number) \($0.service)" },
                 portsScanned: device.portsScanned,
+                allPortsScanned: device.allPortsScanned,
                 risks: risks.map { "\($0.title) (\($0.level.label))" },
                 isGateway: device.isGateway,
                 isThisPhone: device.isLocalDevice,
                 isNew: device.isNew,
                 trust: device.trust.rawValue,
-                note: device.note
+                note: device.note,
+                portRisks: risks.map { AssistantSnapshot.PortRiskItem(title: $0.title, high: $0.level >= .high) },
+                forwarding: device.isGateway ? device.profile.portForwarding.map { table in
+                    AssistantSnapshot.Forwarding(
+                        supported: table.supported,
+                        rules: table.mappings.filter(\.enabled).map { "\($0.proto) \($0.externalPort) → \($0.internalClient):\($0.internalPort)" }
+                    )
+                } : nil
             )
         }
 
@@ -137,7 +152,8 @@ struct AssistantSources {
                 minutesNearby: Int(device.presentFor(at: now) / 60),
                 tracker: assessment?.kind.label,
                 trackerLevel: assessment.map { $0.level == .alert ? "alert" : ($0.level == .watch ? "watch" : "info") },
-                away: assessment?.separated
+                away: assessment?.separated,
+                id: device.id.uuidString
             )
         }
 
@@ -145,6 +161,7 @@ struct AssistantSources {
             AssistantSnapshot.Session(kind: $0.kind.title, date: $0.savedAt, source: $0.source, place: $0.placeLabel, count: $0.itemCount)
         }
 
+        let measured = speed.result
         if let report = probe.report, report.status != nil {
             var info = AssistantSnapshot.Link(checkedAt: report.checkedAt)
             info.status = report.status?.rawValue
@@ -155,22 +172,75 @@ struct AssistantSources {
             info.publicIP = report.external?.ip
             info.provider = report.external?.isp
             info.country = report.external?.countryCode
-            let down: Double? = report.speed?.downBps ?? speed.result?.downBps
-            let up: Double? = report.speed?.upBps ?? speed.result?.upBps
+            // The connection check samples the download; a full speed test run after it is the fresher word.
+            let fresher = measured.map { $0.measuredAt >= report.checkedAt } ?? false
+            let down: Double? = fresher ? (measured?.downBps ?? report.speed?.downBps) : (report.speed?.downBps ?? measured?.downBps)
+            let up: Double? = fresher ? (measured?.upBps ?? report.speed?.upBps) : (report.speed?.upBps ?? measured?.upBps)
             info.downMbps = down.map { $0 / 1_000_000 }
             info.upMbps = up.map { $0 / 1_000_000 }
-            info.latencyMs = report.speed?.latencyMs ?? speed.result?.idleLatencyMs
-            info.jitterMs = report.speed?.jitterMs ?? speed.result?.jitterMs
+            info.latencyMs = fresher ? (measured?.idleLatencyMs ?? report.speed?.latencyMs) : (report.speed?.latencyMs ?? measured?.idleLatencyMs)
+            info.jitterMs = fresher ? (measured?.jitterMs ?? report.speed?.jitterMs) : (report.speed?.jitterMs ?? measured?.jitterMs)
             info.intercepted = report.tls?.intercepted
             info.resolverLies = report.resolver?.liesAboutMissingNames
             info.exposedPorts = report.exposure?.openPorts.map(\.port) ?? []
             info.access = report.access?.verdict.rawValue
+            info.gatewayOk = report.gateway?.ok
+            info.dnsOk = report.dns?.ok
+            info.webOk = report.web?.ok
+            info.resolverName = report.resolver.flatMap { $0.resolverName ?? $0.resolverIP }
+            info.resolverCountry = report.resolver?.resolverCountry
+            info.blocked = report.access?.unreachable ?? []
+            info.tlsReached = report.tls?.reachable
+            info.exposureChecked = report.exposure != nil
+            info.bufferbloat = measured?.bufferbloatGrade
+            info.speedFailed = report.speedFailed
+            info.via = ProbeRoute.current().rawValue
+            info.warp = report.external?.warp == true
             snapshot.link = info
+        } else if let measured {
+            var info = AssistantSnapshot.Link(checkedAt: measured.measuredAt)
+            info.downMbps = measured.downBps.map { $0 / 1_000_000 }
+            info.upMbps = measured.upBps.map { $0 / 1_000_000 }
+            info.latencyMs = measured.idleLatencyMs
+            info.jitterMs = measured.jitterMs
+            info.bufferbloat = measured.bufferbloatGrade
+            snapshot.link = info
+        }
+        snapshot.sites = resources.hosts.compactMap { host in
+            resources.results[host].map { AssistantSnapshot.SiteReach(host: host, ok: $0.ok, millis: $0.millis) }
+        }
+        if let target = tracer.target {
+            snapshot.route = AssistantSnapshot.Route(
+                target: target,
+                address: tracer.address,
+                hops: (tracer.trace?.hops ?? []).map { hop in
+                    let place = hop.address.flatMap { tracer.places[$0] }
+                    let where_ = place.map { [$0.city, $0.countryCode].compactMap { $0 }.joined(separator: ", ") }
+                    let label = [where_?.isEmpty == false ? where_ : nil, place?.isp].compactMap { $0 }.joined(separator: " · ")
+                    return AssistantSnapshot.RouteHop(address: hop.address, millis: hop.millis, place: label.isEmpty ? nil : label)
+                },
+                failure: tracer.failure,
+                running: tracer.running
+            )
         }
         snapshot.capture = captureText()
         if let read = ble.lastRead {
             let age = Int(now.timeIntervalSince(read.readAt) / 60)
             snapshot.gatt = GATTDigest.text(read, intro: age < 1 ? "Read just now from" : "Read \(age) min ago from")
+            snapshot.gattDeviceID = read.deviceID.uuidString
+            snapshot.gattItems = read.services.flatMap { service in
+                let vendor = BLENumbers.serviceName(uuid: service.uuid) == nil
+                let serviceName = service.name ?? BLENumbers.serviceName(uuid: service.uuid) ?? service.uuid
+                return service.characteristics.map { characteristic in
+                    AssistantSnapshot.GattItem(
+                        service: serviceName,
+                        name: BLENumbers.characteristicName(uuid: characteristic.uuid) ?? characteristic.uuid,
+                        value: characteristic.value.flatMap { GATTValue.decode(uuid: characteristic.uuid, bytes: $0) },
+                        writable: characteristic.properties.localizedCaseInsensitiveContains("write"),
+                        vendor: vendor
+                    )
+                }
+            }
         }
         return snapshot
     }

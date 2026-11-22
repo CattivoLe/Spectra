@@ -722,6 +722,7 @@ final class LANScanner {
             }
             device.openPorts = ports
             device.portsScanned = true
+            if scope == .all { device.allPortsScannedAt = .now }
             device.portScanFraction = nil
             await enrich([device])
         }
