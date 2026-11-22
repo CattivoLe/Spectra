@@ -514,7 +514,7 @@ object AssistantCards {
     fun worst(findings: List<CardFinding>): CardRisk = findings.minByOrNull { it.risk.ordinal }?.risk ?: CardRisk.OK
 
     internal fun step(name: AssistantActions.Name, label: String? = null): CardStep =
-        CardStep(name.raw, label ?: AssistantActions.offer(name.raw)?.button?.trimEnd('?') ?: name.raw)
+        CardStep(name.raw, label ?: AssistantActions.button(name.raw)?.trimEnd('?') ?: name.raw)
 
     private fun portScan(ip: String, all: Boolean): CardStep =
         if (all) {
@@ -529,8 +529,8 @@ object AssistantCards {
     // MARK: - Saving
 
     /**
-     * The card's head as a saved chat keeps it: a title line and one line per finding with its marker. Readable in
-     * the old chat view and in History search, and read back by [parse] for the journal.
+     * The card's head as the store keeps it: a title line and one line per finding with its marker, read back by
+     * [parse] for the journal.
      */
     fun render(title: String, findings: List<CardFinding>): String =
         (listOf("**${title.replace("*", "")}**") + findings.map { "${it.risk.mark} ${it.text}" }).joinToString("\n")

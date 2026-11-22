@@ -112,7 +112,6 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
         nav.popBackStack()
     }
 
-    override fun chat(id: java.util.UUID) = nav.navigate("assistant/chat/$id")
 
     /** A summary card opens in the tab it was asked from, so going back returns to that screen. */
     override fun card(id: java.util.UUID) {
@@ -389,10 +388,6 @@ fun SpectraApp(model: SpectraModel) {
                 navigation(startDestination = Tab.Assistant.start, route = Tab.Assistant.graph) {
                     composable(Tab.Assistant.start) { cattivole.spectra.assistant.ui.AssistantHomeScreen(model, navigator) }
                     composable("${Tab.Assistant.cardRoute}/{id}") { summaryCard(model, navigator, it) }
-                    composable("assistant/chat/{id}") {
-                        val id = runCatching { java.util.UUID.fromString(it.text("id")) }.getOrNull()
-                        if (id != null) cattivole.spectra.assistant.ui.AssistantChatScreen(model, navigator, id)
-                    }
                     composable("assistant/models") { cattivole.spectra.assistant.ui.AssistantModelsScreen(model, navigator) }
                     composable("assistant/internet") { cattivole.spectra.assistant.ui.AssistantInternetScreen(model, navigator) }
                 }

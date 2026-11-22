@@ -357,11 +357,9 @@ class InternetCardsTest {
     }
 
     @Test
-    fun theCardOnlyStepsAreNotOfferedToTheChat() {
-        // The chat grammar names its tools; the card's own steps are run by the app, never chosen by the model.
+    fun theInternetStepsHaveWordsForTheCard() {
+        // A step's result is headed by its title and shown with its running label while it works.
         for (name in listOf("trace_route", "check_sites", "check_site", "expand_redirects")) {
-            assertFalse(name, AssistantActions.GRAMMAR.contains("\"$name\""))
-            assertEquals(name, null, AssistantActions.offer(name)?.request)
             assertTrue(AssistantActions.title(name) != name && AssistantActions.runningLabel(name).endsWith("…"))
         }
     }

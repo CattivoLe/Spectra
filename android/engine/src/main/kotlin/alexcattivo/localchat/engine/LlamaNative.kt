@@ -37,9 +37,7 @@ internal object LlamaNative {
     external fun memoryRemoveFrom(context: Long, position: Int): Boolean
     external fun stateSave(context: Long, path: String, tokens: IntArray): Boolean
     external fun stateLoad(context: Long, path: String, tokens: IntArray): Boolean
-    external fun newSampler(
-        model: Long, temperature: Float, topP: Float, topK: Int, seed: Int, grammar: ByteArray?, triggers: Array<ByteArray>?,
-    ): Long
+    external fun newSampler(model: Long, temperature: Float, topP: Float, topK: Int, seed: Int): Long
     external fun sample(sampler: Long, context: Long): Int
     external fun freeSampler(sampler: Long)
     external fun newEmbeddingContext(model: Long, batchTokens: Int, maxSequences: Int, threads: Int): Long

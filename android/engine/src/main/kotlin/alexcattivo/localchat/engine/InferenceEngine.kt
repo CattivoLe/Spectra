@@ -1,7 +1,6 @@
 package alexcattivo.localchat.engine
 
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.collect
 
 /** Одно сообщение диалога в нейтральном виде, не привязанном к движку. */
 data class ChatMessage(val role: Role, val content: String) {
@@ -27,16 +26,6 @@ data class GenerationParams(
     val seed: Int = 42,
     /** Разрешить модели «думать вслух» перед ответом, если она это умеет. */
     val thinking: Boolean = false,
-    /** Грамматика GBNF, которой вывод обязан следовать после одной из [grammarTriggers]. */
-    val grammar: String? = null,
-    /** Строки, после которых включается [grammar]; ищутся в собственном выводе этой генерации. */
-    val grammarTriggers: List<String> = emptyList(),
-    /**
-     * Мягкий предел промпта в токенах: когда переписка его превышает, старые обмены выбрасываются, хотя в контекст
-     * она бы ещё влезла. На процессоре каждый токен истории замедляет и разбор вопроса, и печать ответа.
-     * Системный промпт и последний вопрос не выбрасываются никогда; `null` — предел только у самого контекста.
-     */
-    val historyTokens: Int? = null,
 )
 
 /** Что известно о загруженной модели. */
@@ -60,8 +49,6 @@ data class GenerationStats(
     val promptTokens: Int,
     /** Сколько из них уже лежало в кэше от прошлой реплики и не пересчитывалось. */
     val reusedPromptTokens: Int = 0,
-    /** Сколько самых старых сообщений пришлось выбросить, чтобы история влезла в контекст. */
-    val droppedMessages: Int = 0,
     val generatedTokens: Int,
     val timeToFirstTokenSeconds: Double,
     val generationSeconds: Double,
@@ -98,16 +85,4 @@ interface InferenceEngine {
     fun generate(messages: List<ChatMessage>, params: GenerationParams): Flow<GenerationEvent>
     /** Breaks off whatever the engine is computing right now, mid-batch if it can. */
     fun abort() {}
-
-    /** Сколько токенов займёт этот диалог в контексте, без обрезки старого. `null`, если считать нечем. */
-    suspend fun countTokens(messages: List<ChatMessage>, thinking: Boolean): Int? = null
-
-    /** Короткий служебный ответ целиком, всегда самый вероятный вариант. */
-    suspend fun complete(messages: List<ChatMessage>, maxTokens: Int): String {
-        val text = StringBuilder()
-        generate(messages, GenerationParams(maxTokens = maxTokens, temperature = 0f)).collect { event ->
-            if (event is GenerationEvent.Text) text.append(event.piece)
-        }
-        return text.toString()
-    }
 }

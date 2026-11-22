@@ -4,10 +4,7 @@ import alexcattivo.localchat.engine.ChatMessage
 import alexcattivo.localchat.engine.EngineController
 import alexcattivo.localchat.kit.Chat
 import alexcattivo.localchat.kit.ChatFolder
-import alexcattivo.localchat.kit.ChatSession
-import alexcattivo.localchat.kit.SearchNotice
 import alexcattivo.localchat.kit.StoredMessage
-import alexcattivo.localchat.kit.web.ResearchStage
 import alexcattivo.localchat.kit.web.SearchPayload
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -117,7 +114,6 @@ import java.util.UUID
 /** Where the assistant screens go. Set up by the app's navigation. */
 interface AssistantNav {
     fun back()
-    fun chat(id: UUID)
     /** A summary card, live or saved. */
     fun card(id: UUID)
     fun models()
@@ -125,8 +121,8 @@ interface AssistantNav {
 }
 
 /**
- * The Assistant tab: the journal of summary cards (✨ on a screen makes one), the old chats below them, read-only,
- * and the way to the model and internet search.
+ * The Assistant tab: the journal of summary cards (✨ on a screen makes one), in folders, and the way to the model
+ * and internet search.
  */
 @Composable
 fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
@@ -144,37 +140,29 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     val changes = assistant.store.changes.collectAsStateValue()
     /** Each saved card's worst finding, for the color of its row. */
     var risks by remember { mutableStateOf<Map<UUID, CardRisk>>(emptyMap()) }
-    /** Summaries and chats whose last text was cut short or whose question has no answer: they get "Continue". */
+    /** Summaries whose last text was cut short: they get "Continue". */
     var unfinished by remember { mutableStateOf<Set<UUID>>(emptySet()) }
     LaunchedEffect(changes) {
-        chats = runCatching { assistant.store.chats() }.getOrDefault(emptyList())
+        // Only summaries: chats from before the cards are erased at start, and are not shown meanwhile.
+        chats = runCatching { assistant.store.chats().filter { CardSubjects.isCard(it.systemPrompt) } }.getOrDefault(emptyList())
         folders = runCatching { assistant.store.folders() }.getOrDefault(emptyList())
         val messages = chats.associate { chat -> chat.id to runCatching { assistant.store.messages(chat.id) }.getOrDefault(emptyList()) }
-        risks = chats.filter { CardSubjects.isCard(it.systemPrompt) }.associate { chat ->
+        risks = chats.associate { chat ->
             val head = messages[chat.id].orEmpty().firstOrNull { it.role == ChatMessage.Role.User }
             chat.id to (head?.content?.let(AssistantCards::parse)?.second?.let(AssistantCards::worst) ?: CardRisk.OK)
         }
         unfinished = chats.filter { chat ->
-            val last = messages[chat.id].orEmpty().lastOrNull() ?: return@filter false
-            when {
-                last.role == ChatMessage.Role.Assistant -> last.interrupted
-                // A card's head is the user's line: only an old chat's question can be left unanswered.
-                else -> !CardSubjects.isCard(chat.systemPrompt) && last.role == ChatMessage.Role.User
-            }
+            val last = messages[chat.id].orEmpty().lastOrNull()
+            last?.role == ChatMessage.Role.Assistant && last.interrupted
         }.map { it.id }.toSet()
     }
     val recording = assistant.recordingFolderId?.takeIf { id -> folders.any { it.id == id } } ?: assistant.summariesFolderId
     val openToContinue: (Chat) -> Unit = { chat ->
-        if (CardSubjects.isCard(chat.systemPrompt)) {
-            assistant.cards.continueOnOpen(chat.id)
-            nav.card(chat.id)
-        } else {
-            assistant.continueOnOpen(chat.id)
-            nav.chat(chat.id)
-        }
+        assistant.cards.continueOnOpen(chat.id)
+        nav.card(chat.id)
     }
     val notify = LocalNotify.current
-    // The folder shown; null is every chat. Kept as text so it survives the tab being recreated.
+    // The folder shown; null is every summary. Kept as text so it survives the tab being recreated.
     var shownFolder by rememberSaveable { mutableStateOf<String?>(null) }
     val folder = folders.firstOrNull { it.id.toString() == shownFolder }
     androidx.activity.compose.BackHandler(enabled = folder != null) { shownFolder = null }
@@ -186,8 +174,8 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     if (confirmErase) {
         AlertDialog(
             onDismissRequest = { confirmErase = false },
-            title = { Text(tr("Delete all chats?")) },
-            text = { Text(tr("Every chat and folder is erased from this phone. Models and settings stay.")) },
+            title = { Text(tr("Delete all summaries?")) },
+            text = { Text(tr("Every summary and folder is erased from this phone. Models and settings stay.")) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmErase = false
@@ -210,7 +198,7 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                     if (renamed != null) {
                         assistant.store.renameFolder(renamed.id, name)
                     } else {
-                        // From now on new summaries and chats are saved in the new folder.
+                        // From now on new summaries are saved in the new folder.
                         val created = assistant.startFolder(name)
                         if (chatToFile != null) assistant.store.moveChat(chatToFile, created) else shownFolder = created.toString()
                     }
@@ -235,7 +223,6 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     }
     val noModel = assistant.assistantModelFile == null
     val shown = if (folder == null) chats else chats.filter { it.folderID == folder.id }
-    val folderNames = folders.associate { it.id to it.name }
     val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     SpectraScreen(
         title = tr("Assistant"),
@@ -271,7 +258,7 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                     if (chats.isNotEmpty()) {
                         HorizontalDivider()
                         DropdownMenuItem(
-                            text = { Text(tr("Delete all summaries and chats"), color = MaterialTheme.colorScheme.error) },
+                            text = { Text(tr("Delete all summaries"), color = MaterialTheme.colorScheme.error) },
                             leadingIcon = { Icon(Icons.Rounded.DeleteSweep, null, tint = MaterialTheme.colorScheme.error) },
                             onClick = {
                                 menu = false
@@ -294,7 +281,7 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                 folder != null && shown.isEmpty() -> EmptyState(
                     Icons.Rounded.Folder,
                     tr("The folder is empty"),
-                    if (folder.id == recording) tr("New ✨ summaries will be saved here.") else tr("Hold a summary or chat in the list and choose Move to folder."),
+                    if (folder.id == recording) tr("New ✨ summaries will be saved here.") else tr("Hold a summary in the list and choose Move to folder."),
                 )
                 chats.isEmpty() -> EmptyState(
                     Icons.Rounded.AutoAwesome,
@@ -329,25 +316,12 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                 }
             }
         }
-        val summaries = shown.filter { CardSubjects.isCard(it.systemPrompt) }
-        val older = shown.filterNot { CardSubjects.isCard(it.systemPrompt) }
-        cardSection(summaries, header = tr("Summaries"), key = { it.id.toString() }, sectionKey = "summaries") { chat ->
-            ChatRow(
+        cardSection(shown, header = tr("Summaries"), key = { it.id.toString() }, sectionKey = "summaries") { chat ->
+            SummaryRow(
                 chat = chat,
-                folderName = null,
                 risk = risks[chat.id] ?: CardRisk.OK,
                 onOpen = { nav.card(chat.id) },
                 onContinue = if (chat.id in unfinished || assistant.cards.isStopped(chat.id)) ({ openToContinue(chat) }) else null,
-                onMove = { moving = chat },
-                onDelete = { scope.launch { assistant.deleteChat(chat.id) } },
-            )
-        }
-        cardSection(older, header = tr("Earlier chats"), key = { it.id.toString() }, sectionKey = "chats") { chat ->
-            ChatRow(
-                chat = chat,
-                folderName = if (folder == null) chat.folderID?.let(folderNames::get) else null,
-                onOpen = { nav.chat(chat.id) },
-                onContinue = if (chat.id in unfinished) ({ openToContinue(chat) }) else null,
                 onMove = { moving = chat },
                 onDelete = { scope.launch { assistant.deleteChat(chat.id) } },
             )
@@ -359,7 +333,7 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
 }
 
 /**
- * The folders as a row of chips above the chats, with the count in each and a way to add one. The folder new
+ * The folders as a row of chips above the summaries, with the count in each and a way to add one. The folder new
  * summaries go to is filled with the accent colour; the one shown below has an outline.
  */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
@@ -405,22 +379,20 @@ private fun FolderStrip(
 }
 
 /**
- * One chat in the list. No icon: the whole width goes to the question (two lines) and what it was about —
- * LAN, Bluetooth, Wi‑Fi… — as coloured labels, with when and, in the full list, its folder.
+ * One summary in the list. No icon: the whole width goes to its title (two lines), with the worst finding as a
+ * coloured label and when it was made.
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun ChatRow(
+private fun SummaryRow(
     chat: Chat,
-    folderName: String?,
+    risk: CardRisk,
     onOpen: () -> Unit,
     onMove: () -> Unit,
     onDelete: () -> Unit,
-    risk: CardRisk? = null,
     onContinue: (() -> Unit)? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
-    val topics = remember(chat.title) { if (risk != null) emptyList() else AssistantText.topics(chat.title) }
     Box {
         Column(
             Modifier
@@ -430,18 +402,16 @@ private fun ChatRow(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
-                chat.title.ifEmpty { tr("New chat") },
+                chat.title,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (risk != null) Pill(risk.label(), risk.color())
-                for (topic in topics) Pill(topic.label, topic.color())
-                val meta = listOfNotNull(ago(chat.updatedAt), folderName).joinToString(" · ")
+                Pill(risk.label(), risk.color())
                 Text(
-                    meta,
+                    ago(chat.updatedAt),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -449,7 +419,7 @@ private fun ChatRow(
                     modifier = Modifier.weight(1f, fill = false),
                 )
             }
-            // Left in the middle of an answer: one tap opens it and picks the text up.
+            // Stopped in the middle of a text: one tap opens it and picks the text up.
             if (onContinue != null) {
                 Surface(
                     shape = RoundedCornerShape(10.dp),
@@ -478,17 +448,6 @@ private fun ChatRow(
             )
         }
     }
-}
-
-@Composable
-private fun AssistantTopic.color(): androidx.compose.ui.graphics.Color = when (this) {
-    AssistantTopic.WIFI -> Spectra.colors.info
-    AssistantTopic.LAN -> Spectra.colors.good
-    AssistantTopic.BLUETOOTH -> MaterialTheme.colorScheme.primary
-    AssistantTopic.THREATS -> Spectra.colors.danger
-    AssistantTopic.HISTORY -> MaterialTheme.colorScheme.secondary
-    AssistantTopic.LINK -> Spectra.colors.warning
-    AssistantTopic.CAPTURE -> Spectra.colors.revealed
 }
 
 /** «22 ноября, 14:30»: a new folder's suggested name, so a round of checks is easy to find later. */
@@ -550,276 +509,6 @@ private fun kotlinx.coroutines.flow.StateFlow<Int>.collectAsStateValue(): Int {
     return value
 }
 
-/** One chat with the assistant. */
-@Composable
-fun AssistantChatScreen(model: SpectraModel, nav: AssistantNav, chatId: UUID) {
-    val assistant = model.assistant
-    LaunchedEffect(Unit) { assistant.ensureStarted() }
-    var session by remember { mutableStateOf<ChatSession?>(null) }
-    LaunchedEffect(chatId) {
-        session = assistant.openSession(chatId) ?: return@LaunchedEffect nav.back()
-    }
-    val current = session ?: return
-    ChatContent(model, assistant, current, nav)
-}
-
-@Composable
-private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session: ChatSession, nav: AssistantNav) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val listState = rememberLazyListState()
-    val engine = assistant.controller.state
-    LaunchedEffect(assistant.selectedModel, assistant.library.installed) { session.modelName = assistant.currentModelName }
-    LaunchedEffect(engine) { if (engine == EngineController.State.Ready) session.refreshContext() }
-    // A question another screen queued (a ✨ button) is sent as soon as the model is there.
-    LaunchedEffect(session, engine) {
-        if (engine == EngineController.State.Ready || engine == EngineController.State.UnloadedForMemory) {
-            assistant.takeQueuedQuestion(session.chat.id)?.let(session::send)
-            // "Continue" in the list: the answer left unfinished is picked up as the chat opens.
-            if (assistant.takeContinue(session.chat.id)) session.resume()
-        }
-    }
-    assistant.pendingSearch?.let { SearchApprovalDialog(it, assistant.web.provider.title) }
-    // Leaving the chat — back to the list or to another tab — pauses the answer; "Continue" picks it up on return.
-    // Folding or unfolding the phone recreates the screen and is not leaving.
-    DisposableEffect(session) {
-        onDispose { if ((context as? android.app.Activity)?.isChangingConfigurations != true) session.stop() }
-    }
-    // A next step starts a clean chat of its own: a short context answers faster and the step needs nothing above it.
-    val startNextStep: (String) -> Unit = { request ->
-        scope.launch {
-            val folder = assistant.store.chat(session.chat.id)?.folderID
-            nav.chat(assistant.ask(request, folder))
-        }
-    }
-    val queued = assistant.queuedQuestion(session.chat.id)
-    LaunchedEffect(session.messages.size) { if (session.messages.isNotEmpty()) listState.scrollToItem(0) }
-    val ready = engine != EngineController.State.Empty && engine != EngineController.State.Loading
-    SpectraScreen(
-        title = session.chat.title.ifEmpty { tr("New chat") },
-        subtitle = when (engine) {
-            EngineController.State.Loading -> tr("Loading the model…")
-            EngineController.State.Empty -> if (assistant.assistantModelFile == null) tr("No model yet") else null
-            else -> assistant.currentModelName
-        } ?: assistant.currentModelName,
-        onBack = nav::back,
-        actions = { ModelMenu(assistant, nav) },
-        fill = {
-            Column(Modifier.fillMaxSize().imePadding()) {
-                session.context?.let { usage ->
-                    val fraction = usage.fraction.toFloat()
-                    androidx.compose.material3.LinearProgressIndicator(
-                        progress = { fraction },
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        color = if (usage.isOverflowing) Spectra.colors.danger else MaterialTheme.colorScheme.primary,
-                        // One solid bar: Material 3's default gap at the indicator and dot at the end read as glitches here.
-                        gapSize = 0.dp,
-                        drawStopIndicator = {},
-                    )
-                }
-                Box(Modifier.weight(1f).fillMaxWidth()) {
-                    if (session.messages.isEmpty() && (queued != null || session.isGenerating)) {
-                        // Opened from another screen with a question: it is asked as soon as the model is loaded.
-                        // Also the moment between taking it and its message landing, so the starters never flash.
-                        QueuedQuestion(queued, ready, assistant.loadError)
-                    } else if (session.messages.isEmpty()) {
-                        // No text field any more: an empty old chat only points to where summaries start.
-                        Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.Bottom) {
-                            Text(tr("Chats are read-only now. Tap ✨ on a network, device or traffic screen for a summary."), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    } else {
-                        LazyColumn(
-                            state = listState,
-                            reverseLayout = true,
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.Bottom),
-                        ) {
-                            session.errorText?.let { error ->
-                                item { Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                            }
-                            session.searchNotice?.let { notice ->
-                                item { Text(noticeText(notice), color = Spectra.colors.warning, style = MaterialTheme.typography.bodySmall) }
-                            }
-                            session.searchReused?.let { (query, date) ->
-                                item {
-                                    Text(
-                                        tr("Used an earlier search, «%s» (%s): nothing was sent.", query, dateTime(date)),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                }
-                            }
-                            if (session.isSearching) item { BusyLine(stageText(session.searchStage)) }
-                            if (session.isUnanswered) {
-                                item(key = "paused") {
-                                    PausedLine(
-                                        if (session.errorText != null) tr("The answer did not finish.") else tr("The answer was paused when you left the chat."),
-                                        enabled = ready,
-                                        onContinue = session::resume,
-                                    )
-                                }
-                            }
-                            itemsIndexed(session.messages.asReversed(), key = { _, message -> message.id }) { reversedIndex, message ->
-                                val index = session.messages.lastIndex - reversedIndex
-                                val question = if (index > 0 && message.role == ChatMessage.Role.Assistant) session.messages[index - 1] else null
-                                MessageRow(
-                                    message = message,
-                                    status = if (index == session.messages.lastIndex) session.toolStatus else null,
-                                    tools = session.toolRuns[message.id].orEmpty(),
-                                    readFrom = question?.let { session.attachments[it.id]?.topics }.orEmpty(),
-                                    sources = question?.searchJson?.let(SearchPayload::fromJson),
-                                    isLast = index == session.messages.lastIndex,
-                                    isGenerating = session.isGenerating,
-                                    awaiting = session.awaitingText && index == session.messages.lastIndex,
-                                    onCopy = { copy(context, message.content) },
-                                    onRegenerate = session::regenerate,
-                                    onContinue = session::resume,
-                                    offers = if (ready) session.offers[message.id].orEmpty() else emptyList(),
-                                    onOffer = startNextStep,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-    )
-}
-
-/** A question handed over by another screen, waiting for the model: shown in place of the starters. */
-@Composable
-private fun QueuedQuestion(question: String?, ready: Boolean, loadError: String?) {
-    Column(
-        Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
-    ) {
-        if (question != null) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.widthIn(max = 320.dp)) {
-                    Text(question, Modifier.padding(horizontal = 14.dp, vertical = 10.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
-                }
-            }
-        }
-        when {
-            loadError != null -> Text(tr("Could not load the model: %s", loadError), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            !ready -> BusyLine(tr("Loading the model…"))
-            else -> BusyLine(tr("Thinking…"))
-        }
-    }
-}
-
-/** A question left without an answer when the chat was left: the answer waits for a tap. */
-@Composable
-private fun PausedLine(text: String, enabled: Boolean, onContinue: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(Icons.Rounded.Pause, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(text, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        TextButton(onClick = onContinue, enabled = enabled) {
-            Icon(Icons.Rounded.PlayArrow, null, Modifier.size(18.dp))
-            Text(tr("Continue"), Modifier.padding(start = 4.dp))
-        }
-    }
-}
-
-/** The assistant has one model: no picker, only the way to its page (download, delete, free up space). */
-@Composable
-private fun ModelMenu(assistant: AssistantModel, nav: AssistantNav) {
-    IconButton(onClick = { nav.models() }) { Icon(Icons.Rounded.Memory, contentDescription = tr("Model")) }
-}
-
-@Composable
-private fun BusyLine(text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun MessageRow(
-    message: StoredMessage,
-    status: String?,
-    tools: List<String>,
-    readFrom: List<String>,
-    sources: SearchPayload?,
-    isLast: Boolean,
-    isGenerating: Boolean,
-    awaiting: Boolean = false,
-    onCopy: () -> Unit,
-    onRegenerate: () -> Unit,
-    onContinue: () -> Unit,
-    offers: List<alexcattivo.localchat.kit.tools.ToolOffer> = emptyList(),
-    onOffer: (String) -> Unit = {},
-) {
-    if (message.role == ChatMessage.Role.User) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.widthIn(max = 320.dp),
-            ) {
-                Text(message.content, Modifier.padding(horizontal = 14.dp, vertical = 10.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
-            }
-        }
-        return
-    }
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        sources?.images?.takeIf { it.isNotEmpty() }?.let { ImageStrip(it) }
-        if (message.content.isEmpty() && isLast && isGenerating) {
-            BusyLine(status?.let(cattivole.spectra.assistant.AssistantActions::runningLabel) ?: tr("Thinking…"))
-        } else {
-            MarkdownText(message.content)
-            when {
-                status != null -> BusyLine(cattivole.spectra.assistant.AssistantActions.runningLabel(status))
-                // After "Continue" or a check, the model reads everything again before the next word: say it works.
-                awaiting && isGenerating -> BusyLine(tr("Thinking…"))
-            }
-        }
-        val notes = buildList {
-            if (readFrom.isNotEmpty()) add(tr("Read from Spectra: %s", readFrom.joinToString(", ")))
-            if (tools.isNotEmpty()) add(tr("Ran: %s", tools.distinct().joinToString(", ", transform = cattivole.spectra.assistant.AssistantActions::title)))
-            sources?.let {
-                add(if (it.images.isNullOrEmpty()) tr("Web: %d sources for «%s»", it.results.size, it.query) else tr("Pictures for «%s»", it.query))
-            }
-            message.modelName?.let(::add)
-        }
-        if (notes.isNotEmpty()) {
-            Text(notes.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        // The answer suggested a check: offered as a question to tap instead of a tool name to type.
-        if (isLast && !isGenerating) {
-            for (offer in offers) {
-                val request = offer.request ?: continue
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    modifier = Modifier.clickable { onOffer(request) },
-                ) {
-                    Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Rounded.AutoAwesome, null, tint = Spectra.colors.revealed, modifier = Modifier.size(16.dp))
-                        Text(offer.button.orEmpty(), style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            }
-        }
-        if (!(isLast && isGenerating) && message.content.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                IconButton(onClick = onCopy, modifier = Modifier.size(32.dp)) { Icon(Icons.Rounded.ContentCopy, tr("Copy"), Modifier.size(18.dp)) }
-                if (isLast) {
-                    IconButton(onClick = onRegenerate, modifier = Modifier.size(32.dp)) { Icon(Icons.Rounded.Refresh, tr("Answer again"), Modifier.size(18.dp)) }
-                    if (message.interrupted) {
-                        TextButton(onClick = onContinue) {
-                            Icon(Icons.Rounded.PlayArrow, null, Modifier.size(18.dp))
-                            Text(tr("Continue"), Modifier.padding(start = 4.dp))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 @Composable
 internal fun SearchApprovalDialog(pending: AssistantModel.PendingSearch, provider: String) {
     var query by remember(pending) { mutableStateOf(pending.query) }
@@ -837,31 +526,8 @@ internal fun SearchApprovalDialog(pending: AssistantModel.PendingSearch, provide
     )
 }
 
-private fun stageText(stage: ResearchStage?): String = when (stage) {
-    ResearchStage.Planning -> tr("Writing the search query…")
-    ResearchStage.Searching, null -> tr("Searching the web…")
-    ResearchStage.Checking -> tr("Checking whether that is enough…")
-    is ResearchStage.Retrying -> tr("Searching again: «%s»…", stage.query)
-    is ResearchStage.Reading -> tr("Reading pages: %d…", stage.pages)
-    ResearchStage.Selecting -> tr("Picking what matters…")
-}
-
-private fun noticeText(notice: SearchNotice): String = when (notice) {
-    SearchNotice.NotNeeded -> tr("This question did not need the internet.")
-    SearchNotice.VoiceNeedsNoConfirmation, SearchNotice.Cancelled -> tr("Search cancelled: answering without the internet.")
-    is SearchNotice.Unavailable -> tr("Search is not set up: %s.", notice.error.message ?: "")
-    is SearchNotice.NothingFound -> tr("Nothing found for «%s». Answering without the internet.", notice.query)
-    is SearchNotice.Failed -> tr("Search failed: %s Answering without the internet.", notice.error.message ?: notice.error.javaClass.simpleName)
-    SearchNotice.ImagesNeedWeb -> tr("Pictures come from a web search: turn it on under Internet to see them.")
-}
-
-private fun copy(context: Context, text: String) {
-    context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Spectra", text))
-}
-
-/** Models to download and choose from. */
 /**
- * The assistant's model: one, chosen with tools/assistant-eval. Download it (or delete it), optionally add the
+ * The assistant's model: one, chosen by comparing small models on Spectra's own tasks. Download it (or delete it), optionally add the
  * small model that helps web search rank pages by meaning, and clear out models left from before there was one.
  */
 @Composable
