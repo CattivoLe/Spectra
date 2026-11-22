@@ -118,6 +118,9 @@ struct AssistantActions {
             sources.lan.scan()
             try? await Task.sleep(for: .milliseconds(400))
             await waitWhile(timeout: 25) { sources.lan.isScanning }
+            if sources.lan.state == .localNetworkDenied {
+                return "iOS local network access is turned off for Spectra, so the scan cannot reach any device. Say so, and that it is turned on in Settings → Privacy & Security → Local Network."
+            }
             return section(.lan, sources: sources)
 
         case .scanBluetooth:

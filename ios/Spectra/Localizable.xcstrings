@@ -6803,7 +6803,6 @@
       }
     },
     "No access": {
-      "extractionState": "stale",
       "localizations": {
         "ru": {
           "stringUnit": {
@@ -16556,6 +16555,47 @@
           "stringUnit": {
             "state": "translated",
             "value": "Выдача Google и Google Картинки по одному ключу: лучшие фото устройств. Ключ — на serper.dev, 2500 бесплатных запросов для начала. Сами страницы читает этот телефон."
+          }
+        }
+      }
+    },
+    "Waiting for local network access…": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ждём доступа к локальной сети…"
+          }
+        }
+      }
+    },
+    "No local network access": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет доступа к локальной сети"
+          }
+        }
+      }
+    },
+    "iOS does not let Spectra reach devices on this Wi-Fi. Turn on Spectra in Settings → Privacy & Security → Local Network, then scan again.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iOS не пускает Spectra к устройствам этой сети Wi‑Fi. Включите Spectra в Настройках → Конфиденциальность и безопасность → Локальная сеть и просканируйте снова."
+          }
+        }
+      }
+    },
+    "Local network access is off": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к локальной сети выключен"
           }
         }
       }

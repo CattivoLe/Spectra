@@ -76,11 +76,20 @@ final class WiFiInfo: NSObject, CLLocationManagerDelegate {
         current = await withCheckedContinuation { (continuation: CheckedContinuation<Network?, Never>) in
             NEHotspotNetwork.fetchCurrent { network in
                 continuation.resume(returning: network.map {
-                    Network(ssid: $0.ssid, bssid: $0.bssid.isEmpty ? nil : $0.bssid, isSecure: $0.isSecure)
+                    Network(ssid: $0.ssid, bssid: $0.bssid.isEmpty ? nil : $0.bssid,
+                            isSecure: Self.isSecure($0.securityType))
                 })
             }
         }
         #endif
+    }
+
+    /// `NEHotspotNetwork.isSecure` is filled in only for a hotspot helper; from
+    /// `fetchCurrent` it is always false, so every network looked open. The
+    /// security type is what `fetchCurrent` really reports. Unknown counts as
+    /// secure: no warning without proof.
+    nonisolated static func isSecure(_ type: NEHotspotNetworkSecurityType) -> Bool {
+        type != .open
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
