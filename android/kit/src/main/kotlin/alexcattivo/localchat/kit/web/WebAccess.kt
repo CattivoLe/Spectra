@@ -15,11 +15,10 @@ interface SecretStore {
 
 /**
  * Настройки доступа модели в интернет. По умолчанию всё выключено: приложение работает только на устройстве.
- * Наружу уходит одно — короткий поисковый запрос; диалог, профиль и сведения об устройстве не передаются.
+ * Наружу уходит одно — короткий поисковый запрос (марка и модель устройства или домен ссылки); адреса и данные сканов
+ * не передаются.
  */
 class WebAccess(private val settings: SettingsStore, private val secrets: SecretStore) {
-    /** The host app's rule for the query planner: which questions it answers from its own data, without the web. */
-    var plannerNote: String? = null
     enum class ProviderKind(val title: String, val supportsImages: Boolean = true) {
         Searxng("SearXNG"),
         Brave("Brave Search"),
@@ -96,18 +95,6 @@ class WebAccess(private val settings: SettingsStore, private val secrets: Secret
     private val meaningState = setting(settings.getBoolean(Keys.MEANING, true)) { settings.putBoolean(Keys.MEANING, it) }
     var useMeaning: Boolean get() = meaningState.value; set(value) = meaningState.set(value)
 
-    /** Если в найденном нет ответа, поискать ещё раз другим запросом (один повтор). */
-    private val retryState = setting(settings.getBoolean(Keys.RETRY, true)) { settings.putBoolean(Keys.RETRY, it) }
-    var retryIfMissing: Boolean get() = retryState.value; set(value) = retryState.set(value)
-
-    /** Составлять запрос моделью с учётом разговора и пропускать поиск, когда он не нужен. */
-    private val smartState = setting(settings.getBoolean(Keys.SMART, true)) { settings.putBoolean(Keys.SMART, it) }
-    var smartQuery: Boolean get() = smartState.value; set(value) = smartState.set(value)
-
-    /** В голосовом разговоре искать без окна подтверждения: показать его там некому. Запросы всё равно пишутся в журнал. */
-    private val voiceFreeState = setting(settings.getBoolean(Keys.VOICE_FREE, true)) { settings.putBoolean(Keys.VOICE_FREE, it) }
-    var voiceSearchWithoutConfirmation: Boolean get() = voiceFreeState.value; set(value) = voiceFreeState.set(value)
-
     /** Модель для отбора по смыслу. Задаёт приложение, когда она установлена. */
     var embedder: PassageEmbedder? = null
 
@@ -119,15 +106,7 @@ class WebAccess(private val settings: SettingsStore, private val secrets: Secret
     /** Как получить поисковик: в тестах подменяется. */
     var providerFactory: ((WebAccess) -> SearchProvider)? = null
 
-    fun needsConfirmation(voiceMode: Boolean) = confirmEachSearch && !(voiceMode && voiceSearchWithoutConfirmation)
-
-    /**
-     * Облегчённый поиск в голосовом разговоре: на телефоне без расчёта на видеокарте полный поиск с проверкой
-     * занимал до полутора минут, а в разговоре ответ должен начаться быстро. Меньше страниц и найденного в промпте.
-     */
-    var lightInVoice = true
-
-    /** Полный поиск: выдача, чтение страниц и отбор кусков под вопрос. `light` — облегчённый, для голоса. */
+    /** Полный поиск: выдача, чтение страниц и отбор кусков под вопрос. `light` — облегчённый, для «Подробнее». */
     fun makeResearch(light: Boolean = false): WebResearch = WebResearch(
         provider = makeProvider(),
         fetcher = fetcher,
@@ -177,9 +156,6 @@ class WebAccess(private val settings: SettingsStore, private val secrets: Secret
         const val READ_PAGES = "web.readPages"
         const val PAGES = "web.pagesToRead"
         const val MEANING = "web.useMeaning"
-        const val RETRY = "web.retryIfMissing"
-        const val SMART = "web.smartQuery"
-        const val VOICE_FREE = "web.voiceWithoutConfirmation"
     }
 
     companion object {

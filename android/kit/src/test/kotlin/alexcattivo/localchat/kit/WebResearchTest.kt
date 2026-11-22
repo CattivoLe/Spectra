@@ -1,6 +1,5 @@
 package alexcattivo.localchat.kit
 
-import alexcattivo.localchat.kit.web.AnswerCheck
 import alexcattivo.localchat.kit.web.Chunker
 import alexcattivo.localchat.kit.web.ContentExtractor
 import alexcattivo.localchat.kit.web.ExtractedPage
@@ -11,10 +10,7 @@ import alexcattivo.localchat.kit.web.PageFetching
 import alexcattivo.localchat.kit.web.Passage
 import alexcattivo.localchat.kit.web.PassageEmbedder
 import alexcattivo.localchat.kit.web.PassageSelector
-import alexcattivo.localchat.kit.web.QueryPlan
-import alexcattivo.localchat.kit.web.QueryPlanner
 import alexcattivo.localchat.kit.web.RankingMethod
-import alexcattivo.localchat.kit.web.ResearchStage
 import alexcattivo.localchat.kit.web.SearchPayload
 import alexcattivo.localchat.kit.web.SearchProvider
 import alexcattivo.localchat.kit.web.SearchResult
@@ -114,42 +110,18 @@ class WebResearchTest {
 
     @Test fun readsPagesAndFindsTheFactThatSnippetsDoNotHave() = runBlocking {
         val research = WebResearch(FakeProvider(results), FakeFetcher(mapOf("https://paris.example/tower" to articleHtml)), pagesToRead = 3)
-        val stages = mutableListOf<ResearchStage>()
-        val payload = research.runWithRetry("высота Эйфелевой башни", "Какая высота у Эйфелевой башни?", null, null, progress = { stages += it })
+        val sent = mutableListOf<String>()
+        val payload = research.run("высота Эйфелевой башни", "Какая высота у Эйфелевой башни?", sent = { sent += it })
         assertEquals("две страницы не открылись — это не ошибка всего поиска", 1, payload.pagesRead)
         val evidence = payload.evidence!!
         assertTrue(evidence.any { it.text.contains("330 метров") })
         assertFalse(evidence.any { it.text.contains("Купить тур") })
-        assertEquals(listOf(ResearchStage.Searching, ResearchStage.Reading(3), ResearchStage.Selecting), stages)
-        val prompt = payload.promptText("Какая высота у Эйфелевой башни?")
-        assertTrue("номер источника — его место в выдаче", prompt.contains("[2] Высота башни — https://paris.example/tower"))
-        assertFalse(prompt.contains("[3] Туры"))
-        assertTrue(payload.promptText("q", spoken = true).contains("не пиши их номера"))
+        assertEquals(listOf("высота Эйфелевой башни"), sent)
+        // Номер источника — его место в выдаче: статья вторая, туры (третьи) в отобранное не попали.
+        assertTrue(1 in payload.usedSourceIndices)
+        assertFalse(2 in payload.usedSourceIndices)
         // Хранится в базе строкой JSON и читается обратно без потерь.
         assertEquals(payload, SearchPayload.fromJson(payload.toJson()))
-    }
-
-    @Test fun secondQueryFindsWhatTheFirstMissed() = runBlocking {
-        val provider = object : SearchProvider {
-            override val name = "p"
-            override suspend fun search(query: String, limit: Int) =
-                if (query.contains("метр")) listOf(results[1]) else listOf(results[2])
-        }
-        val research = WebResearch(provider, FakeFetcher(mapOf("https://paris.example/tower" to articleHtml)), pagesToRead = 2)
-        val sent = mutableListOf<String>()
-        val payload = research.runWithRetry(
-            "туры", "Какая высота у Эйфелевой башни?",
-            check = { _, evidence, _ -> if (evidence.any { it.text.contains("330") }) null else "высота башни в метрах" },
-            approve = null,
-            sent = { sent += it },
-        )
-        assertEquals(listOf("туры", "высота башни в метрах"), sent)
-        assertEquals(listOf("высота башни в метрах"), payload.extraQueries)
-        assertTrue(payload.evidence!!.any { it.text.contains("330 метров") })
-        // Отказ от второго запроса — он не уходит в сеть.
-        val declined = mutableListOf<String>()
-        research.runWithRetry("туры", "q", { _, _, _ -> "другой запрос" }, { null }, sent = { declined += it })
-        assertEquals(listOf("туры"), declined)
     }
 
     @Test fun hybridRankingPromotesPassageFoundOnlyByMeaning() = runBlocking {
@@ -191,32 +163,5 @@ class WebResearchTest {
         assertTrue(chosen.any { it.text.contains("330") })
         // Короткий список уходит в эмбеддинги целиком: по смыслу может подойти кусок без общих слов с вопросом.
         assertEquals(listOf(0, 1, 2), PassageSelector.shortlist(passages.take(3), "высота", 40))
-    }
-
-    @Test fun mergeShiftsSourcesAndSkipsDuplicates() {
-        val first = WebResearch.Gathered(results.take(2), listOf(Passage(1, null, "a", 0)), 1)
-        val second = WebResearch.Gathered(listOf(results[1], results[2]), listOf(Passage(0, null, "dup", 0), Passage(1, null, "b", 0)), 2)
-        val merged = WebResearch.merge(first, second)
-        assertEquals(3, merged.results.size)
-        assertEquals(listOf("a", "b"), merged.passages.map { it.text })
-        assertEquals(2, merged.passages.last().sourceIndex)
-    }
-
-    @Test fun plannerAndCheckParseTypicalAnswers() {
-        assertEquals(QueryPlan.Search("высота Эвереста"), QueryPlanner.parse("Запрос: «высота Эвереста».\nпояснение"))
-        assertEquals(QueryPlan.NotNeeded, QueryPlanner.parse("НЕТ"))
-        // A refusal with a reason, the way the host app's note shows it: not a query «NO (security_summary_network)».
-        assertEquals(QueryPlan.NotNeeded, QueryPlanner.parse("NO (security_summary_network)"))
-        assertEquals(QueryPlan.NotNeeded, QueryPlanner.parse("НЕТ — это вопрос о сети пользователя"))
-        assertEquals(QueryPlan.NotNeeded, QueryPlanner.parse("No, the app has this."))
-        // A query that merely starts with the word stays a query.
-        assertEquals(QueryPlan.Search("нет интернета на телефоне"), QueryPlanner.parse("нет интернета на телефоне"))
-        assertEquals(QueryPlan.Search("No-IP DDNS уязвимости"), QueryPlanner.parse("No-IP DDNS уязвимости"))
-        assertNull(QueryPlanner.parse("   "))
-        assertEquals(AnswerCheck.Reply.Yes("8849 метров"), AnswerCheck.parse("ДА: 8849 метров"))
-        assertEquals(AnswerCheck.Reply.No("высота Эвереста в метрах"), AnswerCheck.parse("**НЕТ:** высота Эвереста в метрах"))
-        val evidence = listOf(Passage(0, null, "Высота горы 8 849 метров над уровнем моря.", 0))
-        assertTrue(AnswerCheck.isGrounded("8849 метров", evidence))
-        assertFalse("число по памяти, а не из найденного", AnswerCheck.isGrounded("330 м", evidence))
     }
 }

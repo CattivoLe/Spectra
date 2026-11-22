@@ -1133,35 +1133,14 @@ Checking the connection…	Проверяю соединение…
 Measuring speed…	Замеряю скорость…
 Capturing traffic…	Снимаю трафик…
 Running %s…	Выполняю %s…
-Decode the last traffic capture	Расшифруй последний захват трафика
-Give me a security summary: network, internet, and what to fix	Дай сводку по безопасности: сеть, интернет и что стоит исправить
-Scan my local network and show me what these devices are	Просканируй локальную сеть и покажи, что это за устройства
-Scan Bluetooth nearby: is there someone else's tracker?	Просканируй Bluetooth рядом: нет ли чужого трекера?
-Scan the Wi‑Fi around me: which channel is freer?	Просканируй Wi‑Fi вокруг: какой канал свободнее?
-Check my internet connection: DNS, latency, provider	Проверь интернет-соединение: DNS, задержки, провайдер
-Measure my internet speed	Замерь скорость интернета
 Could not open the saved chats: %s. New chats will not be saved.	Не удалось открыть сохранённые диалоги: %s. Новые диалоги не сохранятся.
 Assistant	Ассистент
-Delete all chats?	Удалить все диалоги?
-New chat	Новый диалог
+Delete all summaries?	Удалить все сводки?
 Internet…	Интернет…
 Could not load the model: %s	Не удалось загрузить модель: %s
 Loading the model…	Загружаю модель…
-Used an earlier search, «%s» (%s): nothing was sent.	Использован недавний поиск «%s» (%s): ничего не отправлено.
-Read from Spectra: %s	Прочитано в Spectra: %s
-Ran: %s	Выполнено: %s
 Send	Отправить
 Will be sent to “%s”	Будет отправлено в «%s»
-Writing the search query…	Составляю запрос…
-Searching the web…	Ищу в интернете…
-Checking whether that is enough…	Проверяю, хватает ли найденного…
-Searching again: «%s»…	Ищу ещё: «%s»…
-Reading pages: %d…	Читаю страницы: %d…
-Picking what matters…	Выбираю нужное…
-Search cancelled: answering without the internet.	Поиск отменён: ответ без интернета.
-Search is not set up: %s.	Поиск не настроен: %s.
-Nothing found for «%s». Answering without the internet.	По запросу «%s» ничего не нашлось. Ответ без интернета.
-Search failed: %s Answering without the internet.	Поиск не удался: %s Ответ без интернета.
 Models	Модели
 %s · for search by meaning	%s · для поиска по смыслу
 Catalog	Каталог
@@ -1247,11 +1226,8 @@ This network is on 5 GHz (channel %d), and this sensor hears only 2.4 GHz. Captu
 This network is on 5 GHz (channel %d). The sensor's firmware %s captures on 2.4 GHz only: update the sensor to firmware %s or newer.	Эта сеть в диапазоне 5 ГГц (канал %d). Прошивка сенсора %s захватывает только на 2,4 ГГц: обновите сенсор до прошивки %s или новее.
 Asking the router about port forwarding…	Спрашиваю роутер о пробросе портов…
 Connecting to the device…	Подключаюсь к устройству…
-Looking through History…	Смотрю Историю…
 Saving a note…	Сохраняю заметку…
 Removing a note…	Удаляю заметку…
-I tried to run a check but could not finish it. Please ask again.	Я попробовал запустить проверку, но не смог её закончить. Спросите, пожалуйста, ещё раз.
-Earlier chats	Прошлые диалоги
 The on-device assistant needs Android 12 or newer.	Ассистенту на телефоне нужен Android 12 или новее.
 Every chat is erased from this phone. Models, the dossier and settings stay.	Все диалоги будут стёрты с телефона. Модели, досье и настройки останутся.
 More	Ещё
@@ -1265,15 +1241,11 @@ The assistant reads the app's own scans and can run fresh ones: Wi‑Fi, LAN, Bl
 Hold a chat to delete it.	Удерживайте диалог, чтобы удалить его.
 Download a model under Models to start.	Чтобы начать, скачайте модель в разделе «Модели».
 Try asking	Попробуйте спросить
-Thinking…	Думаю…
-Web: %d sources for «%s»	Интернет: %d источн. по запросу «%s»
-Answer again	Ответить заново
 Continue	Продолжить
 Editing the question	Правка вопроса
 Ask about your network…	Спросите о своей сети…
 Send this query to the internet?	Отправить этот запрос в интернет?
 Don't send	Не отправлять
-This question did not need the internet.	Для этого вопроса интернет не понадобился.
 Models are downloaded from Hugging Face and run on this phone. Larger ones answer better but need more memory and are slower.	Модели скачиваются с Hugging Face и работают на этом телефоне. Крупные отвечают лучше, но им нужно больше памяти и они медленнее.
 Downloading: %s of %s	Загрузка: %s из %s
 Paused at %s	Пауза на %s
@@ -1344,23 +1316,12 @@ Downloaded once from Hugging Face, then it works on this phone without the inter
 Search by meaning (optional)	Поиск по смыслу (необязательно)
 Other models on this phone	Другие модели на телефоне
 The assistant no longer uses them. Delete them to free up space.	Ассистент их больше не использует. Удалите, чтобы освободить место.
-a Wi‑Fi scan	сканирование Wi‑Fi
 Scan Wi‑Fi?	Просканировать Wi‑Fi?
-a network scan	сканирование сети
 Scan the local network?	Просканировать локальную сеть?
-a Bluetooth scan	сканирование Bluetooth
 Scan Bluetooth?	Просканировать Bluetooth?
-a connection check	проверку соединения
 Check the connection?	Проверить соединение?
-a speed test	замер скорости
 Measure the speed?	Замерить скорость?
-a port forwarding check	проверку проброса портов
 Check port forwarding?	Проверить проброс портов?
-Check which ports my router forwards to the internet	Проверь, какие порты роутер пробрасывает в интернет
-a port scan	сканирование портов
-a traffic capture	запись трафика
-a connection to the device	подключение к устройству
-a search through History	поиск по истории
 Wi‑Fi scan	сканирование Wi‑Fi
 network scan	сканирование сети
 Bluetooth scan	сканирование Bluetooth
@@ -1370,15 +1331,8 @@ port scan	сканирование портов
 port forwarding check	проверка проброса портов
 traffic capture	запись трафика
 device connection	подключение к устройству
-History search	поиск по истории
 saving a note	сохранение заметки
 removing a note	удаление заметки
-Scan every port of %s?	Просканировать все порты %s?
-Scan all ports of %s	Просканируй все порты %s
-Scan the ports of %s?	Просканировать порты %s?
-Scan the ports of %s	Просканируй порты %s
-Read “%s” over Bluetooth?	Прочитать «%s» по Bluetooth?
-Connect to %s and read its data	Подключись к %s и прочитай его данные
 New folder	Новая папка
 Rename folder	Переименовать папку
 Folder	Папка
@@ -1390,13 +1344,9 @@ Hold a chat to move it to a folder or delete it.	Удерживайте диал
 Move to folder…	Переместить в папку…
 Move to folder	Переместить в папку
 No folder	Без папки
-The answer was paused when you left the chat.	Ответ приостановлен: вы ушли из диалога.
-Pictures for «%s»	Картинки по запросу «%s»
-Pictures come from a web search: turn it on under Internet to see them.	Картинки ищутся в интернете: включите поиск в разделе «Интернет», чтобы их увидеть.
 What is the Bluetooth device “%s” (%s): what kind of device is it, and what does it advertise about itself?	Что за Bluetooth-устройство «%s» (%s): какого оно типа и что сообщает о себе в эфире?
 What is the device %s (%s) on my local network, and what deserves attention about it?	Что за устройство %s (%s) в моей локальной сети и на что в нём стоит обратить внимание?
 Open the page	Открыть страницу
-The answer did not finish.	Ответ не закончен.
 # Summary cards (✨): findings, buttons, journal
 The local network has not been scanned yet.	Локальная сеть ещё не сканировалась.
 Devices on %s: %d.	Устройств в сети %s: %d.
@@ -1480,13 +1430,12 @@ Done in %s s	Готово через %s с
 Critical	Критично
 Attention	Внимание
 Fine	В порядке
-Delete all summaries and chats	Удалить все сводки и чаты
-Hold a summary or chat in the list and choose Move to folder.	Удержите сводку или чат в списке и выберите «Переместить в папку».
+Delete all summaries	Удалить все сводки
+Hold a summary in the list and choose Move to folder.	Удержите сводку в списке и выберите «Переместить в папку».
 No summaries yet	Сводок пока нет
 Tap ✨ on a Wi‑Fi network, the LAN list, a device or recorded traffic: the findings show at once, and the model on this phone puts them into plain words.	Нажмите ✨ на Wi‑Fi-сети, списке LAN, устройстве или записанном трафике: находки появятся сразу, а модель на телефоне объяснит их простыми словами.
 Summaries	Сводки
 Hold a row to move it to a folder or delete it.	Удержите строку, чтобы переместить её в папку или удалить.
-Chats are read-only now. Tap ✨ on a network, device or traffic screen for a summary.	Чаты теперь только для чтения. Для сводки нажмите ✨ на экране сети, устройства или трафика.
 Saved session of %s	Сохранённая сессия от %s
 Recording in progress	Идёт запись
 Current recording	Текущая запись
@@ -1579,10 +1528,6 @@ Redirects %d times and ends at %s.	Перенаправлений: %d, в кон
 It leads to another site: %s.	Ссылка ведёт на другой сайт: %s.
 The final address looks like phishing: %s.	Конечный адрес похож на фишинг: %s.
 The final address has warning signs: %s.	У конечного адреса есть тревожные признаки: %s.
-a traceroute	трассировку
-a check of your sites	проверку ваших сайтов
-a certificate and domain check	проверку сертификата и домена
-expanding the redirects	раскрытие перенаправлений
 traceroute	трассировка
 check of your sites	проверка ваших сайтов
 certificate and domain check	проверка сертификата и домена
@@ -1681,4 +1626,4 @@ the service's credits ran out	у сервиса закончились кред�
 too many requests	слишком много запросов
 New summaries are saved to «%s»	Новые сводки сохраняются в «%s»
 New summaries go to the highlighted folder. Hold another folder to save there.	Новые сводки идут в выделенную папку. Удержите другую, чтобы сохранять в неё.
-Every chat and folder is erased from this phone. Models and settings stay.	Все чаты и папки будут удалены с телефона. Модели и настройки останутся.
+Every summary and folder is erased from this phone. Models and settings stay.	Все сводки и папки будут удалены с телефона. Модели и настройки останутся.

@@ -1,7 +1,5 @@
 package cattivole.spectra.assistant
 
-import alexcattivo.localchat.kit.tools.ToolOffer
-import alexcattivo.localchat.kit.tools.ToolRegistry
 import cattivole.spectra.core.BleDevice
 import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.PcapAnalyzer
@@ -14,12 +12,11 @@ import org.json.JSONObject
 import kotlin.coroutines.coroutineContext
 
 /**
- * Live actions the assistant may trigger on its own: a fresh scan or check, not just the last saved result.
+ * The live checks a summary card's step buttons run: a fresh scan or check, not just the last saved result.
  *
- * Deliberately excluded, on any phrasing of the question: deauth, LoRa transmission, firmware flashing, joining
- * a Wi‑Fi network, and anything else that sends something over the air or changes a setting. Those stay behind
- * the app's own buttons. What the model sees comes from the air and could be adversarial, so it never gets a
- * lever that transmits. `connect_bluetooth` is the one that opens a link rather than only listening: it reads
+ * Deliberately excluded: deauth, LoRa transmission, firmware flashing, joining a Wi‑Fi network, and anything else
+ * that sends something over the air or changes a setting. Those stay behind the app's own buttons. The steps come
+ * from the card's rules, never from the model. `connect_bluetooth` is the one that opens a link rather than only listening: it reads
  * what one device publishes about itself and drops the link again; nothing is written. Mirrors AssistantActions.swift.
  */
 class AssistantActions(val sources: AssistantSources) {
@@ -33,9 +30,6 @@ class AssistantActions(val sources: AssistantSources) {
         CHECK_PORT_FORWARDING("check_port_forwarding"),
         CAPTURE_PCAP("capture_pcap"),
         CONNECT_BLUETOOTH("connect_bluetooth"),
-        SEARCH_HISTORY("search_history"),
-
-        // Summary-card steps only: the chat grammar does not offer them, the card's buttons call them.
         /** A traceroute to "host". */
         TRACE_ROUTE("trace_route"),
         /** The user's own list of sites (Connection → Resources), each tried once. */
@@ -50,27 +44,9 @@ class AssistantActions(val sources: AssistantSources) {
         }
     }
 
-    val registry: ToolRegistry
-        get() = ToolRegistry(
-            grammar = GRAMMAR,
-            instructions = INSTRUCTIONS,
-            maxSteps = 4,
-            preflight = { question ->
-                preflightCalls(question, sources.model.ble.devices.values, sources.model.lan.devices.map { PortTarget(it.ipAddress, it.isGateway, it.allPortsScanned) })
-            },
-            // Questions about the user's own network are answered from the app; the web adds nothing but a wait.
-            skipsWebSearch = AssistantDigest::answersFromApp,
-            offer = ::offer,
-            suggest = { answer, ran ->
-                suggestedOffers(answer, ran, sources.model.ble.devices.values, sources.model.lan.devices.map { PortTarget(it.ipAddress, it.isGateway, it.allPortsScanned) })
-            },
-            runningLabel = ::runningLabel,
-            run = { name, args -> run(name, args) },
-        )
-
     /**
-     * Runs a summary card's step: a bare tool name or a whole call (`{"tool": "scan_ports", "host": …}`), the same
-     * way the model's call would run, but chosen by the app. Returns the tool's result text.
+     * Runs a summary card's step: a bare tool name or a whole call (`{"tool": "scan_ports", "host": …}`), as the
+     * card's rules wrote it. Returns the tool's result text.
      */
     suspend fun perform(call: String): String {
         if (!call.trimStart().startsWith("{")) return run(call.trim(), "{}")
@@ -145,8 +121,8 @@ class AssistantActions(val sources: AssistantSources) {
                     ?: return "Missing or invalid \"host\". Name an IP address already seen in the LAN hosts list."
                 val device = model.lan.devices.firstOrNull { it.ipAddress == host }
                     ?: return "\"$host\" is not a host this phone has seen on the LAN. Use an address from the LAN hosts list, or call scan_lan first."
-                // Every TCP port takes minutes rather than seconds, so it happens only when the question asked for it.
-                val everyPort = argument(argsJson, "text")?.let(::asksForEveryPort) ?: false
+                // Every TCP port takes minutes rather than seconds: only the "Scan every port" step asks for it.
+                val everyPort = argument(argsJson, "text").equals("all", ignoreCase = true)
                 model.lan.scanHostPorts(host, all = everyPort)
                 delay(400)
                 waitWhile(if (everyPort) 240_000 else 20_000) { device.portScanFraction != null }
@@ -163,7 +139,6 @@ class AssistantActions(val sources: AssistantSources) {
             }
             Name.CAPTURE_PCAP -> capture(argsJson)
             Name.CONNECT_BLUETOOTH -> connectBluetooth(argsJson)
-            Name.SEARCH_HISTORY -> HistoryDigest.text(model.history.entries, argument(argsJson, "text", "host", "bssid") ?: "")
         }
     }
 
@@ -275,9 +250,6 @@ class AssistantActions(val sources: AssistantSources) {
     private fun section(topic: AssistantTopic): String =
         AssistantDigest.section(topic, sources.snapshot()).ifEmpty { "Nothing new." }
 
-    /** A LAN host the app can scan ports on by itself: one named in the question by IP, or the router. */
-    data class PortTarget(val ip: String, val isGateway: Boolean, val allScanned: Boolean = false)
-
     companion object {
         /**
          * How long one on-demand traffic capture listens before it is analyzed. Short on purpose: it pins the sensor
@@ -285,147 +257,7 @@ class AssistantActions(val sources: AssistantSources) {
          */
         var captureDurationMs = 6_000L
 
-        /**
-         * GBNF grammar: `{"tool": "<name>"}`, with an optional `"host"` or `"bssid"` field and an optional `"text"`.
-         */
-        val GRAMMAR = """
-            root  ::= ws "{" ws "\"tool\"" ws ":" ws tool tail ws "}" ws
-            tool  ::= "\"scan_wifi\"" | "\"scan_lan\"" | "\"scan_bluetooth\"" | "\"check_connection\"" | "\"speed_test\"" | "\"scan_ports\"" | "\"check_port_forwarding\"" | "\"capture_pcap\"" | "\"connect_bluetooth\"" | "\"search_history\""
-            tail  ::= ( ws "," ws addrfield )? ( ws "," ws textfield )?
-            addrfield ::= ( "\"host\"" | "\"bssid\"" ) ws ":" ws "\"" [a-zA-Z0-9._:-]+ "\""
-            textfield ::= "\"text\"" ws ":" ws "\"" [^\"]+ "\""
-            ws    ::= [ \t\n]*
-        """.trimIndent()
-
-        /** Appended to the system prompt: the exact syntax has to match [GRAMMAR] and the registry's call tag. */
-        val INSTRUCTIONS = """
-Tools. To run a live check, reply with only the call, for example:
-<tool_call>{"tool": "scan_wifi"}
-Stop right after the closing brace: no closing tag, nothing else. You then get its result to answer with.
-- scan_wifi: nearby Wi‑Fi networks, channels, signal, security.
-- scan_lan: devices on the local network, their ports and makers.
-- scan_bluetooth: nearby Bluetooth devices and trackers (AirTag).
-- check_connection: internet check — DNS, latency, public IP, provider, TLS interception, and whether a site or service opens (YouTube, Instagram, Telegram…).
-- speed_test: download/upload speed, latency under load, jitter.
-- check_port_forwarding: which ports the router opened or forwards to the internet (UPnP/NAT-PMP) — use it, not scan_ports, for anything about ports open to the outside. A rule nobody meant to add puts a device on the open internet, one of the most serious findings. Needs the LAN hosts list: call scan_lan first when there is none.
-- scan_ports: the usual open ports of one host from the LAN list, seen from inside the network:
-<tool_call>{"tool": "scan_ports", "host": "192.168.1.1"}
-When the user asks for a full, deep or all-ports scan, add "text": "all" (much slower):
-<tool_call>{"tool": "scan_ports", "host": "192.168.1.1", "text": "all"}
-- capture_pcap: a few seconds of Wi‑Fi traffic on one network's channel (needs the sensor); give the BSSID exactly as in the Wi‑Fi list:
-<tool_call>{"tool": "capture_pcap", "bssid": "AA:BB:CC:00:00:01"}
-- connect_bluetooth: connect to ONE device from the Bluetooth list and read its GATT data (model, maker, firmware, battery); call scan_bluetooth first when it is not listed:
-<tool_call>{"tool": "connect_bluetooth", "text": "Momentum 3"}
-- search_history: everything saved under History across sessions — was something seen before, what changed; leave "text" out for an overview. Reads saved data only:
-<tool_call>{"tool": "search_history", "text": "Galaxy Buds"}
-When the user asks to scan, check, test or measure anything about their own network, devices or connection, in any language («просканируй блютуз», «проверь интернет», «замерь скорость», «проверь доступ к гуглу»), call the matching tool even if older data is attached: a web search cannot measure anything. Otherwise call one only when fresher data is needed, and not again when its <tool_result> is already there. Never report a check whose result you did not get.
-When the attached data already holds what the user asks to explain, explain it instead of running a tool again. A GATT read: the standard services, what the values reveal, vendor services that accept writes without pairing. A traffic capture: protocols, the busiest devices and pairs, anything unusual (deauthentication bursts, unknown devices, plain-text protocols). Recorded traffic of this phone: the servers and apps it talked to, plain HTTP, tracking or unexpected destinations.
-        """.trimIndent()
-
-        // MARK: - Plain requests, recognized by the app
-
-        /**
-         * Checks the question itself plainly asks to run, recognized here rather than left to the model: a small
-         * model often answers «просканируй блютуз» from the attached snapshot instead of calling the tool.
-         */
-        fun requested(question: String): List<Name> {
-            val text = question.lowercase()
-            fun has(stems: List<String>) = AssistantDigest.matches(stems, text)
-            if (has(Stems.aboutChecks)) return emptyList()
-            val run = has(Stems.run)
-            val nearby = has(Stems.nearby)
-            val found = mutableSetOf<Name>()
-            // Questions only a fresh check can answer, asked without "check": the model would answer them from the
-            // snapshot — or, worse, say a site opens without trying it.
-            if (asksAboutForwarding(text)) found.add(Name.CHECK_PORT_FORWARDING)
-            if (has(Stems.access) && has(Stems.sites)) found.add(Name.CHECK_CONNECTION)
-            if (has(Stems.speed) && has(Stems.speedAmount) && has(Stems.mine)) found.add(Name.SPEED_TEST)
-            if (!run && !nearby) return Name.entries.filter { it in found }
-            // Bluetooth and Wi‑Fi are what is "nearby": asking what is around already asks for a fresh look.
-            if (has(Stems.bluetooth)) found.add(Name.SCAN_BLUETOOTH)
-            if (has(Stems.wifi)) found.add(Name.SCAN_WIFI)
-            // The rest takes a while (a LAN sweep, a speed test), so only an outright request runs it.
-            if (run) {
-                if (has(Stems.forwarding)) found.add(Name.CHECK_PORT_FORWARDING)
-                if (has(Stems.lan)) found.add(Name.SCAN_LAN)
-                if (has(Stems.speed)) found.add(Name.SPEED_TEST) else if (has(Stems.connection) && Name.SPEED_TEST !in found) found.add(Name.CHECK_CONNECTION)
-            }
-            if (found.isEmpty()) {
-                when {
-                    has(Stems.devices) -> found.add(if (nearby) Name.SCAN_BLUETOOTH else Name.SCAN_LAN)
-                    has(Stems.networks) -> found.add(if (nearby) Name.SCAN_WIFI else Name.SCAN_LAN)
-                    // «подключись к Momentum 3»: sweep Bluetooth first so the model has a current list to name from.
-                    has(Stems.connectTo) -> found.add(Name.SCAN_BLUETOOTH)
-                }
-            }
-            return Name.entries.filter { it in found }
-        }
-
-        /**
-         * [requested] plus History and the checks with an argument the app can fill in itself: a device to read,
-         * a host to scan ports on.
-         */
-        fun preflightCalls(question: String, devices: Collection<BleDevice>, hosts: Collection<PortTarget> = emptyList()): List<String> {
-            val calls = mutableListOf<String>()
-            // A question about earlier scans gets History read for it, with the question as what to look for.
-            if (asksAboutHistory(question)) {
-                calls.add("{\"tool\": \"${Name.SEARCH_HISTORY.raw}\", \"text\": ${JSONObject.quote(question.take(300))}}")
-            }
-            portScanTarget(question, hosts)?.let { host ->
-                val scope = if (asksForEveryPort(question)) ", \"text\": \"all\"" else ""
-                calls.add("{\"tool\": \"${Name.SCAN_PORTS.raw}\", \"host\": ${JSONObject.quote(host)}$scope}")
-            }
-            return calls + scanCalls(question, devices)
-        }
-
-        /** Ports reachable from outside are the router's forwarding table, not a scan of one host from inside. */
-        private fun asksAboutForwarding(text: String): Boolean =
-            AssistantDigest.matches(Stems.forwarding, text) || (AssistantDigest.matches(Stems.ports, text) && AssistantDigest.matches(Stems.outside, text))
-
-        /** «Посмотри, какие порты открыты на 192.168.1.64», «просканируй все порты роутера»: the host is in the question. */
-        fun portScanTarget(question: String, hosts: Collection<PortTarget>): String? {
-            val text = question.lowercase()
-            fun has(stems: List<String>) = AssistantDigest.matches(stems, text)
-            if (has(Stems.aboutChecks) || !has(Stems.ports) || asksAboutForwarding(text)) return null
-            val named = IPV4.findAll(text).map { it.value }.toSet()
-            // A host named by IP and a question about its ports is enough; "the router" needs an outright request,
-            // or «какие порты обычно открыты у роутеров?» would scan the user's own.
-            hosts.firstOrNull { it.ip in named }?.let { host -> if (has(Stems.run) || has(Stems.lookAt)) return host.ip }
-            if (named.isNotEmpty() || !has(Stems.router) || !(has(Stems.run) || has(Stems.showMe))) return null
-            return hosts.firstOrNull { it.isGateway }?.ip
-        }
-
-        private val IPV4 = Regex("""(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d.]*\d)""")
-
-        fun asksAboutHistory(question: String): Boolean {
-            val text = question.lowercase()
-            return !AssistantDigest.matches(Stems.aboutChecks, text) && AssistantDigest.matches(Stems.history, text)
-        }
-
-        private fun scanCalls(question: String, devices: Collection<BleDevice>): List<String> {
-            val names = requested(question).toMutableList()
-            val device = bluetoothTarget(question, devices) ?: return names.map { it.raw }
-            // The device is already heard: a fresh sweep first would only add a few seconds.
-            names.remove(Name.SCAN_BLUETOOTH)
-            return names.map { it.raw } + "{\"tool\": \"${Name.CONNECT_BLUETOOTH.raw}\", \"text\": ${JSONObject.quote(device.displayName)}}"
-        }
-
-        /** The heard device a question names and asks to connect to or read. Longest name wins, then strongest signal. */
-        fun bluetoothTarget(question: String, devices: Collection<BleDevice>): BleDevice? {
-            val text = question.lowercase()
-            fun has(stems: List<String>) = AssistantDigest.matches(stems, text)
-            if (has(Stems.aboutChecks) || !(has(Stems.connectTo) || has(Stems.readDevice))) return null
-            return devices.filter { device ->
-                val name = device.displayName.lowercase()
-                name.length >= 3 && !name.contains('{') && !name.contains('}') && text.contains(name)
-            }.maxWithOrNull(compareBy<BleDevice> { it.displayName.length }.thenBy { it.rssi })
-        }
-
-        /** Whether the scope the model passed to `scan_ports` means "every port" rather than the usual short list. */
-        fun asksForEveryPort(text: String): Boolean =
-            AssistantDigest.matches(listOf("all", "full", "every", "deep", "whole", "65535", "все", "весь", "полн", "глубок"), text.lowercase())
-
-        /** The device the model named, matched loosely both ways; among several, the nearest one wins. */
+        /** The device a step names, matched loosely both ways; among several, the nearest one wins. */
         fun bluetoothDevice(wanted: String, devices: Collection<BleDevice>): BleDevice? {
             val needle = wanted.trim()
             if (needle.isEmpty()) return null
@@ -434,100 +266,18 @@ When the attached data already holds what the user asks to explain, explain it i
             }.maxByOrNull { it.rssi }
         }
 
-        /**
-         * What a tool is called in words, for an answer that names it («выполни check_connection»), and — for the
-         * checks that need no argument — the offer shown under that answer. The request is worded so that
-         * [requested] runs the check itself, like the starters in an empty chat.
-         */
-        fun offer(name: String): ToolOffer? = when (Name.of(name)) {
-            Name.SCAN_WIFI -> ToolOffer(name, tr("a Wi‑Fi scan"), tr("Scan Wi‑Fi?"), tr("Scan the Wi‑Fi around me: which channel is freer?"))
-            Name.SCAN_LAN -> ToolOffer(name, tr("a network scan"), tr("Scan the local network?"), tr("Scan my local network and show me what these devices are"))
-            Name.SCAN_BLUETOOTH -> ToolOffer(name, tr("a Bluetooth scan"), tr("Scan Bluetooth?"), tr("Scan Bluetooth nearby: is there someone else's tracker?"))
-            Name.CHECK_CONNECTION -> ToolOffer(name, tr("a connection check"), tr("Check the connection?"), tr("Check my internet connection: DNS, latency, provider"))
-            Name.SPEED_TEST -> ToolOffer(name, tr("a speed test"), tr("Measure the speed?"), tr("Measure my internet speed"))
-            Name.CHECK_PORT_FORWARDING -> ToolOffer(name, tr("a port forwarding check"), tr("Check port forwarding?"), tr("Check which ports my router forwards to the internet"))
-            Name.SCAN_PORTS -> ToolOffer(name, tr("a port scan"))
-            Name.CAPTURE_PCAP -> ToolOffer(name, tr("a traffic capture"))
-            Name.CONNECT_BLUETOOTH -> ToolOffer(name, tr("a connection to the device"))
-            Name.SEARCH_HISTORY -> ToolOffer(name, tr("a search through History"))
-            Name.TRACE_ROUTE -> ToolOffer(name, tr("a traceroute"))
-            Name.CHECK_SITES -> ToolOffer(name, tr("a check of your sites"))
-            Name.CHECK_SITE -> ToolOffer(name, tr("a certificate and domain check"))
-            Name.EXPAND_REDIRECTS -> ToolOffer(name, tr("expanding the redirects"))
-            null -> null
+        /** The step button for a check that needs no argument; the cards trim the question mark. */
+        fun button(name: String): String? = when (Name.of(name)) {
+            Name.SCAN_WIFI -> tr("Scan Wi‑Fi?")
+            Name.SCAN_LAN -> tr("Scan the local network?")
+            Name.SCAN_BLUETOOTH -> tr("Scan Bluetooth?")
+            Name.CHECK_CONNECTION -> tr("Check the connection?")
+            Name.SPEED_TEST -> tr("Measure the speed?")
+            Name.CHECK_PORT_FORWARDING -> tr("Check port forwarding?")
+            else -> null
         }
 
-        /**
-         * Next steps the answer put in plain words, as buttons: «Проверьте открытые порты на `192.168.1.1`» offers a
-         * port scan of that host. Only sentences that advise or offer something are read — «сканирование показало…»
-         * reports, it does not suggest — and checks that already ran for this answer are left out.
-         */
-        fun suggestedOffers(
-            answer: String,
-            ran: Collection<String>,
-            devices: Collection<BleDevice>,
-            hosts: Collection<PortTarget>,
-        ): List<ToolOffer> {
-            val found = linkedMapOf<String, ToolOffer>()
-            // Last sentences first: the closing «хотите, проверю…» is the step the answer leads to, and only three
-            // buttons are shown.
-            for (sentence in answer.split(SENTENCE_BREAK).asReversed()) {
-                val text = sentence.trim().trim('*', '-', '•', ' ').replace("`", "")
-                if (text.length < 6 || !advises(text)) continue
-                for (call in preflightCalls(text, devices, hosts)) {
-                    val offer = offerFor(call) ?: continue
-                    if (offer.name in ran) continue
-                    // Every port of that host was checked already: scanning it again tells nothing new.
-                    if (offer.name == Name.SCAN_PORTS.raw && scansDoneHost(call, hosts)) continue
-                    found.putIfAbsent(offer.request ?: offer.name, offer)
-                }
-            }
-            return found.values.toList()
-        }
-
-        private val SENTENCE_BREAK = Regex("""(?<=[.!?…])\s+|\n+""")
-        // No (?U): Android's regex engine rejects it, so letters are spelled as \p{L}.
-        private val IMPERATIVE = Regex("""(?<![\p{L}\p{N}_])\p{L}{3,}(?:йте|ите|ьте)(?![\p{L}\p{N}_])""")
-        private val ENGLISH_IMPERATIVES = setOf("scan", "rescan", "check", "run", "test", "measure", "try", "consider", "connect", "read")
-
-        /** Whether a sentence advises the user or offers a step, rather than reporting what was found. */
-        fun advises(sentence: String): Boolean {
-            val text = sentence.lowercase()
-            if (AssistantDigest.matches(Stems.advice, text) || IMPERATIVE.containsMatchIn(text)) return true
-            // A question in an answer is an offer: «Проверить подключение к интернету?»
-            if (text.trimEnd().endsWith("?")) return true
-            // English imperative: «Run a speed test», «Check the router's ports».
-            return text.split(Regex("""\s+""")).firstOrNull().orEmpty() in ENGLISH_IMPERATIVES
-        }
-
-        private fun scansDoneHost(call: String, hosts: Collection<PortTarget>): Boolean {
-            val host = runCatching { JSONObject(call).optString("host") }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return false
-            return hosts.any { it.ip == host && it.allScanned }
-        }
-
-        /** A preflight call (a bare name or a whole JSON object) as a button with the question that runs it. */
-        private fun offerFor(call: String): ToolOffer? {
-            if (!call.startsWith("{")) return offer(call)?.takeIf { it.request != null }
-            val json = runCatching { JSONObject(call) }.getOrNull() ?: return null
-            val name = json.optString("tool")
-            return when (Name.of(name)) {
-                Name.SCAN_PORTS -> {
-                    val host = json.optString("host").takeIf { it.isNotEmpty() } ?: return null
-                    if (json.optString("text") == "all") {
-                        ToolOffer(name, tr("a port scan"), tr("Scan every port of %s?", host), tr("Scan all ports of %s", host))
-                    } else {
-                        ToolOffer(name, tr("a port scan"), tr("Scan the ports of %s?", host), tr("Scan the ports of %s", host))
-                    }
-                }
-                Name.CONNECT_BLUETOOTH -> {
-                    val device = json.optString("text").takeIf { it.isNotEmpty() } ?: return null
-                    ToolOffer(name, tr("a connection to the device"), tr("Read “%s” over Bluetooth?", device), tr("Connect to %s and read its data", device))
-                }
-                else -> offer(name)?.takeIf { it.request != null }
-            }
-        }
-
-        /** A tool that ran, in words, for the note under the answer: «Ran: network scan», not «scan_lan». */
+        /** A check that ran, in words: the heading of its result on a card. */
         fun title(name: String): String = when (Name.of(name)) {
             Name.SCAN_WIFI -> tr("Wi‑Fi scan")
             Name.SCAN_LAN -> tr("network scan")
@@ -538,7 +288,6 @@ When the attached data already holds what the user asks to explain, explain it i
             Name.CHECK_PORT_FORWARDING -> tr("port forwarding check")
             Name.CAPTURE_PCAP -> tr("traffic capture")
             Name.CONNECT_BLUETOOTH -> tr("device connection")
-            Name.SEARCH_HISTORY -> tr("History search")
             Name.TRACE_ROUTE -> tr("traceroute")
             Name.CHECK_SITES -> tr("check of your sites")
             Name.CHECK_SITE -> tr("certificate and domain check")
@@ -556,7 +305,6 @@ When the attached data already holds what the user asks to explain, explain it i
             Name.CHECK_PORT_FORWARDING -> tr("Asking the router about port forwarding…")
             Name.CAPTURE_PCAP -> tr("Capturing traffic…")
             Name.CONNECT_BLUETOOTH -> tr("Connecting to the device…")
-            Name.SEARCH_HISTORY -> tr("Looking through History…")
             Name.TRACE_ROUTE -> tr("Tracing the path…")
             Name.CHECK_SITES -> tr("Trying your sites…")
             Name.CHECK_SITE -> tr("Asking the site and the registry…")
@@ -575,78 +323,10 @@ When the attached data already holds what the user asks to explain, explain it i
             return null
         }
 
-        /** Polls [condition] until it turns false, the timeout elapses, or the chat is cancelled. */
+        /** Polls [condition] until it turns false, the timeout elapses, or the step is stopped. */
         private suspend fun waitWhile(timeoutMs: Long, condition: () -> Boolean) {
             val deadline = System.currentTimeMillis() + timeoutMs
             while (condition() && coroutineContext.isActive && System.currentTimeMillis() < deadline) delay(300)
         }
-    }
-
-    private object Stems {
-        /** Words of advice and offers: «рекомендую», «стоит», «можно», «хотите, я…», «I suggest». */
-        val advice = listOf(
-            "recommend", "suggest", "should", "you can", "you could", "you may", "worth", "next step", "want me", "i can", "let me",
-            "рекоменд", "совет", "стоит", "можно", "имеет смысл", "предлага", "следует", "нужно", "надо", "хотите", "давайте",
-            "следующий шаг", "дальше", "далее", "могу", "например",
-        )
-        /** Asking about what was saved earlier rather than what is around now. */
-        val history = listOf(
-            "history", "earlier", "previously", "last time", "last week", "yesterday", "saved session", "seen before",
-            "истори", "раньше", "прошл", "вчера", "сохранённ", "сохраненн", "сесси", "встречал", "видел ли", "был ли", "была ли",
-            "были ли", "было ли",
-        )
-        /** Asking to read what one device publishes about itself. Verbs only: «проанализируй GATT X» is about a read made. */
-        val readDevice = listOf("read", "прочита", "прочт", "считай", "считать", "firmware", "battery", "прошивк", "батаре", "заряд")
-        /** Asking to run something, not just to read. "connect to", not "connect": that starts "connection". */
-        val run = listOf(
-            "scan", "rescan", "check", "test", "measure", "run", "refresh", "look for",
-            "скан", "сканир", "просканир", "отсканир", "пересканир", "провер", "замер", "измер", "тест", "протестир",
-            "обнов", "запуст", "найд", "поищ", "ищ", "подключ",
-            "connect to",
-        )
-        val connectTo = listOf("connect to", "подключ", "приконнект")
-        val forwarding = listOf(
-            "port forward", "forwarded port", "upnp", "nat-pmp", "port mapping",
-            "проброс", "пробрасыв", "переадресац", "перенаправлен", "юпнп",
-        )
-        val nearby = listOf("nearby", "around", "near me", "close by", "рядом", "вокруг", "поблизости", "неподалёку", "неподалеку")
-        /** A question about checks rather than a request for one: «зачем сканировать блютуз?», «не сканируй». */
-        val aboutChecks = listOf(
-            "why", "how often", "how does", "don't scan", "don't check", "do not scan", "do not check",
-            "зачем", "почему", "как часто", "как работает", "что такое", "что значит",
-            "не скан", "не провер", "не надо скан", "не нужно скан", "не надо провер", "не нужно провер",
-            "не подключ", "не надо подключ", "не нужно подключ",
-        )
-        val bluetooth = listOf(
-            "bluetooth", "ble", "bt", "tracker", "airtag", "headphone", "earbud", "beacon",
-            "блютуз", "блютус", "трекер", "метк", "наушник", "маяк",
-        )
-        val wifi = listOf("wi-fi", "wi‑fi", "wifi", "wlan", "ssid", "wireless", "access point", "вайфай", "вай", "точк", "беспровод")
-        val lan = listOf("lan", "host", "who is on", "локальн", "хост", "кто в")
-        val speed = listOf("speed", "speedtest", "mbps", "how fast", "скорост", "спидтест", "мегабит", "мбит")
-        /** Asking for the number now, which only a measurement gives: «сколько мегабит», «какая сейчас скорость». */
-        val speedAmount = listOf("how fast", "how much", "how many", "сколько", "какая скорост", "какая сейчас", "какую скорост", "какой скорост")
-        /** Whether something opens: answerable only by trying it. */
-        val access = listOf(
-            "opens", "open?", "reachable", "load", "loads", "is down", "is up", "blocked", "accessible",
-            "открывается", "открываются", "доступен", "доступна", "доступно", "доступны", "доступ к", "грузится", "загружается",
-            "работает ли", "заблокирован",
-        )
-        val sites = listOf(
-            "site", "website", "youtube", "instagram", "telegram", "google", "whatsapp", "facebook", "tiktok", "twitter",
-            "netflix", "discord", "chatgpt", "vk", ".com", ".ru", ".org", ".net", ".io",
-            "сайт", "ютуб", "инстаграм", "телеграм", "гугл", "ватсап", "фейсбук", "тикток", "твиттер", "нетфликс", "дискорд", "вк", "вконтакт",
-        )
-        val ports = listOf("port", "ports", "порт")
-        val outside = listOf("outside", "from the internet", "to the internet", "exposed", "наружу", "извне", "снаружи", "из интернета", "в интернет")
-        /** Asking about one named host's ports, which means a scan: «какие порты открыты на 192.168.1.64». */
-        val lookAt = listOf("show", "which", "what", "open", "посмотр", "покаж", "какие", "открыт")
-        val showMe = listOf("show", "посмотр", "покаж")
-        /** The user's own connection now, not speeds in general («сколько мегабит нужно для 4K»). */
-        val mine = listOf("my", "now", "current", "actual", "у меня", "мой", "моя", "моё", "мое", "сейчас", "реальн", "выдаёт", "выдает")
-        val router = listOf("router", "gateway", "роутер", "маршрутизатор", "шлюз")
-        val connection = listOf("internet", "connection", "ping", "dns", "vpn", "интернет", "соединен", "подключени", "пинг", "днс", "впн")
-        val devices = listOf("device", "устройств", "девайс")
-        val networks = listOf("network", "сет")
     }
 }

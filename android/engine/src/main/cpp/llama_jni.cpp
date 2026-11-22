@@ -204,26 +204,8 @@ JNIEXPORT jboolean JNICALL JNI(stateLoad)(JNIEnv * env, jobject, jlong context, 
     return prompt_state::load(as_context(context), to_string(env, path).c_str(), list.data(), list.size());
 }
 
-JNIEXPORT jlong JNICALL JNI(newSampler)(JNIEnv * env, jobject, jlong model, jfloat temperature, jfloat topP, jint topK,
-                                        jint seed, jbyteArray grammarBytes, jobjectArray triggers) {
+JNIEXPORT jlong JNICALL JNI(newSampler)(JNIEnv *, jobject, jlong, jfloat temperature, jfloat topP, jint topK, jint seed) {
     llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    // Грамматика первой в цепочке: она отсекает всё, что запрещает структура. До триггера она ничего не делает.
-    if (grammarBytes && triggers && env->GetArrayLength(triggers) > 0) {
-        std::string grammar = to_string(env, grammarBytes);
-        std::vector<std::string> patterns;
-        for (jsize i = 0; i < env->GetArrayLength(triggers); i++) {
-            auto item = static_cast<jbyteArray>(env->GetObjectArrayElement(triggers, i));
-            patterns.push_back(to_string(env, item));
-            env->DeleteLocalRef(item);
-        }
-        std::vector<const char *> pointers;
-        for (auto & pattern : patterns) pointers.push_back(pattern.c_str());
-        llama_sampler * lazy = llama_sampler_init_grammar_lazy_patterns(
-            llama_model_get_vocab(as_model(model)), grammar.c_str(), "triggered-root",
-            pointers.data(), pointers.size(), nullptr, 0);
-        if (lazy) llama_sampler_chain_add(chain, lazy);
-        else __android_log_print(ANDROID_LOG_WARN, TAG, "грамматика вызова инструмента не разобралась, работаю без неё");
-    }
     if (temperature <= 0) {
         llama_sampler_chain_add(chain, llama_sampler_init_greedy());
     } else {

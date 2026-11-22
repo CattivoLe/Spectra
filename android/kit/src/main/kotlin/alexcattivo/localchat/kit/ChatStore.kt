@@ -46,7 +46,7 @@ class ChatStore(
                     temperature REAL NOT NULL, maxTokens INTEGER NOT NULL, isBuiltIn INTEGER NOT NULL DEFAULT 0,
                     sortOrder INTEGER NOT NULL, createdAt INTEGER NOT NULL)""")
                 execute("ALTER TABLE chat ADD COLUMN personaID TEXT REFERENCES persona(id) ON DELETE SET NULL")
-                for (persona in Persona.builtIns) insertPersona(persona)
+                // LocalChat's characters were seeded here; Spectra never used them. The tables stay so old files open.
             },
             {
                 execute("ALTER TABLE chat ADD COLUMN modelName TEXT")
@@ -83,23 +83,15 @@ class ChatStore(
         }
     }
 
-    private fun SqlDatabase.insertPersona(persona: Persona) {
-        execute(
-            "INSERT INTO persona (id, name, avatar, systemPrompt, temperature, maxTokens, isBuiltIn, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            persona.id.toString(), persona.name, persona.avatar, persona.systemPrompt, persona.temperature, persona.maxTokens,
-            if (persona.isBuiltIn) 1 else 0, persona.sortOrder, persona.createdAt,
-        )
-    }
-
     // MARK: - Диалоги
 
-    suspend fun createChat(systemPrompt: String = Chat.DEFAULT_SYSTEM_PROMPT, persona: Persona? = null, folderID: UUID? = null): Chat {
+    suspend fun createChat(systemPrompt: String = Chat.DEFAULT_SYSTEM_PROMPT, folderID: UUID? = null): Chat {
         val now = System.currentTimeMillis()
-        val chat = Chat(UUID.randomUUID(), "", persona?.systemPrompt ?: systemPrompt, now, now, persona?.id, null, folderID)
+        val chat = Chat(UUID.randomUUID(), "", systemPrompt, now, now, null, folderID)
         write {
             execute(
-                "INSERT INTO chat (id, title, systemPrompt, createdAt, updatedAt, personaID, folderID) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                chat.id.toString(), chat.title, chat.systemPrompt, now, now, chat.personaID?.toString(), folderID?.toString(),
+                "INSERT INTO chat (id, title, systemPrompt, createdAt, updatedAt, folderID) VALUES (?, ?, ?, ?, ?, ?)",
+                chat.id.toString(), chat.title, chat.systemPrompt, now, now, folderID?.toString(),
             )
         }
         return chat
@@ -137,9 +129,6 @@ class ChatStore(
 
     suspend fun rename(chatID: UUID, title: String) = write { execute("UPDATE chat SET title = ? WHERE id = ?", title, chatID.toString()) }
 
-    suspend fun setSystemPrompt(prompt: String, chatID: UUID) =
-        write { execute("UPDATE chat SET systemPrompt = ? WHERE id = ?", prompt, chatID.toString()) }
-
     suspend fun deleteChat(chatID: UUID) = write { execute("DELETE FROM chat WHERE id = ?", chatID.toString()) }
 
     /** Удаляет все диалоги и сжимает файл, чтобы удалённое не лежало в свободных страницах базы. */
@@ -149,7 +138,7 @@ class ChatStore(
             execute("DELETE FROM chat")
             execute("DELETE FROM folder")
             execute("DELETE FROM websearch_log")
-            // Заметки модель делала по ходу разговоров: удаляя всю переписку, удаляем и их.
+            // Заметки остались от чата прежних версий.
             execute("DELETE FROM memoryNote")
         }
         vacuum()
@@ -182,10 +171,6 @@ class ChatStore(
     suspend fun update(messageID: UUID, content: String, interrupted: Boolean = false) = write {
         execute("UPDATE message SET content = ?, interrupted = ? WHERE id = ?", content, if (interrupted) 1 else 0, messageID.toString())
     }
-
-    /** Удаляет сообщения диалога, начиная с номера `seq` включительно. */
-    suspend fun deleteMessages(chatID: UUID, fromSeq: Int) =
-        write { execute("DELETE FROM message WHERE chatID = ? AND seq >= ?", chatID.toString(), fromSeq) }
 
     suspend fun setSearch(json: String?, messageID: UUID) =
         write { execute("UPDATE message SET search = ? WHERE id = ?", json, messageID.toString()) }
@@ -246,156 +231,6 @@ class ChatStore(
         vacuum()
     }
 
-    suspend fun clearSearchLog() {
-        write { execute("DELETE FROM websearch_log") }
-        vacuum()
-    }
-
-    // MARK: - Персонажи
-
-    /** Сначала встроенные, потом свои в порядке создания. */
-    suspend fun personas(): List<Persona> = read { query("SELECT * FROM persona ORDER BY sortOrder, createdAt").map(::persona) }
-
-    suspend fun persona(id: UUID): Persona? = read { query("SELECT * FROM persona WHERE id = ?", id.toString()).firstOrNull()?.let(::persona) }
-
-    /** Сохраняет своего персонажа. Встроенных менять нельзя: их можно только скопировать. */
-    suspend fun save(persona: Persona) = write {
-        val existing = query("SELECT isBuiltIn FROM persona WHERE id = ?", persona.id.toString()).firstOrNull()
-        if (existing != null && existing.bool("isBuiltIn")) return@write
-        val saved = persona.copy(isBuiltIn = false)
-        if (existing == null) {
-            insertPersona(saved)
-        } else {
-            execute("UPDATE persona SET name = ?, avatar = ?, systemPrompt = ?, temperature = ?, maxTokens = ? WHERE id = ?",
-                saved.name, saved.avatar, saved.systemPrompt, saved.temperature, saved.maxTokens, saved.id.toString())
-        }
-    }
-
-    suspend fun duplicate(persona: Persona, suffix: String = " (копия)"): Persona {
-        val copy = Persona(name = persona.name + suffix, avatar = persona.avatar, systemPrompt = persona.systemPrompt,
-            temperature = persona.temperature, maxTokens = persona.maxTokens)
-        save(copy)
-        return copy
-    }
-
-    /** Удаляет своего персонажа. Диалоги с ним остаются: промпт в них хранится копией. */
-    suspend fun deletePersona(id: UUID) = write {
-        execute("DELETE FROM persona WHERE id = ? AND isBuiltIn = 0", id.toString())
-    }
-
-    // MARK: - Профиль пользователя
-
-    suspend fun profile(): UserProfile? = read {
-        query("SELECT * FROM profile WHERE id = 1").firstOrNull()?.let { row ->
-            UserProfile(
-                isEnabled = row.bool("isEnabled"),
-                name = row.string("name"),
-                address = UserProfile.Address.entries.firstOrNull { it.raw == row.string("address") } ?: UserProfile.Address.Unspecified,
-                about = row.string("about"),
-                updatedAt = row.long("updatedAt"),
-            )
-        }
-    }
-
-    suspend fun saveProfile(profile: UserProfile) = write {
-        execute("INSERT OR REPLACE INTO profile (id, isEnabled, name, address, about, updatedAt) VALUES (1, ?, ?, ?, ?, ?)",
-            if (profile.isEnabled) 1 else 0, profile.name, profile.address.raw, profile.about, System.currentTimeMillis())
-    }
-
-    /** Стирает профиль целиком. Диалоги остаются, но модель о пользователе больше ничего не знает. */
-    suspend fun deleteProfile() {
-        write { execute("DELETE FROM profile") }
-        vacuum()
-    }
-
-    // MARK: - Заметки модели
-
-    /** Сначала старые: в промпте они идут в том порядке, в каком появлялись. */
-    suspend fun notes(): List<MemoryNote> = read {
-        query("SELECT * FROM memoryNote ORDER BY createdAt").map { MemoryNote(UUID.fromString(it.string("id")), it.string("text"), it.long("createdAt")) }
-    }
-
-    /** Сохраняет заметку. Такая же уже есть — вторую не заводим. Сверх лимита уходят самые старые. */
-    suspend fun addNote(text: String): MemoryNote? {
-        val cleaned = MemoryNote.clean(text)
-        if (cleaned.isEmpty()) return null
-        return write {
-            val existing = query("SELECT * FROM memoryNote ORDER BY createdAt").map {
-                MemoryNote(UUID.fromString(it.string("id")), it.string("text"), it.long("createdAt"))
-            }
-            if (existing.any { it.text.lowercase() == cleaned.lowercase() }) return@write null
-            // Время у новой заметки строго позже прежних: порядок в промпте не зависит от точности часов.
-            val note = MemoryNote(text = cleaned, createdAt = maxOf(System.currentTimeMillis(), (existing.maxOfOrNull { it.createdAt } ?: 0) + 1))
-            execute("INSERT INTO memoryNote (id, text, createdAt) VALUES (?, ?, ?)", note.id.toString(), note.text, note.createdAt)
-            val overflow = existing.size + 1 - MemoryNote.LIMIT
-            for (old in existing.take(maxOf(0, overflow))) execute("DELETE FROM memoryNote WHERE id = ?", old.id.toString())
-            note
-        }
-    }
-
-    suspend fun deleteNote(id: UUID) = write { execute("DELETE FROM memoryNote WHERE id = ?", id.toString()) }
-
-    /** Удаляет заметки, в которых есть этот текст (без учёта регистра). Возвращает, сколько удалено. */
-    suspend fun deleteNotes(matching: String): Int {
-        val needle = matching.trim().lowercase()
-        if (needle.isEmpty()) return 0
-        return write {
-            var removed = 0
-            for (row in query("SELECT id, text FROM memoryNote")) {
-                val text = row.string("text").lowercase()
-                if (text.contains(needle) || needle.contains(text)) {
-                    execute("DELETE FROM memoryNote WHERE id = ?", row.string("id"))
-                    removed++
-                }
-            }
-            removed
-        }
-    }
-
-    suspend fun deleteAllNotes() {
-        write { execute("DELETE FROM memoryNote") }
-        vacuum()
-    }
-
-    // MARK: - Память о прошлых разговорах
-
-    /**
-     * Прежние ответы, подходящие к вопросу, по совпадению слов (BM25 — тем же способом поиск ранжирует отрывки).
-     * Нарочно без эмбеддингов: база диалогов маленькая, подсчёт мгновенный и не требует загруженной модели.
-     * Берутся только ответы модели — в них выводы, — но каждый оценивается вместе с вопросом, на который отвечал.
-     */
-    suspend fun recall(question: String, excluding: UUID?, limit: Int = 2, scanLimit: Int = 300, minimumScore: Double = 1.0): List<Recollection> {
-        val terms = alexcattivo.localchat.kit.web.Terms.of(question)
-        if (terms.size < 2) return emptyList()
-        val rows = read {
-            query(
-                """SELECT a.id AS id, a.chatID AS chatID, c.title AS title, a.createdAt AS date,
-                       COALESCE(q.content, '') AS question, a.content AS answer
-                FROM message a
-                JOIN chat c ON c.id = a.chatID
-                LEFT JOIN message q ON q.chatID = a.chatID AND q.seq = a.seq - 1 AND q.role = 'user'
-                WHERE a.role = 'assistant' AND LENGTH(a.content) > 40 """ + (if (excluding == null) "" else "AND a.chatID <> ? ") +
-                    "ORDER BY a.createdAt DESC LIMIT $scanLimit",
-                *(if (excluding == null) arrayOf() else arrayOf<Any?>(excluding.toString())),
-            )
-        }
-        if (rows.isEmpty()) return emptyList()
-        val documents = rows.map { alexcattivo.localchat.kit.web.Terms.of(it.string("question") + " " + it.string("answer")) }
-        val scores = alexcattivo.localchat.kit.web.PassageSelector.bm25(terms, documents)
-        val chosen = mutableListOf<Recollection>()
-        val usedChats = mutableSetOf<String>()
-        val wanted = terms.toSet()
-        for (index in scores.indices.sortedByDescending { scores[it] }) {
-            if (scores[index] < minimumScore || chosen.size >= limit) break
-            // Одно общее слово («name», «камера») — ещё не тот же разговор: нужны хотя бы два.
-            if (wanted.intersect(documents[index].toSet()).size < 2) continue
-            val row = rows[index]
-            if (!usedChats.add(row.string("chatID"))) continue
-            chosen.add(Recollection(UUID.fromString(row.string("id")), row.string("title"), row.long("date"), shorten(row.string("answer"))))
-        }
-        return chosen
-    }
-
     // MARK: - Чтение строк
 
     private fun chat(row: Map<String, Any?>) = Chat(
@@ -404,7 +239,6 @@ class ChatStore(
         systemPrompt = row.string("systemPrompt"),
         createdAt = row.long("createdAt"),
         updatedAt = row.long("updatedAt"),
-        personaID = row.stringOrNull("personaID")?.let(UUID::fromString),
         modelName = row.stringOrNull("modelName"),
         folderID = row.stringOrNull("folderID")?.let(UUID::fromString),
     )
@@ -421,29 +255,7 @@ class ChatStore(
         searchJson = row.stringOrNull("search"),
     )
 
-    private fun persona(row: Map<String, Any?>) = Persona(
-        id = UUID.fromString(row.string("id")),
-        name = row.string("name"),
-        avatar = row.string("avatar"),
-        systemPrompt = row.string("systemPrompt"),
-        temperature = row.double("temperature"),
-        maxTokens = row.int("maxTokens"),
-        isBuiltIn = row.bool("isBuiltIn"),
-        sortOrder = row.int("sortOrder"),
-        createdAt = row.long("createdAt"),
-    )
-
     companion object {
-        /** Заголовок из первой строки вопроса, не длиннее 40 символов. */
-        /** Ответ, сокращённый до пары первых предложений: вывод узнать хватит, а места у разговора не отнимет. */
-        fun shorten(text: String, limit: Int = 240): String {
-            val flat = text.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
-            if (flat.length <= limit) return flat
-            val cut = flat.take(limit)
-            val stop = cut.indexOfLast { it in ".!?" }
-            return if (stop > limit / 2) cut.substring(0, stop + 1) else "$cut…"
-        }
-
         /** Room for two lines in the chat list: the topic of a ✨ question sits past its first 40 characters. */
         const val TITLE_LENGTH = 90
 

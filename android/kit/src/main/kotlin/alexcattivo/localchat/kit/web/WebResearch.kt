@@ -5,16 +5,6 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 
-/** Этап поиска — для подписи на экране. */
-sealed interface ResearchStage {
-    data object Planning : ResearchStage
-    data object Searching : ResearchStage
-    data object Checking : ResearchStage
-    data class Retrying(val query: String) : ResearchStage
-    data class Reading(val pages: Int) : ResearchStage
-    data object Selecting : ResearchStage
-}
-
 /**
  * Поиск с чтением страниц: найти → скачать и прочитать первые страницы → нарезать → выбрать куски под вопрос.
  * Кроме кусков страниц в отбор идут и короткие описания из выдачи: в них часто уже есть ответ.
@@ -52,58 +42,30 @@ class WebResearch(
     }
 
     /**
-     * Поиск с одним повторным заходом. `check` смотрит на отобранное и возвращает новый запрос, если ответа нет;
-     * `approve` спрашивает пользователя перед вторым запросом (`null` — второго захода не будет);
-     * `sent` сообщает о каждом запросе, ушедшем в сеть, — для журнала.
+     * Один запрос: найти, прочитать страницы, отобрать куски под вопрос. `sent` сообщает о запросе, ушедшем в сеть, —
+     * для журнала.
      */
-    suspend fun runWithRetry(
+    suspend fun run(
         query: String,
         question: String,
-        check: (suspend (question: String, evidence: List<Passage>, tried: List<String>) -> String?)?,
-        approve: (suspend (String) -> String?)?,
         sent: suspend (String) -> Unit = {},
-        progress: suspend (ResearchStage) -> Unit = {},
-        /** The first query's results from [SearchCache]: then that query does not go online again. */
+        /** The query's results from [SearchCache]: then it does not go online again. */
         initial: Gathered? = null,
-        /** Called with what each query that did go online brought back, for [SearchCache]. */
+        /** Called with what the query brought back when it did go online, for [SearchCache]. */
         fetched: suspend (String, Gathered) -> Unit = { _, _ -> },
-    ): SearchPayload = coroutineScope {
-        var gathered = initial ?: gather(query, progress).also {
+    ): SearchPayload {
+        val gathered = initial ?: gather(query).also {
             sent(query)
             fetched(query, it)
         }
-        val queries = mutableListOf(query)
-        // Без чтения страниц отбирать и проверять нечего: отдаём описания из выдачи как есть.
-        if (pagesToRead <= 0) return@coroutineScope SearchPayload(query, provider.name, results = gathered.results, pagesRead = 0)
-        if (gathered.results.isNotEmpty()) progress(ResearchStage.Selecting)
-        var evidence = if (gathered.results.isEmpty()) emptyList() else select(gathered.passages, question, query)
-        if (check != null) {
-            progress(ResearchStage.Checking)
-            var next: String? = null
-            val proposed = check(question, evidence, queries)
-            if (proposed != null && queries.none { sameQuery(it, proposed) }) {
-                next = if (approve != null) approve(proposed) else proposed
-            }
-            if (next != null && next.isNotBlank()) {
-                ensureActive()
-                progress(ResearchStage.Retrying(next))
-                val more = gather(next) {}
-                sent(next)
-                fetched(next, more)
-                queries.add(next)
-                gathered = merge(gathered, more)
-                progress(ResearchStage.Selecting)
-                // Слова неудачного первого запроса больше не помогают: отбираем по вопросу и новому запросу.
-                evidence = select(gathered.passages, question, next)
-            }
-        }
-        SearchPayload(query, provider.name, results = gathered.results, evidence = evidence, pagesRead = gathered.pagesRead,
-            extraQueries = queries.drop(1))
+        // Без чтения страниц отбирать нечего: отдаём описания из выдачи как есть.
+        if (pagesToRead <= 0) return SearchPayload(query, provider.name, results = gathered.results, pagesRead = 0)
+        val evidence = if (gathered.results.isEmpty()) emptyList() else select(gathered.passages, question, query)
+        return SearchPayload(query, provider.name, results = gathered.results, evidence = evidence, pagesRead = gathered.pagesRead)
     }
 
     /** Поиск и чтение страниц, без отбора. */
-    suspend fun gather(query: String, progress: suspend (ResearchStage) -> Unit = {}): Gathered = coroutineScope {
-        progress(ResearchStage.Searching)
+    suspend fun gather(query: String): Gathered = coroutineScope {
         val results = provider.search(query, maxOf(resultCount, pagesToRead))
         ensureActive()
         if (results.isEmpty()) return@coroutineScope Gathered(emptyList(), emptyList(), 0)
@@ -114,7 +76,6 @@ class WebResearch(
         val toRead = results.take(pagesToRead)
         var pagesRead = 0
         if (toRead.isNotEmpty()) {
-            progress(ResearchStage.Reading(toRead.size))
             val pages = toRead.mapIndexed { index, result ->
                 async {
                     runCatching {
@@ -146,29 +107,5 @@ class WebResearch(
 
         /** Shorter page text from a service is only a snippet: the page itself is read instead. */
         const val MIN_GIVEN_TEXT = 400
-
-        fun sameQuery(a: String, b: String) = Terms.of(a).toSet() == Terms.of(b).toSet()
-
-        /** Сливает две выдачи: одинаковые страницы не повторяются, номера источников второй сдвигаются. */
-        fun merge(first: Gathered, second: Gathered): Gathered {
-            val results = first.results.toMutableList()
-            val mapping = HashMap<Int, Int>()
-            val duplicates = HashSet<Int>()
-            second.results.forEachIndexed { index, result ->
-                val existing = results.indexOfFirst { it.url == result.url }
-                if (existing >= 0) {
-                    mapping[index] = existing
-                    duplicates.add(index)
-                } else {
-                    mapping[index] = results.size
-                    results.add(result)
-                }
-            }
-            val added = second.passages.mapNotNull { passage ->
-                if (passage.sourceIndex in duplicates) null else mapping[passage.sourceIndex]?.let { passage.copy(sourceIndex = it) }
-            }
-            val readSecond = (second.passages.filter { it.position >= 0 }.map { it.sourceIndex }.toSet() - duplicates).size
-            return Gathered(results, first.passages + added, first.pagesRead + readSecond)
-        }
     }
 }

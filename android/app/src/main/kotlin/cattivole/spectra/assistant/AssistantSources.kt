@@ -1,6 +1,5 @@
 package cattivole.spectra.assistant
 
-import alexcattivo.localchat.kit.AppDataAttachment
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.PcapAnalyzer
@@ -11,14 +10,12 @@ import cattivole.spectra.core.TrackerAssessment
 import cattivole.spectra.core.TrackerDetector
 
 /**
- * Reads the live scanners of Spectra into an [AssistantSnapshot]. Read-only: the assistant can look at what the app
- * has found; [AssistantActions] is what may start a scan. Mirrors AssistantSources.swift.
+ * Reads the live scanners of Spectra into an [AssistantSnapshot] for the summary cards. Read-only: the card's
+ * step buttons start scans through [AssistantActions]. Mirrors AssistantSources.swift.
  */
 class AssistantSources(val model: SpectraModel, val captures: CaptureShelf) {
     /** What the Check a link screen and the link card's buttons found about recent links. */
     val links = LinkShelf()
-
-    fun attachment(question: String): AppDataAttachment = AssistantDigest.attachment(question, snapshot())
 
     /**
      * What a summary card shows: its findings and steps, and the data its model actions read. Null when there is
@@ -34,16 +31,6 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf) {
         is CardSubject.Link -> links.facts(subject.link, now)
         else -> AssistantCards.facts(subject, snapshot(now), now)
     }
-
-    /** Just enough to choose the opening questions of an empty chat, without building a whole snapshot. */
-    fun readiness(): AssistantStarters.Readiness = AssistantStarters.Readiness(
-        sensorConnected = model.link.isConnected,
-        hasHosts = model.lan.devices.isNotEmpty(),
-        hasBluetooth = model.ble.devices.isNotEmpty(),
-        hasWifi = model.store.networks().isNotEmpty(),
-        hasLinkReport = model.connection.report?.status != null,
-        hasCapture = captures.latest != null || captures.currentRecording != null || (!model.link.rawCapturing && model.link.rawFrameCount > 0),
-    )
 
     fun snapshot(now: Long = System.currentTimeMillis()): AssistantSnapshot {
         val networks = model.store.networks().values.toList()

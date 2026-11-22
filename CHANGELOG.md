@@ -5,6 +5,16 @@ Each `## X.Y.Z` section is the text of the GitHub release for tag `vX.Y.Z`
 `versionName`; the sensor firmware keeps its own version, which the release
 notes name.
 
+## Unreleased
+
+Android app.
+
+- Assistant: the old chats are gone. The assistant has worked through summary
+  cards since 1.0.0, and the chats it kept from before could only be read;
+  they are erased once on the first start of this version. Summaries and
+  their folders stay. The code behind the chat (tool calling by the model,
+  the search-query planner, pictures by question) is removed with them.
+
 ## 1.1.0 (2026-11-22)
 
 Android app. The sensor firmware is unchanged.

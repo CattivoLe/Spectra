@@ -86,18 +86,6 @@ class EngineController(private val engine: InferenceEngine) {
         awaitClose { job.cancel() }
     }
 
-    /** Короткий служебный ответ (например, поисковый запрос). Только когда модель загружена и свободна. */
-    suspend fun complete(messages: List<ChatMessage>, maxTokens: Int = 32): String {
-        if (state != State.Ready) {
-            throw if (state == State.Generating || state == State.Loading) EngineException.Busy() else EngineException.NoModelLoaded()
-        }
-        return engine.complete(messages, maxTokens)
-    }
-
-    /** Сколько токенов займёт диалог в контексте. Считается, только пока модель загружена и свободна. */
-    suspend fun countTokens(messages: List<ChatMessage>, thinking: Boolean = false): Int? =
-        if (state == State.Ready) engine.countTokens(messages, thinking) else null
-
     /** Останавливает текущую генерацию. Движок заканчивает на ближайшем токене. */
     fun stop() {
         generation?.cancel()

@@ -242,7 +242,7 @@ class AssistantCardRunner(
                 throw cancelled
             }
         }
-        // The model may still be loading, or an old chat may be finishing its answer: wait for the engine.
+        // The model may still be loading, or another card may be finishing its text: wait for the engine.
         val ready = try {
             snapshotFlow { controller.state to assistant.loadError }.first { (state, error) ->
                 state == EngineController.State.Ready || state == EngineController.State.UnloadedForMemory || error != null
@@ -357,8 +357,8 @@ class AssistantCardRunner(
             }
             entry.webStatus = if (reused != null) tr("Using an earlier search: «%s»", query) else tr("Searching the web: «%s»…", query)
             val payload = try {
-                research.runWithRetry(
-                    query, "${card.facts.title}. $query", check = null, approve = null,
+                research.run(
+                    query, "${card.facts.title}. $query",
                     sent = { store.logSearch(it, providerName, true) },
                     initial = reused?.gathered,
                     fetched = { sent, gathered -> runCatching { store.cacheSearch(sent, providerName, gathered) } },

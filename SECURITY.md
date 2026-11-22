@@ -14,7 +14,7 @@ a couple of weeks, not hours. There is no bug bounty.
 Problems that matter most here:
 
 - anything that lets another device read or change data held by the app
-  (scan history, the assistant's encrypted chat store, saved Wi-Fi
+  (scan history, the assistant's encrypted store, saved Wi-Fi
   credentials on the sensor);
 - the local certificate authority used by the traffic inspector: its key
   leaving the device, or certificates it issues being trusted outside the
@@ -51,7 +51,7 @@ for how you use this software.
 
 ## Handling sensitive data
 
-- Scans, history and the assistant's chats stay on the phone. The assistant
+- Scans, history and what the assistant wrote stay on the phone. The assistant
   runs locally; web lookups happen only when the user asks for them.
 - Wi-Fi passwords entered on the sensor's **Join** screen are stored in the
   ESP32's NVS flash in plain text, so anyone with physical access to the
@@ -61,5 +61,5 @@ for how you use this software.
   Keystore; on iOS a keychain item marked "this device only"), and its
   directory is excluded from backups and device transfers. Saved decrypted
   traffic is excluded from backups too, as are the assistant's encrypted
-  chats on Android.
+  summaries on Android.
 - Exported `.pcap` files and history exports are not encrypted.

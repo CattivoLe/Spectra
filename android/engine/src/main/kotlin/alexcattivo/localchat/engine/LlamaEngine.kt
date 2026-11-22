@@ -28,8 +28,6 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
     // Состояние ниже меняется только в потоке движка.
     private var model = 0L
     private var context = 0L
-    /** Второй контекст той же модели для коротких служебных задач: кэш основного диалога не сбивается. */
-    private var utilityContext = 0L
     private var threadCount = 4
     private var template: String? = null
     private var chatTemplate: ChatTemplate? = null
@@ -37,8 +35,6 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
     private var bosText = ""
     /** Токены, которые сейчас лежат в KV-кэше, по порядку: следующий запрос досчитывает только отличие. */
     private var cachedTokens = IntArray(0)
-    /** Сообщения, уже выброшенные из начала текущего диалога: граница не «ползёт» с каждой репликой. */
-    private var droppedHistory: List<ChatMessage> = emptyList()
     private val promptCache = promptCacheDir?.let { PromptCache(it, promptCacheFiles) }
     /** От чего, кроме промпта, зависят сохранённые состояния: файл модели и настройки. */
     private var cacheIdentity: Triple<String, Long, String>? = null
@@ -65,7 +61,6 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
         bosText = LlamaNative.tokenText(loadedModel, LlamaNative.bosToken(loadedModel)).decodeToString()
         val eosText = LlamaNative.tokenText(loadedModel, LlamaNative.eosToken(loadedModel)).decodeToString()
         cachedTokens = IntArray(0)
-        droppedHistory = emptyList()
         chatTemplate = template?.let { source ->
             // Шаблон должен не только разобраться, но и отработать на простом диалоге.
             ChatTemplate.create(source, bosText, eosText)?.takeIf { candidate ->
@@ -95,18 +90,15 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
     override suspend fun unload() = withContext(dispatcher) { unloadSync() }
 
     private fun unloadSync() {
-        if (utilityContext != 0L) LlamaNative.freeContext(utilityContext)
         if (context != 0L) LlamaNative.freeContext(context)
         if (model != 0L) LlamaNative.freeModel(model)
         chatTemplate?.close()
-        utilityContext = 0L
         context = 0L
         model = 0L
         template = null
         chatTemplate = null
         fallbackFormat = null
         cachedTokens = IntArray(0)
-        droppedHistory = emptyList()
         cacheIdentity = null
         systemPrefix = null
     }
@@ -136,47 +128,6 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
         if (model != 0L) LlamaNative.setAbort(true)
     }
 
-    override suspend fun countTokens(messages: List<ChatMessage>, thinking: Boolean): Int? = withContext(dispatcher) {
-        if (model == 0L) return@withContext null
-        runCatching { tokenize(render(messages, thinking)).size }.getOrNull()
-    }
-
-    override suspend fun complete(messages: List<ChatMessage>, maxTokens: Int): String = withContext(dispatcher) {
-        if (model == 0L) throw EngineException.NoModelLoaded()
-        if (utilityContext == 0L) {
-            utilityContext = LlamaNative.newContext(model, UTILITY_CONTEXT, BATCH, threadCount)
-            if (utilityContext == 0L) throw EngineException.ContextCreationFailed()
-        }
-        val ctx = utilityContext
-        LlamaNative.setAbort(false)
-        LlamaNative.memoryClear(ctx)
-        val started = System.nanoTime()
-        val tokens = tokenize(render(messages, false))
-        if (tokens.size + maxTokens >= UTILITY_CONTEXT) throw EngineException.PromptTooLong(tokens.size, UTILITY_CONTEXT)
-        decodeAll(ctx, tokens, 0)
-
-        // Служебный ответ должен быть предсказуемым: всегда самый вероятный токен.
-        val sampler = LlamaNative.newSampler(model, 0f, 1f, 0, 0, null, null)
-        try {
-            val bytes = java.io.ByteArrayOutputStream()
-            repeat(maxTokens) {
-                val token = LlamaNative.sample(sampler, ctx)
-                if (LlamaNative.isEndOfGeneration(model, token)) return@withContext bytes.toByteArray().decodeToString()
-                bytes.write(LlamaNative.tokenPiece(model, token))
-                val code = LlamaNative.decode(ctx, intArrayOf(token), 0, 1)
-                if (code == ABORTED) throw kotlinx.coroutines.CancellationException("stopped")
-                if (code != 0) throw EngineException.DecodeFailed(code)
-            }
-            bytes.toByteArray().decodeToString()
-        } finally {
-            LlamaNative.freeSampler(sampler)
-            android.util.Log.i("LocalChatEngine", String.format(java.util.Locale.ROOT, "complete: prompt %d in %.1fs total", tokens.size, (System.nanoTime() - started) / 1e9))
-        }
-    }
-
-    /** Шаблон чата из метаданных загруженной модели — для диагностики. */
-    suspend fun chatTemplateSource(): String? = withContext(dispatcher) { template }
-
     // MARK: - Генерация
 
     private fun generateSync(
@@ -186,10 +137,10 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
         emit: (String) -> Unit,
     ): GenerationStats {
         if (model == 0L || context == 0L) throw EngineException.NoModelLoaded()
-        if (cancelled.get()) return GenerationStats(0, 0, 0, 0, 0.0, 0.0, StopReason.Cancelled)
+        if (cancelled.get()) return GenerationStats(0, 0, 0, 0.0, 0.0, StopReason.Cancelled)
         LlamaNative.setAbort(false)
         val contextLength = LlamaNative.contextLength(context)
-        val (tokens, dropped) = preparePrompt(messages, params, contextLength)
+        val tokens = preparePrompt(messages, params, contextLength)
 
         val sampler = makeSampler(params)
         try {
@@ -230,7 +181,7 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
             var offset = reused
             while (offset < tokens.size) {
                 if (cancelled.get()) {
-                    return GenerationStats(tokens.size, reused, dropped, 0, seconds(start), 0.0, StopReason.Cancelled)
+                    return GenerationStats(tokens.size, reused, 0, seconds(start), 0.0, StopReason.Cancelled)
                 }
                 // Пакет кончается ровно на границе системной части: в сохранённом состоянии не будет ничего лишнего.
                 val stop = pendingSave?.let { if (offset < it.prefix.size) it.prefix.size else null } ?: tokens.size
@@ -239,7 +190,7 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
                 if (code == ABORTED) {
                     // llama.cpp already dropped the unfinished batch; what was computed before it stays for "Continue".
                     if (!LlamaNative.memoryRemoveFrom(context, offset)) resetCache()
-                    return GenerationStats(tokens.size, reused, dropped, 0, seconds(start), 0.0, StopReason.Cancelled)
+                    return GenerationStats(tokens.size, reused, 0, seconds(start), 0.0, StopReason.Cancelled)
                 }
                 if (code != 0) {
                     resetCache()
@@ -257,8 +208,6 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
             var firstTokenAt = 0L
             val pending = Utf8Accumulator()
             var stopReason = StopReason.MaxTokens
-            val generatedText = StringBuilder()
-            val grammarActive = params.grammar != null && params.grammarTriggers.isNotEmpty()
             val cache = ArrayList<Int>(tokens.size + params.maxTokens).apply { addAll(cachedTokens.toList()) }
 
             while (generated < params.maxTokens) {
@@ -274,18 +223,7 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
                 }
                 generated++
                 val text = pending.append(LlamaNative.tokenPiece(model, token))
-                if (text != null) {
-                    emit(text)
-                    // Ленивая грамматика роняет процесс, если ей подать токен после того, как корневое правило
-                    // уже совпало: останавливаемся ДО следующего sample, как только скобки после триггера закрылись.
-                    if (grammarActive) {
-                        generatedText.append(text)
-                        if (grammarOutputComplete(generatedText.toString(), params.grammarTriggers)) {
-                            stopReason = StopReason.EndOfTurn
-                            break
-                        }
-                    }
-                }
+                if (text != null) emit(text)
                 if (tokens.size + generated >= contextLength) {
                     stopReason = StopReason.ContextFull
                     break
@@ -314,7 +252,6 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
             return GenerationStats(
                 promptTokens = tokens.size,
                 reusedPromptTokens = reused,
-                droppedMessages = dropped,
                 generatedTokens = generated,
                 timeToFirstTokenSeconds = (first - start) / 1e9,
                 generationSeconds = (end - first) / 1e9,
@@ -325,16 +262,8 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
         }
     }
 
-    private fun makeSampler(params: GenerationParams): Long {
-        val grammar = params.grammar?.takeIf { it.isNotEmpty() && params.grammarTriggers.isNotEmpty() }
-        // llama.cpp проигрывает вывод в грамматику начиная с самого триггера, поэтому корневое правило вызывающего
-        // оборачивается внешним, которое сначала принимает текст триггера. Иначе первый же символ опустошит стек.
-        val wrapped = grammar?.let {
-            it + "\n$TRIGGERED_ROOT ::= ( ${params.grammarTriggers.joinToString(" | ") { trigger -> gbnfLiteral(trigger) }} ) root\n"
-        }
-        val triggers = if (wrapped != null) params.grammarTriggers.map { regexEscaped(it).toByteArray() }.toTypedArray() else null
-        return LlamaNative.newSampler(model, params.temperature, params.topP, params.topK, params.seed, wrapped?.toByteArray(), triggers)
-    }
+    private fun makeSampler(params: GenerationParams): Long =
+        LlamaNative.newSampler(model, params.temperature, params.topP, params.topK, params.seed)
 
     // MARK: - Сохранённый системный промпт
 
@@ -401,48 +330,16 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
         if (context != 0L) LlamaNative.memoryClear(context)
     }
 
-    private fun render(messages: List<ChatMessage>, thinking: Boolean): String {
-        val prompt = chatTemplate?.render(messages, thinking) ?: (fallbackFormat ?: ChatFormat.Plain).render(messages)
-        val last = messages.lastOrNull()
-        if (last == null || last.role != ChatMessage.Role.Assistant) return prompt
-        return continuing(prompt, last.content) ?: prompt
-    }
+    private fun render(messages: List<ChatMessage>, thinking: Boolean): String =
+        chatTemplate?.render(messages, thinking) ?: (fallbackFormat ?: ChatFormat.Plain).render(messages)
 
-    /**
-     * Собирает промпт и, если он не помещается в контекст, выбрасывает самые старые реплики. Системные сообщения
-     * и последний вопрос остаются всегда; старое убирается целыми обменами и сразу с запасом (до 60 % бюджета),
-     * чтобы начало промпта не менялось на каждой реплике и кэш продолжал работать.
-     */
-    private fun preparePrompt(messages: List<ChatMessage>, params: GenerationParams, contextLength: Int): Pair<IntArray, Int> {
+    /** Промпт в токенах. Сводка — один короткий запрос: не поместился в контекст — это ошибка, а не повод резать. */
+    private fun preparePrompt(messages: List<ChatMessage>, params: GenerationParams, contextLength: Int): IntArray {
         val reserve = minOf(params.maxTokens, contextLength / 2)
         val budget = contextLength - reserve - 8
-        fun tokensFor(list: List<ChatMessage>) = tokenize(render(list, params.thinking))
-
-        val systemCount = messages.takeWhile { it.role == ChatMessage.Role.System }.size
-        val system = messages.subList(0, systemCount)
-        var rest = messages.subList(systemCount, messages.size).toList()
-
-        // Тот же диалог, что и в прошлый раз: сразу начинаем с уже выброшенного начала.
-        if (droppedHistory.isNotEmpty() && rest.size > droppedHistory.size && rest.subList(0, droppedHistory.size) == droppedHistory) {
-            rest = rest.drop(droppedHistory.size)
-        } else {
-            droppedHistory = emptyList()
-        }
-
-        var result = tokensFor(system + rest)
-        val soft = params.historyTokens?.coerceAtMost(budget) ?: budget
-        if (result.size > soft) {
-            val target = soft * 6 / 10
-            while (result.size > target) {
-                // Первый обмен: от первой реплики до следующего вопроса пользователя.
-                val next = rest.drop(1).indexOfFirst { it.role == ChatMessage.Role.User }.takeIf { it >= 0 }?.plus(1) ?: break
-                droppedHistory = droppedHistory + rest.subList(0, next)
-                rest = rest.drop(next)
-                result = tokensFor(system + rest)
-            }
-        }
+        val result = tokenize(render(messages, params.thinking))
         if (result.size > budget) throw EngineException.PromptTooLong(result.size, contextLength)
-        return result to droppedHistory.size
+        return result
     }
 
     private fun tokenize(text: String): IntArray {
@@ -451,71 +348,12 @@ class LlamaEngine(private val nativeLibraryDir: String, promptCacheDir: File? = 
         return LlamaNative.tokenize(model, text.toByteArray(), addSpecial, true) ?: throw EngineException.TokenizationFailed()
     }
 
-    private fun decodeAll(ctx: Long, tokens: IntArray, from: Int) {
-        var offset = from
-        while (offset < tokens.size) {
-            val count = minOf(BATCH, tokens.size - offset)
-            val code = LlamaNative.decode(ctx, tokens, offset, count)
-            if (code == ABORTED) throw kotlinx.coroutines.CancellationException("stopped")
-            if (code != 0) throw EngineException.DecodeFailed(code)
-            offset += count
-        }
-    }
-
     private fun seconds(start: Long) = (System.nanoTime() - start) / 1e9
 
     companion object {
         private const val BATCH = 512
         /** What llama_decode returns when the abort callback broke the batch off. */
         private const val ABORTED = 2
-        private const val UTILITY_CONTEXT = 3072
-        const val TRIGGERED_ROOT = "triggered-root"
-
-        /**
-         * Последняя реплика — начатый ответ модели: промпт обрезается сразу после него, без конца реплики и без
-         * нового приглашения ответить. Так модель дописывает тот же ответ. Не нашёлся — `null`.
-         */
-        fun continuing(prompt: String, partial: String): String? {
-            val tail = partial.trim()
-            if (tail.isEmpty()) return null
-            val index = prompt.lastIndexOf(tail)
-            return if (index < 0) null else prompt.substring(0, index + tail.length)
-        }
-
-        /** Строковый литерал GBNF, совпадающий ровно с `text`. */
-        fun gbnfLiteral(text: String): String {
-            val out = StringBuilder("\"")
-            for (ch in text) when (ch) {
-                '\\' -> out.append("\\\\")
-                '"' -> out.append("\\\"")
-                '\n' -> out.append("\\n")
-                '\r' -> out.append("\\r")
-                '\t' -> out.append("\\t")
-                else -> out.append(ch)
-            }
-            return out.append('"').toString()
-        }
-
-        /** `text` как регулярное выражение ECMAScript (им пользуется llama.cpp), совпадающее буквально. */
-        fun regexEscaped(text: String): String {
-            val special = setOf('\\', '^', '$', '.', '|', '?', '*', '+', '(', ')', '[', ']', '{', '}', '/')
-            return buildString { for (ch in text) { if (ch in special) append('\\'); append(ch) } }
-        }
-
-        /** Правда, когда после триггера в выводе уже есть закрытый `{…}`: корневое правило выдано целиком. */
-        fun grammarOutputComplete(text: String, triggers: List<String>): Boolean {
-            for (trigger in triggers) {
-                val index = text.indexOf(trigger)
-                if (index < 0) continue
-                var depth = 0
-                var opened = false
-                for (ch in text.substring(index + trigger.length)) {
-                    if (ch == '{') { depth++; opened = true } else if (ch == '}') depth--
-                    if (opened && depth == 0) return true
-                }
-            }
-            return false
-        }
 
         private fun commonPrefix(a: IntArray, b: IntArray): Int {
             var index = 0
