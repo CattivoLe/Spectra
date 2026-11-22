@@ -135,12 +135,6 @@ public final class WebAccess {
     public var useMeaning: Bool { didSet { defaults.set(useMeaning, forKey: Keys.meaning) } }
     /// The model for picking by meaning. Set by the app while one is installed.
     public var embedder: (any PassageEmbedder)?
-    /// When what was found has no answer, search once more with another query.
-    public var retryIfMissing: Bool { didSet { defaults.set(retryIfMissing, forKey: Keys.retry) } }
-    /// Let the model write the query from the conversation, and skip searching when it is not needed.
-    public var smartQuery: Bool { didSet { defaults.set(smartQuery, forKey: Keys.smartQuery) } }
-    /// The host app's own rules for the query writer, e.g. which questions it answers from its own data. Set by the app.
-    public var plannerNote: String?
 
     /// Спрашивает пользователя перед отправкой запроса. Возвращает запрос (возможно, исправленный) или `nil`, если пользователь отказался.
     public var approve: (@MainActor (String) async -> String?)?
@@ -148,7 +142,7 @@ public final class WebAccess {
     fileprivate enum Keys {
         static let enabled = "web.enabled", provider = "web.provider", language = "web.wikiLanguage"
         static let searxng = "web.searxng", count = "web.count", confirm = "web.confirm", braveAccount = "brave-key"
-        static let readPages = "web.readPages", pages = "web.pagesToRead", smartQuery = "web.smartQuery", meaning = "web.useMeaning", retry = "web.retryIfMissing"
+        static let readPages = "web.readPages", pages = "web.pagesToRead", meaning = "web.useMeaning"
     }
 
     private let defaults: UserDefaults
@@ -177,9 +171,7 @@ public final class WebAccess {
         readPages = defaults.object(forKey: Keys.readPages) as? Bool ?? true
         let pages = defaults.integer(forKey: Keys.pages)
         pagesToRead = (1...5).contains(pages) ? pages : 3
-        smartQuery = defaults.object(forKey: Keys.smartQuery) as? Bool ?? true
         useMeaning = defaults.object(forKey: Keys.meaning) as? Bool ?? true
-        retryIfMissing = defaults.object(forKey: Keys.retry) as? Bool ?? true
     }
 
     /// How pages are read: the network in the app, canned pages in tests.

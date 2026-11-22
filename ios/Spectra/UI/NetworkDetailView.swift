@@ -203,8 +203,8 @@ struct NetworkDetailView: View {
         .navigationDestination(item: $decoding) { capture in
             PcapView(capture: capture)
         }
-        // Only a network still in the live list: a saved one is not in what the assistant reads.
-        .askAssistant(isShown: lookup != nil, question: { askQuestion(network) })
+        // Only a network still in the live list: a saved one is not in what the summary reads.
+        .summaryButton(isShown: lookup != nil, subject: { .wifi(bssid: network.latest.bssid.description) })
         .onDisappear { link.stopRawCapture() }
         .task { await joiner.refreshCurrent() }
         .alert(
@@ -288,15 +288,6 @@ struct NetworkDetailView: View {
 
     /// What the ✨ button asks: this one network by name and BSSID, so the assistant's Wi‑Fi list puts it first,
     /// plus the traffic captured on it when the sensor still holds that capture.
-    private func askQuestion(_ network: TrackedNetwork) -> String {
-        let name = network.revealedSSID ?? network.latest.displayName
-        let bssid = network.latest.bssid.description
-        let captured = link.rawCaptureNetwork == network.latest.bssid && !link.rawCapturing && link.rawFrameCount > 0
-        return captured
-            ? String(localized: "Analyze the Wi‑Fi network “\(name)” (\(bssid)) and the traffic captured on it: encryption, channel, signal, clients — is everything fine with it?")
-            : String(localized: "Analyze the Wi‑Fi network “\(name)” (\(bssid)): encryption, channel, signal, clients — is everything fine with it?")
-    }
-
     // MARK: Capture traffic → .pcap
 
     @ViewBuilder

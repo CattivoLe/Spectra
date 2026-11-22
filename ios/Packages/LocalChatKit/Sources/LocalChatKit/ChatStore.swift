@@ -118,6 +118,11 @@ public final class ChatStore: Sendable {
         try await database.vacuum()
     }
 
+    /// Shrinks the file so that deleted rows do not linger in its free pages.
+    public func vacuum() async throws {
+        try await database.vacuum()
+    }
+
     private static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1") { db in

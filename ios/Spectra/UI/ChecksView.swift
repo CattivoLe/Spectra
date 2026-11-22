@@ -181,6 +181,7 @@ struct ChecksView: View {
                 }
             }
             .navigationTitle("Checks")
+            .summaryButton(placement: .topBarLeading, subject: { .internet })
             .navigationDestination(isPresented: $showConnection) {
                 LinkView()
             }

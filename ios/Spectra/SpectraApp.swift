@@ -17,6 +17,7 @@ struct SpectraApp: App {
     @State private var speedTester = SpeedTester()
     @State private var resourceWatch = ResourceWatch()
     @State private var routeTracer = RouteTracer()
+    @State private var linkShelf = LinkShelf()
     @State private var assistant = AssistantModel()
     /// The capture last decoded, for the assistant to talk about.
     @State private var captures = CaptureShelf()
@@ -48,6 +49,7 @@ struct SpectraApp: App {
                 .environment(speedTester)
                 .environment(resourceWatch)
                 .environment(routeTracer)
+                .environment(linkShelf)
                 .environment(bleScanner)
                 .environment(location)
                 .environment(watchList)
@@ -67,10 +69,9 @@ struct SpectraApp: App {
                     let sources = AssistantSources(
                         store: store, lan: lanScanner, ble: bleScanner, history: history,
                         link: link, probe: linkProbe, joiner: joiner, speed: speedTester, captures: captures,
-                        memory: assistantMemory, resources: resourceWatch, tracer: routeTracer
+                        memory: assistantMemory, resources: resourceWatch, tracer: routeTracer, links: linkShelf
                     )
                     captures.recordedTraffic = { [weak sniffer] in sniffer?.assistantRecording }
-                    assistant.dataSource = { question in sources.attachment(for: question) }
                     assistant.memory = assistantMemory
                     let actions = AssistantActions(sources: sources, memory: assistantMemory)
                     assistant.actions = actions

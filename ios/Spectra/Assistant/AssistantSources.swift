@@ -22,14 +22,6 @@ struct AssistantSources {
     /// What the Check a link screen and the link card's buttons found about recent links.
     var links = LinkShelf()
 
-    func attachment(for question: String) -> AppDataAttachment? {
-        var current = snapshot()
-        // The dossier is assembled per question: only what is in front of the user, or named in the question,
-        // travels with it. See `AssistantMemory.digest(subjects:)`.
-        current.memory = memory.digest(subjects: AssistantDigest.subjects(in: question, snapshot: current))
-        return AssistantDigest.attachment(for: question, snapshot: current)
-    }
-
     /// Folds what is on screen into the long-term baselines. Called on the app's own save tick, so it skips the
     /// expensive parts of a snapshot: no capture is decoded and no threat assessment runs.
     func recordBaselines(now: Date = Date()) {
@@ -66,18 +58,6 @@ struct AssistantSources {
             ))
         }
         return found
-    }
-
-    /// Just enough to choose the opening questions of an empty chat, without building a whole snapshot.
-    func readiness() -> AssistantStarters.Readiness {
-        AssistantStarters.Readiness(
-            sensorConnected: link.isConnected,
-            hasHosts: !lan.devices.isEmpty,
-            hasBluetooth: !ble.devices.isEmpty,
-            hasWifi: !store.networks.isEmpty,
-            hasLinkReport: probe.report?.status != nil,
-            hasCapture: captures.latest != nil || captures.currentRecording != nil || (!link.rawCapturing && link.rawFrameCount > 0)
-        )
     }
 
     /// What a summary card shows: its findings and steps, and the data its model actions read. `nil` when there is

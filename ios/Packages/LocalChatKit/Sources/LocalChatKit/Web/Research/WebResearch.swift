@@ -2,19 +2,13 @@ import Foundation
 
 /// Этап поиска — для подписи на экране.
 public enum ResearchStage: Sendable, Equatable {
-    case planning
     case searching
-    case checking
-    case retrying(query: String)
     case reading(pages: Int)
     case selecting
 
     public var title: String {
         switch self {
-        case .planning: String(localized: "Writing the search query…")
         case .searching: String(localized: "Searching the web…")
-        case .checking: String(localized: "Checking whether that is enough…")
-        case .retrying(let query): String(localized: "Searching again: «\(query)»…")
         case .reading(let pages): String(localized: "Reading pages: \(pages)…")
         case .selecting: String(localized: "Picking what matters…")
         }
@@ -104,90 +98,6 @@ public struct WebResearch: Sendable {
         let passageVectors = try? await embedder.embed(passages: pool.map { (($0.heading.map { $0 + ". " }) ?? "") + $0.text })
         let order = PassageSelector.order(pool, for: text, method: method, queryVector: queryVector, passageVectors: passageVectors)
         return PassageSelector.pack(pool, order: order, budget: budget)
-    }
-
-    /// Поиск с одним повторным заходом.
-    /// `check` смотрит на отобранное и возвращает новый запрос, если ответа нет (`nil` — найденного хватает).
-    /// `approve` спрашивает пользователя перед вторым запросом (как и перед первым); `nil` от него — второго захода не будет.
-    /// `sent` сообщает о каждом запросе, ушедшем в сеть, — для журнала.
-    /// `initial` — выдача первого запроса из кэша (`SearchCache`): тогда первый запрос в сеть не уходит.
-    /// `fetched` получает каждую выдачу, пришедшую из сети, — чтобы положить её в кэш.
-    public func runWithRetry(
-        query: String,
-        question: String,
-        initial: Gathered? = nil,
-        check: (@Sendable (_ question: String, _ evidence: [Passage], _ tried: [String]) async -> String?)?,
-        approve: (@Sendable (String) async -> String?)?,
-        sent: @escaping @Sendable (String) async -> Void = { _ in },
-        fetched: @escaping @Sendable (String, Gathered) async -> Void = { _, _ in },
-        progress: @escaping @Sendable (ResearchStage) async -> Void = { _ in }
-    ) async throws -> SearchPayload {
-        var gathered: Gathered
-        if let initial {
-            gathered = initial
-        } else {
-            gathered = try await gather(query: query, progress: progress)
-            await sent(query)
-            await fetched(query, gathered)
-        }
-        var queries = [query]
-        // Без чтения страниц отбирать и проверять нечего: отдаём описания из выдачи как есть.
-        guard pagesToRead > 0 else {
-            return SearchPayload(query: query, provider: provider.name, results: gathered.results, evidence: nil, pagesRead: 0)
-        }
-
-        if !gathered.results.isEmpty { await progress(.selecting) }
-        var evidence = gathered.results.isEmpty ? [] : await select(from: gathered.passages, question: question, query: query)
-
-        if let check {
-            await progress(.checking)
-            var next: String?
-            if let proposed = await check(question, evidence, queries), !queries.contains(where: { Self.sameQuery($0, proposed) }) {
-                if let approve { next = await approve(proposed) } else { next = proposed }
-            }
-            if let next, !next.trimmingCharacters(in: .whitespaces).isEmpty {
-                try Task.checkCancellation()
-                await progress(.retrying(query: next))
-                let more = try await gather(query: next, progress: { _ in })
-                await sent(next)
-                await fetched(next, more)
-                queries.append(next)
-                gathered = Self.merge(gathered, more)
-                await progress(.selecting)
-                // Слова неудачного первого запроса больше не помогают: отбираем по вопросу и новому запросу.
-                evidence = await select(from: gathered.passages, question: question, query: next)
-            }
-        }
-        return SearchPayload(query: query, provider: provider.name, results: gathered.results, evidence: evidence,
-                             pagesRead: gathered.pagesRead, extraQueries: Array(queries.dropFirst()))
-    }
-
-    static func sameQuery(_ a: String, _ b: String) -> Bool {
-        Set(Terms.of(a)) == Set(Terms.of(b))
-    }
-
-    /// Сливает две выдачи: одинаковые страницы не повторяются, номера источников второй сдвигаются.
-    public static func merge(_ first: Gathered, _ second: Gathered) -> Gathered {
-        var results = first.results
-        var mapping: [Int: Int] = [:]
-        var duplicates: Set<Int> = []
-        for (index, result) in second.results.enumerated() {
-            if let existing = results.firstIndex(where: { $0.url == result.url }) {
-                mapping[index] = existing
-                duplicates.insert(index)
-            } else {
-                mapping[index] = results.count
-                results.append(result)
-            }
-        }
-        let added = second.passages.compactMap { passage -> Passage? in
-            guard !duplicates.contains(passage.sourceIndex), let target = mapping[passage.sourceIndex] else { return nil }
-            var moved = passage
-            moved.sourceIndex = target
-            return moved
-        }
-        let readSecond = Set(second.passages.filter { $0.position >= 0 }.map(\.sourceIndex)).subtracting(duplicates).count
-        return Gathered(results: results, passages: first.passages + added, pagesRead: first.pagesRead + readSecond)
     }
 
     /// Поиск и чтение страниц, без отбора.

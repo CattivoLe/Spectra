@@ -198,8 +198,7 @@ struct LANView: View {
                     }
                 }
             }
-            .askAssistant(isShown: !scanner.devices.isEmpty, placement: .topBarLeading,
-                          question: { String(localized: "Analyze the devices on my local network: what each one is and what deserves attention?") })
+            .summaryButton(isShown: !scanner.devices.isEmpty, placement: .topBarLeading, subject: { .lan })
             .confirmationDialog("Forget known devices?", isPresented: $confirmForget, titleVisibility: .visible) {
                 Button("Forget", role: .destructive) { scanner.forgetKnownHosts() }
             } message: {

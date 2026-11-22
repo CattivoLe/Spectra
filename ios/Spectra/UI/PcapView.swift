@@ -83,10 +83,10 @@ struct PcapView: View {
             }
         }
         .shareSheet(item: $shareItem)
-        // Opens a new assistant chat right here, with this capture as the one it reads, and asks about it.
-        .askAssistant(isShown: loadedName != nil,
-                      question: { String(localized: "Decode this traffic capture: what is in it, and is anything unusual?") },
-                      prepare: {
+        // Opens a summary of this capture right here: it is kept on the shelf the card reads first.
+        .summaryButton(isShown: loadedName != nil,
+                       subject: { .capture },
+                       prepare: {
                           if case .loaded(let name, let analysis) = phase {
                               captures.keep(name: name, analysis: analysis, fromSensor: capture != nil)
                           }

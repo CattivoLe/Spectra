@@ -12,11 +12,7 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
     // Состояние ниже читается и меняется только на `queue`.
     private var model: OpaquePointer?
     private var context: OpaquePointer?
-    /// A second context on the same model for short side jobs (writing a search query, checking what was found).
-    /// The weights are shared but the KV cache is its own, so the conversation is not recomputed afterwards.
-    private var utilityContext: OpaquePointer?
     private var threadCount: Int32 = 4
-    private static let utilityContextLength: UInt32 = 3072
     private var vocab: OpaquePointer?
     private var template: String?
     private var chatTemplate: ChatTemplate?
@@ -60,7 +56,6 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
     static func ensureBackend() { _ = backend }
 
     deinit {
-        if let utilityContext { llama_free(utilityContext) }
         if let context { llama_free(context) }
         if let model { llama_model_free(model) }
     }
@@ -100,73 +95,6 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
                 }
             }
         }
-    }
-
-    public func countTokens(messages: [ChatMessage], thinking: Bool) async -> Int? {
-        await withCheckedContinuation { continuation in
-            queue.async {
-                guard let vocab = self.vocab,
-                      let prompt = try? self.render(messages, thinking: thinking),
-                      let tokens = try? self.tokenize(prompt, vocab: vocab) else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                continuation.resume(returning: tokens.count)
-            }
-        }
-    }
-
-    public func complete(messages: [ChatMessage], maxTokens: Int) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            queue.async {
-                continuation.resume(with: Result { try self.completeSync(messages: messages, maxTokens: maxTokens) })
-            }
-        }
-    }
-
-    private func completeSync(messages: [ChatMessage], maxTokens: Int) throws -> String {
-        guard let model, let vocab else { throw EngineError.noModelLoaded }
-        if utilityContext == nil {
-            var parameters = llama_context_default_params()
-            parameters.n_ctx = Self.utilityContextLength
-            parameters.n_batch = UInt32(Self.batchSize)
-            parameters.n_threads = threadCount
-            parameters.n_threads_batch = threadCount
-            guard let created = llama_init_from_model(model, parameters) else { throw EngineError.contextCreationFailed }
-            utilityContext = created
-        }
-        let context = utilityContext!
-        llama_memory_clear(llama_get_memory(context), true)
-
-        let tokens = try tokenize(try render(messages, thinking: false), vocab: vocab)
-        guard tokens.count + maxTokens < Int(Self.utilityContextLength) else {
-            throw EngineError.promptTooLong(tokens: tokens.count, context: Int(Self.utilityContextLength))
-        }
-
-        var offset = 0
-        while offset < tokens.count {
-            let count = min(Int(Self.batchSize), tokens.count - offset)
-            let code = tokens.withUnsafeBufferPointer { buffer in
-                llama_decode(context, llama_batch_get_one(UnsafeMutablePointer(mutating: buffer.baseAddress! + offset), Int32(count)))
-            }
-            guard code == 0 else { throw EngineError.decodeFailed(code: code) }
-            offset += count
-        }
-
-        // A side job must be predictable: always the most likely token.
-        let sampler = llama_sampler_chain_init(llama_sampler_chain_default_params())!
-        llama_sampler_chain_add(sampler, llama_sampler_init_greedy())
-        defer { llama_sampler_free(sampler) }
-
-        var bytes: [UInt8] = []
-        for _ in 0..<maxTokens {
-            var token = llama_sampler_sample(sampler, context, -1)
-            if llama_vocab_is_eog(vocab, token) { break }
-            bytes += piece(for: token, vocab: vocab)
-            let code = llama_decode(context, llama_batch_get_one(&token, 1))
-            guard code == 0 else { throw EngineError.decodeFailed(code: code) }
-        }
-        return String(decoding: bytes, as: UTF8.self)
     }
 
     /// Шаблон чата из метаданных загруженной модели — для диагностики.
@@ -247,8 +175,6 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
     }
 
     private func unloadSync() {
-        if let utilityContext { llama_free(utilityContext) }
-        utilityContext = nil
         if let context { llama_free(context) }
         if let model { llama_model_free(model) }
         context = nil
@@ -360,8 +286,6 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
         var firstTokenAt: ContinuousClock.Instant?
         var pendingBytes: [UInt8] = []
         var stopReason = StopReason.maxTokens
-        var generatedText = ""
-        let grammarActive = params.grammar != nil && !params.grammarTriggers.isEmpty
 
         while generated < params.maxTokens {
             if cancelled.isSet {
@@ -379,20 +303,7 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
 
             generated += 1
             pendingBytes += piece(for: token, vocab: vocab)
-            if let text = Self.drainValidUTF8(&pendingBytes) {
-                emit(text)
-                // A lazy grammar sampler crashes (empty-stack trap) if fed tokens after its root rule is fully
-                // matched. Detect that moment here — balanced braces after the trigger — and stop BEFORE the
-                // next llama_sampler_sample call. The consumer-side break in ChatSession is too late: it sets
-                // the cancelled flag asynchronously, after this thread has already called sample again.
-                if grammarActive {
-                    generatedText += text
-                    if Self.grammarOutputComplete(generatedText, triggers: params.grammarTriggers) {
-                        stopReason = .endOfTurn
-                        break
-                    }
-                }
-            }
+            if let text = Self.drainValidUTF8(&pendingBytes) { emit(text) }
 
             if tokens.count + generated >= contextLength {
                 stopReason = .contextFull
@@ -429,11 +340,6 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
 
     private func makeSampler(_ params: GenerationParams) -> UnsafeMutablePointer<llama_sampler> {
         let chain = llama_sampler_chain_init(llama_sampler_chain_default_params())!
-        // The grammar goes first in the chain: it masks every token the structure forbids before the samplers
-        // below pick among what is left. It does nothing until one of the trigger strings shows up in the output.
-        if let grammarSampler = makeGrammarSampler(params) {
-            llama_sampler_chain_add(chain, grammarSampler)
-        }
         if params.temperature <= 0 {
             llama_sampler_chain_add(chain, llama_sampler_init_greedy())
         } else {
@@ -443,75 +349,6 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
             llama_sampler_chain_add(chain, llama_sampler_init_dist(params.seed))
         }
         return chain
-    }
-
-    /// `nil` when there is no grammar to apply, or when it fails to parse (logged, not fatal: the model answers
-    /// in plain text instead of a tool call it could never have gotten right anyway).
-    ///
-    /// llama.cpp treats each trigger as a regex and, once it matches, replays the output into the grammar starting
-    /// from the match itself — the trigger text included. The caller's `root` only describes what follows the
-    /// trigger, so it is wrapped in an outer rule that first accepts the trigger literally; without that, the very
-    /// first replayed character (`<` of `<tool_call>`) empties the grammar stack and llama.cpp throws, aborting
-    /// the app.
-    private func makeGrammarSampler(_ params: GenerationParams) -> UnsafeMutablePointer<llama_sampler>? {
-        guard let grammar = params.grammar, !grammar.isEmpty, !params.grammarTriggers.isEmpty, let vocab else { return nil }
-        let triggerAlternatives = params.grammarTriggers.map(Self.gbnfLiteral).joined(separator: " | ")
-        let wrapped = grammar + "\n\(Self.triggeredRootRule) ::= ( \(triggerAlternatives) ) root\n"
-        let owned: [UnsafeMutablePointer<CChar>?] = params.grammarTriggers.map { strdup(Self.regexEscaped($0)) }
-        defer { for pointer in owned { free(pointer) } }
-        var pointers: [UnsafePointer<CChar>?] = owned.map { $0.map { UnsafePointer($0) } }
-        let sampler = pointers.withUnsafeMutableBufferPointer { buffer in
-            wrapped.withCString { grammarCString in
-                llama_sampler_init_grammar_lazy_patterns(vocab, grammarCString, Self.triggeredRootRule,
-                                                         buffer.baseAddress, buffer.count, nil, 0)
-            }
-        }
-        if sampler == nil {
-            FileHandle.standardError.write(Data("LlamaEngine: failed to parse tool-call grammar, ignoring it\n".utf8))
-        }
-        return sampler
-    }
-
-    /// Name of the outer rule `makeGrammarSampler` adds: trigger text, then the caller's `root`.
-    static let triggeredRootRule = "triggered-root"
-
-    /// A GBNF string literal matching `text` exactly.
-    static func gbnfLiteral(_ text: String) -> String {
-        var out = "\""
-        for scalar in text.unicodeScalars {
-            switch scalar {
-            case "\\": out += "\\\\"
-            case "\"": out += "\\\""
-            case "\n": out += "\\n"
-            case "\r": out += "\\r"
-            case "\t": out += "\\t"
-            default: out.unicodeScalars.append(scalar)
-            }
-        }
-        return out + "\""
-    }
-
-    /// `text` as an ECMAScript regex (what llama.cpp's std::regex uses) matching it literally.
-    static func regexEscaped(_ text: String) -> String {
-        let special: Set<Character> = ["\\", "^", "$", ".", "|", "?", "*", "+", "(", ")", "[", "]", "{", "}", "/"]
-        return String(text.flatMap { special.contains($0) ? ["\\", $0] : [$0] })
-    }
-
-    /// True once the generated text, past any grammar trigger, contains a balanced `{…}` — meaning the
-    /// grammar's root rule (which is a JSON object) has been fully produced and the lazy grammar sampler
-    /// should not be asked to accept any further tokens.
-    private static func grammarOutputComplete(_ text: String, triggers: [String]) -> Bool {
-        for trigger in triggers {
-            guard let range = text.range(of: trigger) else { continue }
-            var depth = 0
-            var opened = false
-            for ch in text[range.upperBound...] {
-                if ch == "{" { depth += 1; opened = true }
-                else if ch == "}" { depth -= 1 }
-                if opened && depth == 0 { return true }
-            }
-        }
-        return false
     }
 
     // MARK: - Saved system prompt

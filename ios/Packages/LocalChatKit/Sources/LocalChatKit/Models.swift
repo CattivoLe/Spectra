@@ -58,24 +58,10 @@ public struct StoredMessage: Codable, Identifiable, Hashable, Sendable, Fetchabl
     public var interrupted: Bool
     /// Which model wrote the answer.
     public var modelName: String?
-    /// What was found on the web for this question (user messages). Kept so "Regenerate" does not go online again.
+    /// What was found on the web for this text: a summary keeps its sources and pictures with it.
     public var search: SearchPayload?
 
     public var asChatMessage: ChatMessage { ChatMessage(role, content) }
-}
-
-/// Facts from the host app (Wi-Fi scan, LAN, Bluetooth, history, connection check) that go in front of a question.
-/// The assistant reads them from the phone; nothing here ever leaves the device.
-public struct AppDataAttachment: Equatable, Sendable {
-    /// Short names of what was attached, shown under the answer ("Wi‑Fi", "LAN").
-    public var topics: [String]
-    /// The text placed ahead of the question.
-    public var text: String
-
-    public init(topics: [String], text: String) {
-        self.topics = topics
-        self.text = text
-    }
 }
 
 /// A log entry: what exactly was sent to the internet and where. Visible in settings.

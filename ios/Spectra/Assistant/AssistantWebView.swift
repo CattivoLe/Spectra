@@ -21,42 +21,56 @@ struct AssistantWebView: View {
                 ))
             } footer: {
                 Text(web.isEnabled
-                     ? "Search works in every chat. To stop it, turn this switch off."
+                     ? "“More detail” and “Deep analysis” on a summary search the web for the device's maker and model, or a link's site. To stop it, turn this switch off."
                      : "Right now nothing leaves the phone except model downloads you start yourself.")
             }
 
             if web.isEnabled {
                 Section {
-                    Picker("Source", selection: $web.provider) {
-                        ForEach(WebAccess.ProviderKind.allCases, id: \.self) { Text($0.title).tag($0) }
+                    ForEach(WebAccess.ProviderKind.allCases, id: \.self) { kind in
+                        Button {
+                            web.provider = kind
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(kind.title).foregroundStyle(.primary)
+                                    Text(kind.summary).font(.footnote).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if web.provider == kind { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                            }
+                        }
                     }
+                } header: {
+                    Text("Where to search")
+                }
+
+                Section {
                     switch web.provider {
                     case .searxng:
                         TextField("https://search.example.org", text: $web.searxngAddress)
                             .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        Picker("Language", selection: $web.searchLanguage) {
-                            Text("Русский").tag("ru")
-                            Text("English").tag("en")
-                            Text("Automatic").tag("auto")
-                        }
                     default:
                         let kind = web.provider
                         SecureField("API key", text: Binding(get: { web.key(kind) }, set: { web.setKey(kind, $0) }))
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
+                    Picker("Language", selection: $web.searchLanguage) {
+                        Text("Русский").tag("ru")
+                        Text("English").tag("en")
+                        Text("Automatic").tag("auto")
+                    }
                     if let problem = web.configurationProblem { Text(problem).font(.footnote).foregroundStyle(.orange) }
                 } header: {
-                    Text("Where to search")
+                    Text(web.provider.title)
                 } footer: {
                     Text(web.provider.explanation)
                 }
 
                 Section {
                     Toggle("Show the query before sending", isOn: $web.confirmEachSearch)
-                    Toggle("Query from the conversation", isOn: $web.smartQuery)
                     Toggle("Read pages in full", isOn: $web.readPages)
                     if web.readPages {
-                        Toggle("Search again if the answer is missing", isOn: $web.retryIfMissing)
                         if model.library.embeddingModel != nil {
                             Toggle("Pick by meaning", isOn: $web.useMeaning)
                         } else {
@@ -83,7 +97,7 @@ struct AssistantWebView: View {
             }
 
             Section {
-                Label("Only the short query text leaves the phone. Your chat, history and what Spectra found about your networks and devices are never sent. Results are mixed into the question on the phone.", systemImage: "lock.shield")
+                Label("Only the short query leaves the phone: a device's maker and model or a link's site. Addresses, network names, names you gave your devices and what Spectra found are never sent.", systemImage: "lock.shield")
                     .font(.footnote).foregroundStyle(.secondary)
                 Label("The search service sees your query and IP address, as with any search. If that matters, use your own SearXNG server.", systemImage: "eye")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -109,7 +123,7 @@ struct AssistantWebView: View {
                 }
                 .disabled(cacheCount == 0)
             } footer: {
-                Text("A question searched in the last 24 hours, or one worded almost the same, is answered from what that search found: nothing is sent again. The pages are kept on the phone, encrypted with the chats.")
+                Text("A query searched in the last 24 hours, or one worded almost the same, reuses what that search found: nothing is sent again. The pages are kept on the phone, encrypted with the summaries.")
             }
         }
         .navigationTitle("Internet")
@@ -121,7 +135,7 @@ struct AssistantWebView: View {
         .confirmationDialog("Allow web search?", isPresented: $confirmEnable, titleVisibility: .visible) {
             Button("Allow") { model.web.isEnabled = true }
         } message: {
-            Text("When search is on in a chat, the text of your question is sent to the search service you choose. Everything else stays on the phone.")
+            Text("A summary's “More detail” and “Deep analysis” then send a short query (a device's maker and model, or a link's site) to the search service you choose. Everything else stays on the phone.")
         }
     }
 
