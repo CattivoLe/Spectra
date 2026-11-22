@@ -247,14 +247,6 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator, area: HistoryArea) {
                             showSettings = true
                         },
                     )
-                    DropdownMenuItem(
-                        text = { Text(tr("Licenses…")) },
-                        leadingIcon = { Icon(Icons.Rounded.Gavel, null) },
-                        onClick = {
-                            menu = false
-                            nav.licenses()
-                        },
-                    )
                     if (shown.isNotEmpty()) {
                         HorizontalDivider()
                         DropdownMenuItem(

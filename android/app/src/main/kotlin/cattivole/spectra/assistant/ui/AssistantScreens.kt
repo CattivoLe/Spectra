@@ -41,6 +41,8 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.DriveFileMove
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.FolderSpecial
+import androidx.compose.material.icons.rounded.FiberManualRecord
 import androidx.compose.material.icons.rounded.FolderOff
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -80,6 +82,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -119,12 +122,11 @@ interface AssistantNav {
     fun card(id: UUID)
     fun models()
     fun internet()
-    fun dossier()
 }
 
 /**
  * The Assistant tab: the journal of summary cards (✨ on a screen makes one), the old chats below them, read-only,
- * and the way to models, internet search and the dossier.
+ * and the way to the model and internet search.
  */
 @Composable
 fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
@@ -142,14 +144,36 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     val changes = assistant.store.changes.collectAsStateValue()
     /** Each saved card's worst finding, for the color of its row. */
     var risks by remember { mutableStateOf<Map<UUID, CardRisk>>(emptyMap()) }
+    /** Summaries and chats whose last text was cut short or whose question has no answer: they get "Continue". */
+    var unfinished by remember { mutableStateOf<Set<UUID>>(emptySet()) }
     LaunchedEffect(changes) {
         chats = runCatching { assistant.store.chats() }.getOrDefault(emptyList())
         folders = runCatching { assistant.store.folders() }.getOrDefault(emptyList())
+        val messages = chats.associate { chat -> chat.id to runCatching { assistant.store.messages(chat.id) }.getOrDefault(emptyList()) }
         risks = chats.filter { CardSubjects.isCard(it.systemPrompt) }.associate { chat ->
-            val head = runCatching { assistant.store.messages(chat.id) }.getOrDefault(emptyList()).firstOrNull { it.role == ChatMessage.Role.User }
+            val head = messages[chat.id].orEmpty().firstOrNull { it.role == ChatMessage.Role.User }
             chat.id to (head?.content?.let(AssistantCards::parse)?.second?.let(AssistantCards::worst) ?: CardRisk.OK)
         }
+        unfinished = chats.filter { chat ->
+            val last = messages[chat.id].orEmpty().lastOrNull() ?: return@filter false
+            when {
+                last.role == ChatMessage.Role.Assistant -> last.interrupted
+                // A card's head is the user's line: only an old chat's question can be left unanswered.
+                else -> !CardSubjects.isCard(chat.systemPrompt) && last.role == ChatMessage.Role.User
+            }
+        }.map { it.id }.toSet()
     }
+    val recording = assistant.recordingFolderId?.takeIf { id -> folders.any { it.id == id } } ?: assistant.summariesFolderId
+    val openToContinue: (Chat) -> Unit = { chat ->
+        if (CardSubjects.isCard(chat.systemPrompt)) {
+            assistant.cards.continueOnOpen(chat.id)
+            nav.card(chat.id)
+        } else {
+            assistant.continueOnOpen(chat.id)
+            nav.chat(chat.id)
+        }
+    }
+    val notify = LocalNotify.current
     // The folder shown; null is every chat. Kept as text so it survives the tab being recreated.
     var shownFolder by rememberSaveable { mutableStateOf<String?>(null) }
     val folder = folders.firstOrNull { it.id.toString() == shownFolder }
@@ -163,7 +187,7 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
         AlertDialog(
             onDismissRequest = { confirmErase = false },
             title = { Text(tr("Delete all chats?")) },
-            text = { Text(tr("Every chat and folder is erased from this phone. Models, the dossier and settings stay.")) },
+            text = { Text(tr("Every chat and folder is erased from this phone. Models and settings stay.")) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmErase = false
@@ -176,7 +200,8 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     }
     naming?.let { (renamed, chatToFile) ->
         FolderNameDialog(
-            initial = renamed?.name.orEmpty(),
+            // A new folder is named by its date and time unless the user writes something else.
+            initial = renamed?.name ?: folderDateName(),
             title = if (renamed == null) tr("New folder") else tr("Rename folder"),
             onDismiss = { naming = null },
             onSave = { name ->
@@ -185,8 +210,9 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                     if (renamed != null) {
                         assistant.store.renameFolder(renamed.id, name)
                     } else {
-                        val created = assistant.store.createFolder(name)
-                        if (chatToFile != null) assistant.store.moveChat(chatToFile, created.id) else shownFolder = created.id.toString()
+                        // From now on new summaries and chats are saved in the new folder.
+                        val created = assistant.startFolder(name)
+                        if (chatToFile != null) assistant.store.moveChat(chatToFile, created) else shownFolder = created.toString()
                     }
                 }
             },
@@ -210,10 +236,10 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     val noModel = assistant.assistantModelFile == null
     val shown = if (folder == null) chats else chats.filter { it.folderID == folder.id }
     val folderNames = folders.associate { it.id to it.name }
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     SpectraScreen(
-        title = folder?.name ?: tr("Assistant"),
-        subtitle = if (folder == null) assistant.currentModelName else tr("Folder"),
-        onBack = if (folder != null) ({ shownFolder = null }) else null,
+        title = tr("Assistant"),
+        subtitle = assistant.currentModelName,
         actions = {
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("More")) }
@@ -234,10 +260,6 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                         )
                         HorizontalDivider()
                     }
-                    DropdownMenuItem(text = { Text(tr("New folder…")) }, leadingIcon = { Icon(Icons.Rounded.CreateNewFolder, null) }, onClick = {
-                        menu = false
-                        naming = null to null
-                    })
                     DropdownMenuItem(text = { Text(tr("Model…")) }, leadingIcon = { Icon(Icons.Rounded.Memory, null) }, onClick = {
                         menu = false
                         nav.models()
@@ -245,10 +267,6 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                     DropdownMenuItem(text = { Text(tr("Internet…")) }, leadingIcon = { Icon(Icons.Rounded.Public, null) }, onClick = {
                         menu = false
                         nav.internet()
-                    })
-                    DropdownMenuItem(text = { Text(tr("Dossier…")) }, leadingIcon = { Icon(Icons.Rounded.Book, null) }, onClick = {
-                        menu = false
-                        nav.dossier()
                     })
                     if (chats.isNotEmpty()) {
                         HorizontalDivider()
@@ -276,7 +294,7 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                 folder != null && shown.isEmpty() -> EmptyState(
                     Icons.Rounded.Folder,
                     tr("The folder is empty"),
-                    tr("Hold a summary or chat in the list and choose Move to folder."),
+                    if (folder.id == recording) tr("New ✨ summaries will be saved here.") else tr("Hold a summary or chat in the list and choose Move to folder."),
                 )
                 chats.isEmpty() -> EmptyState(
                     Icons.Rounded.AutoAwesome,
@@ -288,9 +306,27 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     ) {
         assistant.storageWarning?.let { warning -> card(key = "storage", rows = listOf { NoteRow(warning, warning = true) }) }
         assistant.loadError?.let { error -> card(key = "load-error", rows = listOf { NoteRow(tr("Could not load the model: %s", error), warning = true) }) }
-        if (folder == null && folders.isNotEmpty()) {
+        if (!noModel) {
             item(key = "folders") {
-                FolderStrip(folders, chats, onOpen = { shownFolder = it.id.toString() }, onNew = { naming = null to null })
+                // Tap: show that folder's summaries right here (tap again for all). Hold: new summaries go there.
+                FolderStrip(
+                    folders, chats, recording, shown = folder?.id,
+                    onOpen = { picked -> shownFolder = if (folder?.id == picked.id) null else picked.id.toString() },
+                    onRecord = { picked ->
+                        haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        assistant.recordInto(picked.id)
+                        notify(tr("New summaries are saved to «%s»", picked.name))
+                    },
+                    onNew = { naming = null to null },
+                )
+            }
+            if (folders.isNotEmpty()) {
+                item(key = "folders-hint") {
+                    cattivole.spectra.ui.SectionFooter(
+                        tr("New summaries go to the highlighted folder. Hold another folder to save there."),
+                        Modifier.padding(bottom = 4.dp),
+                    )
+                }
             }
         }
         val summaries = shown.filter { CardSubjects.isCard(it.systemPrompt) }
@@ -301,6 +337,7 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                 folderName = null,
                 risk = risks[chat.id] ?: CardRisk.OK,
                 onOpen = { nav.card(chat.id) },
+                onContinue = if (chat.id in unfinished || assistant.cards.isStopped(chat.id)) ({ openToContinue(chat) }) else null,
                 onMove = { moving = chat },
                 onDelete = { scope.launch { assistant.deleteChat(chat.id) } },
             )
@@ -310,6 +347,7 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
                 chat = chat,
                 folderName = if (folder == null) chat.folderID?.let(folderNames::get) else null,
                 onOpen = { nav.chat(chat.id) },
+                onContinue = if (chat.id in unfinished) ({ openToContinue(chat) }) else null,
                 onMove = { moving = chat },
                 onDelete = { scope.launch { assistant.deleteChat(chat.id) } },
             )
@@ -320,10 +358,21 @@ fun AssistantHomeScreen(model: SpectraModel, nav: AssistantNav) {
     }
 }
 
-/** The folders as a row of chips above the chats, with the count in each and a way to add one. */
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+/**
+ * The folders as a row of chips above the chats, with the count in each and a way to add one. The folder new
+ * summaries go to is filled with the accent colour; the one shown below has an outline.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun FolderStrip(folders: List<ChatFolder>, chats: List<Chat>, onOpen: (ChatFolder) -> Unit, onNew: () -> Unit) {
+private fun FolderStrip(
+    folders: List<ChatFolder>,
+    chats: List<Chat>,
+    recording: UUID?,
+    shown: UUID?,
+    onOpen: (ChatFolder) -> Unit,
+    onRecord: (ChatFolder) -> Unit,
+    onNew: () -> Unit,
+) {
     val counts = chats.groupingBy { it.folderID }.eachCount()
     FlowRow(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -331,19 +380,23 @@ private fun FolderStrip(folders: List<ChatFolder>, chats: List<Chat>, onOpen: (C
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         for (folder in folders) {
+            val active = folder.id == recording
+            val open = folder.id == shown
+            val content = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.clickable { onOpen(folder) },
+                color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+                border = if (open) androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)).combinedClickable(onClick = { onOpen(folder) }, onLongClick = { onRecord(folder) }),
             ) {
                 Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Icon(Icons.Rounded.Folder, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                    Text(folder.name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp))
-                    Text("${counts[folder.id] ?: 0}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(if (open) Icons.Rounded.FolderOpen else Icons.Rounded.Folder, null, Modifier.size(18.dp), tint = if (active) content else MaterialTheme.colorScheme.primary)
+                    Text(folder.name, style = MaterialTheme.typography.labelLarge, color = content, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp))
+                    Text("${counts[folder.id] ?: 0}", style = MaterialTheme.typography.labelMedium, color = content.copy(alpha = 0.7f))
                 }
             }
         }
-        Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.clickable(onClick = onNew)) {
+        Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onNew)) {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.CreateNewFolder, tr("New folder"), Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -357,7 +410,15 @@ private fun FolderStrip(folders: List<ChatFolder>, chats: List<Chat>, onOpen: (C
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun ChatRow(chat: Chat, folderName: String?, onOpen: () -> Unit, onMove: () -> Unit, onDelete: () -> Unit, risk: CardRisk? = null) {
+private fun ChatRow(
+    chat: Chat,
+    folderName: String?,
+    onOpen: () -> Unit,
+    onMove: () -> Unit,
+    onDelete: () -> Unit,
+    risk: CardRisk? = null,
+    onContinue: (() -> Unit)? = null,
+) {
     var menu by remember { mutableStateOf(false) }
     val topics = remember(chat.title) { if (risk != null) emptyList() else AssistantText.topics(chat.title) }
     Box {
@@ -379,7 +440,27 @@ private fun ChatRow(chat: Chat, folderName: String?, onOpen: () -> Unit, onMove:
                 if (risk != null) Pill(risk.label(), risk.color())
                 for (topic in topics) Pill(topic.label, topic.color())
                 val meta = listOfNotNull(ago(chat.updatedAt), folderName).joinToString(" · ")
-                Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    meta,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+            // Left in the middle of an answer: one tap opens it and picks the text up.
+            if (onContinue != null) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier.padding(top = 2.dp).clickable(onClick = onContinue),
+                ) {
+                    Row(Modifier.padding(start = 8.dp, end = 12.dp, top = 5.dp, bottom = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.PlayArrow, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Text(tr("Continue"), Modifier.padding(start = 4.dp), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                    }
+                }
             }
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -409,6 +490,10 @@ private fun AssistantTopic.color(): androidx.compose.ui.graphics.Color = when (t
     AssistantTopic.LINK -> Spectra.colors.warning
     AssistantTopic.CAPTURE -> Spectra.colors.revealed
 }
+
+/** «22 ноября, 14:30»: a new folder's suggested name, so a round of checks is easy to find later. */
+private fun folderDateName(now: Long = System.currentTimeMillis()): String =
+    java.text.SimpleDateFormat("d MMMM, HH:mm", java.util.Locale.getDefault()).format(java.util.Date(now))
 
 @Composable
 private fun FolderNameDialog(initial: String, title: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
@@ -490,6 +575,8 @@ private fun ChatContent(model: SpectraModel, assistant: AssistantModel, session:
     LaunchedEffect(session, engine) {
         if (engine == EngineController.State.Ready || engine == EngineController.State.UnloadedForMemory) {
             assistant.takeQueuedQuestion(session.chat.id)?.let(session::send)
+            // "Continue" in the list: the answer left unfinished is picked up as the chat opens.
+            if (assistant.takeContinue(session.chat.id)) session.resume()
         }
     }
     assistant.pendingSearch?.let { SearchApprovalDialog(it, assistant.web.provider.title) }
@@ -734,7 +821,7 @@ private fun MessageRow(
 }
 
 @Composable
-private fun SearchApprovalDialog(pending: AssistantModel.PendingSearch, provider: String) {
+internal fun SearchApprovalDialog(pending: AssistantModel.PendingSearch, provider: String) {
     var query by remember(pending) { mutableStateOf(pending.query) }
     AlertDialog(
         onDismissRequest = { pending.answer(null) },
@@ -930,26 +1017,25 @@ fun AssistantInternetScreen(model: SpectraModel, nav: AssistantNav) {
             rows = listOf { SwitchLine(tr("Search the web"), web.isEnabled) { web.isEnabled = it } },
         )
         if (web.isEnabled) {
+            val kinds = alexcattivo.localchat.kit.web.WebAccess.ProviderKind.entries
             card(
                 header = tr("Search service"),
                 key = "provider",
-                footer = when (web.provider) {
-                    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Searxng -> tr("Real web search through a SearXNG server you provide (ideally your own). The server must have the JSON format enabled.")
-                    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Brave -> tr("Real Brave web search. Needs your API key (there is a free plan). The key is kept encrypted on this phone.")
-                },
+                footer = providerNote(web.provider),
                 rows = buildList {
-                    for (kind in alexcattivo.localchat.kit.web.WebAccess.ProviderKind.entries) {
+                    for (kind in kinds) {
                         add {
                             ListRow(
                                 title = kind.title,
+                                subtitle = providerLine(kind),
                                 leading = { if (web.provider == kind) Icon(Icons.Rounded.Check, null, tint = MaterialTheme.colorScheme.primary) else Box(Modifier.size(24.dp)) },
                                 onClick = { web.provider = kind },
                             )
                         }
                     }
                     add {
-                        when (web.provider) {
-                            alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Searxng -> OutlinedTextField(
+                        if (web.provider == alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Searxng) {
+                            OutlinedTextField(
                                 value = web.searxngAddress,
                                 onValueChange = { web.searxngAddress = it.trim() },
                                 label = { Text(tr("Server address")) },
@@ -957,11 +1043,14 @@ fun AssistantInternetScreen(model: SpectraModel, nav: AssistantNav) {
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth().padding(16.dp),
                             )
-                            alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Brave -> OutlinedTextField(
-                                value = web.braveKey,
-                                onValueChange = { web.braveKey = it.trim() },
-                                label = { Text(tr("API key")) },
+                        } else {
+                            val kind = web.provider
+                            OutlinedTextField(
+                                value = web.key(kind),
+                                onValueChange = { web.setKey(kind, it.trim()) },
+                                label = { Text(tr("%s API key", kind.title)) },
                                 singleLine = true,
+                                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                                 modifier = Modifier.fillMaxWidth().padding(16.dp),
                             )
                         }
@@ -1008,62 +1097,28 @@ fun AssistantInternetScreen(model: SpectraModel, nav: AssistantNav) {
     }
 }
 
-/** What the assistant keeps between chats. */
-@Composable
-fun AssistantDossierScreen(model: SpectraModel, nav: AssistantNav) {
-    val memory = model.assistant.memory
-    var confirmClear by remember { mutableStateOf(false) }
-    if (confirmClear) {
-        AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text(tr("Clear the dossier?")) },
-            text = { Text(tr("The notes and what the assistant learned about each device are erased.")) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmClear = false
-                    memory.removeAll()
-                }) { Text(tr("Clear all"), color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(tr("Cancel")) } },
-        )
-    }
-    SpectraScreen(
-        tr("Dossier"),
-        onBack = nav::back,
-        actions = {
-            if (memory.notes.isNotEmpty() || memory.baselines.isNotEmpty()) {
-                IconButton(onClick = { confirmClear = true }) { Icon(Icons.Rounded.DeleteSweep, tr("Clear all")) }
-            }
-        },
-        overlay = {
-            if (memory.notes.isEmpty()) {
-                EmptyState(
-                    Icons.Rounded.Book,
-                    tr("No notes yet"),
-                    tr("The assistant saves important findings here during chats: suspicious devices, weak passwords, conclusions."),
-                )
-            }
-        },
-    ) {
-        if (memory.notes.isNotEmpty()) {
-            cardSection(
-                memory.notes.sortedByDescending { it.createdAt },
-                footer = tr("Hold a note to delete it."),
-                key = { it.id.toString() },
-                sectionKey = "notes",
-            ) { note ->
-                ListRow(
-                    title = note.text,
-                    subtitle = listOfNotNull(note.subject, dateTime(note.createdAt)).joinToString(" · "),
-                    onLongClick = { memory.remove(note.id) },
-                )
-            }
-        }
-        val learned = memory.baselines.values.filter { it.isEstablished }
-        if (learned.isNotEmpty()) {
-            item(key = "learned") {
-                cattivole.spectra.ui.SectionFooter(tr("Devices the assistant knows the usual state of: %d.", learned.size))
-            }
-        }
-    }
+/** One line under a service's name: what it is good for. */
+private fun providerLine(kind: alexcattivo.localchat.kit.web.WebAccess.ProviderKind): String = when (kind) {
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Searxng -> tr("Your own metasearch server, no key")
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Brave -> tr("Independent index, web and pictures")
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Tavily -> tr("Made for AI: page text and pictures")
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Exa -> tr("Search by meaning, page text")
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Firecrawl -> tr("Search with pages read in full, pictures")
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.You -> tr("Own index, page text")
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Serper -> tr("Google results and Google Images")
+}
+
+/** The chosen service in more words: what it sends, what it returns, where its key comes from. */
+private fun providerNote(kind: alexcattivo.localchat.kit.web.WebAccess.ProviderKind): String = when (kind) {
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Searxng -> tr("Real web search through a SearXNG server you provide (ideally your own). The server must have the JSON format enabled.")
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Brave -> tr("Real Brave web search. Needs your API key (there is a free plan). The key is kept encrypted on this phone.")
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Tavily -> tr("A search service built for language models: it reads the pages itself and returns their text, and finds pictures. Key at tavily.com, with a free monthly allowance. The sites see Tavily, not this phone.")
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Exa -> tr("Finds pages by meaning rather than exact words, which helps with odd model names; returns the pages' text and their preview pictures. Key at exa.ai; new accounts get free credits.")
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Firecrawl -> tr("Searches and reads each page into clean text, and has an image search. Key at firecrawl.dev. The sites see Firecrawl, not this phone.")
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.You -> tr("You.com's own web index; returns the pages' text. Pictures are the pages' previews. Key at you.com/platform, with free credits.")
+    alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Serper -> tr("Google's results and Google Images through one key: the best pictures of devices. Key at serper.dev, 2,500 free searches to start. The pages themselves are read by this phone.")
+}.let { note ->
+    // SearXNG takes no key and Brave's own note already says where it is kept.
+    if (kind.keyAccount == null || kind == alexcattivo.localchat.kit.web.WebAccess.ProviderKind.Brave) note
+    else note + " " + tr("Only the query is sent; the key is kept encrypted on this phone.")
 }

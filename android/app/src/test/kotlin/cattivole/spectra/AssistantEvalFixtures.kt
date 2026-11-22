@@ -123,7 +123,6 @@ class AssistantEvalFixtures {
         single("ports-all-router", "tool", "Сделай глубокое сканирование всех портов роутера") { tool = "scan_ports"; args = mapOf("host" to "192.168.1.1", "text" to "all") }
         single("gatt-headphones", "tool", "Узнай, какая прошивка стоит на наушниках Momentum 3") { tool = "connect_bluetooth"; args = mapOf("text" to "Momentum 3") }
         single("history-watch", "tool", "Попадались ли мне раньше часы Galaxy Watch5?") { tool = "search_history"; args = mapOf("text" to "Galaxy Watch5") }
-        single("remember-camera", "tool", "Запомни: камера 192.168.1.64 моя, я её сам ставил") { tool = "remember"; args = mapOf("host" to "192.168.1.64") }
         single("speed", "tool", "Сколько мегабит у меня сейчас реально выдаёт интернет?") { tool = "speed_test" }
         single("youtube", "tool", "Открывается ли у меня сейчас YouTube?") { tool = "check_connection" }
         single("forwarding", "tool", "Не открыл ли роутер какие-нибудь порты наружу без моего ведома?") { tool = "check_port_forwarding" }

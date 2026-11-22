@@ -136,7 +136,7 @@
 | Тайлы OpenStreetMap (osmdroid MAPNIK) | ODbL + tile usage policy | Подпись сейчас «© OpenStreetMap», нужно «© OpenStreetMap contributors». Массовое использование стандартных тайлов политика OSM запрещает |
 | Модели GGUF | Ministral 3 3B — Apache-2.0; EmbeddingGemma 300M — Gemma Terms of Use | В репо их нет и не было; качаются приложением. Abliterated Llama 3.2 и другие модели из каталога убраны в a9aa697 (в истории остаются только как ссылки) |
 | Шрифты | — | Своих шрифтов в репо нет |
-| Иконки | Свои (`ios/Tools/make_icon.swift`), Material Icons (Apache-2.0) | — |
+| Иконки | Своя иконка приложения, общая с Probe Lab, Material Icons (Apache-2.0) | — |
 
 Отдельно: `M5Cardputer` подключён по git без версии
 (`https://github.com/m5stack/M5Cardputer.git`), а в его копии нет файла

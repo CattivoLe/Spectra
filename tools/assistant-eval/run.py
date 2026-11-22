@@ -59,19 +59,11 @@ NATIVE_TOOLS = [
     _tool("search_history", "Everything saved under History across sessions: was something seen before, what changed. Reads saved data only.", {
         "text": {"type": "string", "description": "a network or device name, IP, MAC or BSSID; leave out for an overview"},
     }),
-    _tool("remember", "Save a short fact to the dossier, a notebook shared across chats.", {
-        "text": {"type": "string", "description": "the note"},
-        "host": {"type": "string", "description": "IP, MAC or BSSID of the one device the note is about, so it comes back with it"},
-    }, ["text"]),
-    _tool("forget", "Remove a note from the dossier.", {
-        "text": {"type": "string", "description": "words from the note"},
-    }, ["text"]),
 ]
 
 NATIVE_GUIDANCE = """Your tools run live checks on this phone; you then get the result to answer with.
 When the user asks to scan, check, test or measure anything about their own network, devices or connection, in any language («просканируй блютуз», «проверь интернет», «замерь скорость», «проверь доступ к гуглу»), call the matching tool even if older data is attached: a web search cannot measure anything. Otherwise call one only when fresher data is needed, and not again when its result is already there. Never report a check whose result you did not get.
-When the attached data already holds what the user asks to explain, explain it instead of calling a tool again. A GATT read: the standard services, what the values reveal, vendor services that accept writes without pairing. A traffic capture: protocols, the busiest devices and pairs, anything unusual (deauthentication bursts, unknown devices, plain-text protocols). Recorded traffic of this phone: the servers and apps it talked to, plain HTTP, tracking or unexpected destinations.
-The dossier in <app_data> is a notebook shared across chats. Save short facts worth keeping next time, or what the user asks to remember, with remember; give "host" (IP, MAC or BSSID) when the note is about one device."""
+When the attached data already holds what the user asks to explain, explain it instead of calling a tool again. A GATT read: the standard services, what the values reveal, vendor services that accept writes without pairing. A traffic capture: protocols, the busiest devices and pairs, anything unusual (deauthentication bursts, unknown devices, plain-text protocols). Recorded traffic of this phone: the servers and apps it talked to, plain HTTP, tracking or unexpected destinations."""
 
 INSTRUCTIONS_START = "\n\nTools. To run a live check"
 RESULT_TAG = re.compile(r'^<tool_result name="([^"]+)">\n(.*)\n</tool_result>', re.S)

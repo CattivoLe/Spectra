@@ -57,8 +57,9 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
     val store: ChatStore
     val library: ModelLibrary
     val web = WebAccess(PreferencesSettings(prefs), KeystoreSecretStore(File(base, "secrets")))
-    val memory get() = sources.memory
-    val actions = AssistantActions(sources, sources.memory)
+    val actions = AssistantActions(sources)
+    /** The tap when an answer or a card text is finished. */
+    val haptics = cattivole.spectra.platform.Haptics(app)
     /** The ✨ summary cards: findings at once, the model's plain words under them, buttons instead of a text field. */
     val cards by lazy { AssistantCardRunner(this, store, controller, sources, actions, scope) }
 
@@ -75,6 +76,47 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
 
     /** The saved folder id, without making one: how the tab tells summaries from old chats. */
     val summariesFolderId: UUID? get() = prefs.getString(SUMMARIES_FOLDER, null)?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+
+    /**
+     * The folder new summaries and chats go to: the last one the user made, until another is made or chosen.
+     * Null means the Summaries folder. Shown on the Assistant tab so it is clear where checks are being recorded.
+     */
+    var recordingFolderId by mutableStateOf(prefs.getString(RECORDING_FOLDER, null)?.let { runCatching { UUID.fromString(it) }.getOrNull() })
+        private set
+
+    fun recordInto(folder: UUID?) {
+        recordingFolderId = folder
+        prefs.edit().putString(RECORDING_FOLDER, folder?.toString()).apply()
+    }
+
+    /** Where the next summary or chat is saved: the recording folder while it exists, else Summaries. */
+    suspend fun recordingFolder(): UUID {
+        recordingFolderId?.let { id -> if (store.folders().any { it.id == id }) return id }
+        if (recordingFolderId != null) recordInto(null)
+        return summariesFolder()
+    }
+
+    /** A new folder that new summaries and chats are saved in from now on. */
+    suspend fun startFolder(name: String): UUID {
+        val folder = store.createFolder(name)
+        recordInto(folder.id)
+        return folder.id
+    }
+
+    /** The name of the folder a chat is in, for its screen's subtitle. */
+    suspend fun folderNameOf(chat: UUID): String? {
+        val folder = store.chat(chat)?.folderID ?: return null
+        return store.folders().firstOrNull { it.id == folder }?.name
+    }
+
+    /** Chats the list asked to continue: the chat screen resumes the answer as it opens. */
+    private val resumeChats = mutableSetOf<UUID>()
+
+    fun continueOnOpen(chat: UUID) {
+        resumeChats.add(chat)
+    }
+
+    fun takeContinue(chat: UUID): Boolean = resumeChats.remove(chat)
 
     /** A query waiting for the user's OK before it goes to the internet. */
     var pendingSearch by mutableStateOf<PendingSearch?>(null)
@@ -128,6 +170,8 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
         }
         library.onActiveDownloadsChanged = { active -> onDownloadsActive(active) }
         web.plannerNote = SEARCH_PLANNER_NOTE
+        // The dossier is gone: its notes and per-device baselines (up to half a megabyte) are not kept any more.
+        java.io.File(base, "memory.json").delete()
         // "Send this query to the internet?": closing the sheet without choosing sends nothing.
         web.approve = { query ->
             val answer = CompletableDeferred<String?>()
@@ -171,7 +215,7 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
     /** A new chat (in [folder]) with [question] asked as soon as the model is there. Returns its id to open. */
     suspend fun ask(question: String, folder: UUID? = null): UUID {
         ensureStarted()
-        val chat = store.createChat(folderID = folder)
+        val chat = store.createChat(folderID = folder ?: recordingFolder())
         queue(question, chat.id)
         return chat.id
     }
@@ -256,6 +300,7 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
         session.params = session.params.copy(historyTokens = HISTORY_TOKENS)
         session.modelName = currentModelName
         session.appDataProvider = { question -> sources.attachment(question) }
+        session.onAnswered = haptics::done
         session.tools = actions.registry
         session.recallsPastChats = true
         session.earlierChatsTopic = tr("Earlier chats")
@@ -294,6 +339,7 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
         const val PROMPT_CACHE_FILES = 6
 
         private const val SUMMARIES_FOLDER = "summariesFolder"
+        private const val RECORDING_FOLDER = "recordingFolder"
         private const val SELECTED_MODEL = "selectedModel"
         private const val WIFI_ONLY = "wifiOnly"
 

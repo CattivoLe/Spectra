@@ -20,7 +20,23 @@ interface SecretStore {
 class WebAccess(private val settings: SettingsStore, private val secrets: SecretStore) {
     /** The host app's rule for the query planner: which questions it answers from its own data, without the web. */
     var plannerNote: String? = null
-    enum class ProviderKind(val title: String) { Searxng("SearXNG"), Brave("Brave Search") }
+    enum class ProviderKind(val title: String, val supportsImages: Boolean = true) {
+        Searxng("SearXNG"),
+        Brave("Brave Search"),
+        Tavily("Tavily"),
+        Exa("Exa"),
+        Firecrawl("Firecrawl"),
+        You("You.com"),
+        Serper("Serper (Google)");
+
+        /** The services that need an API key, each kept under its own name in the secret store. */
+        val keyAccount: String?
+            get() = when (this) {
+                Searxng -> null
+                Brave -> BRAVE_ACCOUNT
+                else -> "${name.lowercase()}-key"
+            }
+    }
 
     private fun <T> setting(initial: T, save: (T) -> Unit) = Persisted(initial, save)
 
@@ -55,8 +71,19 @@ class WebAccess(private val settings: SettingsStore, private val secrets: Secret
     private val confirmState = setting(settings.getBoolean(Keys.CONFIRM, true)) { settings.putBoolean(Keys.CONFIRM, it) }
     var confirmEachSearch: Boolean get() = confirmState.value; set(value) = confirmState.set(value)
 
-    private val braveState = setting(secrets.read(BRAVE_ACCOUNT) ?: "") { secrets.write(it, BRAVE_ACCOUNT) }
-    var braveKey: String get() = braveState.value; set(value) = braveState.set(value)
+    private val keyStates = ProviderKind.entries.mapNotNull { kind ->
+        val account = kind.keyAccount ?: return@mapNotNull null
+        kind to setting(secrets.read(account) ?: "") { secrets.write(it, account) }
+    }.toMap()
+
+    /** The API key of [kind]; "" when it has none or needs none. */
+    fun key(kind: ProviderKind): String = keyStates[kind]?.value.orEmpty()
+
+    fun setKey(kind: ProviderKind, value: String) {
+        keyStates[kind]?.set(value)
+    }
+
+    var braveKey: String get() = key(ProviderKind.Brave); set(value) = setKey(ProviderKind.Brave, value)
 
     /** Читать найденные страницы целиком, а не только короткие описания из выдачи. */
     private val readPagesState = setting(settings.getBoolean(Keys.READ_PAGES, true)) { settings.putBoolean(Keys.READ_PAGES, it) }
@@ -117,7 +144,14 @@ class WebAccess(private val settings: SettingsStore, private val secrets: Secret
         get() = when (provider) {
             ProviderKind.Searxng -> if (validate(searxngAddress) == null) NotConfiguredReason.SearxngAddress else null
             ProviderKind.Brave -> if (braveKey.isBlank()) NotConfiguredReason.BraveKey else null
+            else -> if (key(provider).isBlank()) NotConfiguredReason.ApiKey else null
         }
+
+    /** On, and the chosen service set up: a search can go out. */
+    val isReady: Boolean get() = isEnabled && configurationProblem == null
+
+    /** «ru», «en»… for the services that take a language; "auto" means none. */
+    private val language: String get() = searchLanguage.takeIf { it.length == 2 } ?: ""
 
     fun makeProvider(): SearchProvider {
         providerFactory?.let { return it(this) }
@@ -125,6 +159,11 @@ class WebAccess(private val settings: SettingsStore, private val secrets: Secret
         return when (provider) {
             ProviderKind.Searxng -> SearXNGProvider(validate(searxngAddress)!!, searchLanguage)
             ProviderKind.Brave -> BraveProvider(braveKey.trim())
+            ProviderKind.Tavily -> TavilyProvider(key(provider), language)
+            ProviderKind.Exa -> ExaProvider(key(provider))
+            ProviderKind.Firecrawl -> FirecrawlProvider(key(provider))
+            ProviderKind.You -> YouProvider(key(provider), language)
+            ProviderKind.Serper -> SerperProvider(key(provider), language)
         }
     }
 

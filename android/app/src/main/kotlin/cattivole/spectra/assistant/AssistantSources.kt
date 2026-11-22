@@ -14,15 +14,11 @@ import cattivole.spectra.core.TrackerDetector
  * Reads the live scanners of Spectra into an [AssistantSnapshot]. Read-only: the assistant can look at what the app
  * has found; [AssistantActions] is what may start a scan. Mirrors AssistantSources.swift.
  */
-class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val memory: AssistantMemory) {
+class AssistantSources(val model: SpectraModel, val captures: CaptureShelf) {
     /** What the Check a link screen and the link card's buttons found about recent links. */
     val links = LinkShelf()
 
-    fun attachment(question: String): AppDataAttachment {
-        // The dossier is assembled per question: only what is in front of the user, or named in the question.
-        val current = snapshot().let { it.copy(memory = memory.digest(AssistantDigest.subjects(question, it))) }
-        return AssistantDigest.attachment(question, current)
-    }
+    fun attachment(question: String): AppDataAttachment = AssistantDigest.attachment(question, snapshot())
 
     /**
      * What a summary card shows: its findings and steps, and the data its model actions read. Null when there is
@@ -36,54 +32,7 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
             AssistantCards.capture(entry.analysis, entry.name, CaptureDigest.text(entry.analysis, entry.name, entry.origin, ::describe))
         }
         is CardSubject.Link -> links.facts(subject.link, now)
-        else -> {
-            val base = snapshot(now)
-            val key = when (subject) {
-                is CardSubject.Host -> listOfNotNull(subject.ip, base.hosts.firstOrNull { it.ip == subject.ip }?.mac)
-                is CardSubject.Bluetooth -> listOf(subject.address)
-                is CardSubject.Wifi -> listOf(subject.bssid)
-                // The way out has no device of its own to look up in the dossier.
-                CardSubject.Internet -> emptyList()
-                else -> base.hosts.flatMap { listOfNotNull(it.ip, it.mac) }
-            }
-            val subjects = key.mapNotNull { AssistantMemory.normalize(it) }.toSet()
-            AssistantCards.facts(subject, base.copy(memory = memory.digest(subjects)), now)
-        }
-    }
-
-    /** Folds what is on screen into the long-term baselines. Cheap on purpose: no capture decode, no threat assessment. */
-    fun recordBaselines(now: Long = System.currentTimeMillis()) {
-        memory.observe(sightings(now), now)
-    }
-
-    private fun sightings(now: Long): List<AssistantMemory.Sighting> {
-        val found = mutableListOf<AssistantMemory.Sighting>()
-        for (device in model.lan.devices) if (!device.isLocalDevice) {
-            found.add(
-                AssistantMemory.Sighting(
-                    device.macAddress?.text ?: device.ipAddress,
-                    device.displayName,
-                    AssistantMemory.Baseline.Kind.HOST,
-                    ports = device.openPorts.map { it.number },
-                    portsKnown = device.portsScanned,
-                ),
-            )
-        }
-        for (network in model.store.networks().values) if (network.isInRange) {
-            val reading = network.latest
-            found.add(
-                AssistantMemory.Sighting(
-                    reading.bssid.text,
-                    network.revealedSsid ?: reading.ssid ?: reading.bssid.text,
-                    AssistantMemory.Baseline.Kind.WIFI,
-                    rssi = reading.rssi,
-                ),
-            )
-        }
-        for (device in model.ble.devices.values) if (device.isNearby(now)) {
-            found.add(AssistantMemory.Sighting(device.address, device.displayName, AssistantMemory.Baseline.Kind.BLUETOOTH, rssi = device.rssi))
-        }
-        return found
+        else -> AssistantCards.facts(subject, snapshot(now), now)
     }
 
     /** Just enough to choose the opening questions of an empty chat, without building a whole snapshot. */
@@ -142,6 +91,7 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf, val 
                 system = device.identity.operatingSystem,
                 ports = device.openPorts.map { "${it.number} ${it.service}" },
                 portsScanned = device.portsScanned,
+                allPortsScanned = device.allPortsScanned,
                 risks = risks.map { "${it.title} (${it.level.label})" },
                 isGateway = device.isGateway,
                 isThisPhone = device.isLocalDevice,

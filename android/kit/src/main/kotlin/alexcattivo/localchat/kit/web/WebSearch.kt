@@ -16,7 +16,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Одна найденная страница. */
-data class SearchResult(val title: String, val url: String, val snippet: String) {
+data class SearchResult(
+    val title: String,
+    val url: String,
+    val snippet: String,
+    /** The page's text when the service already read it (Tavily, Exa, Firecrawl, You.com): then it is not fetched again. */
+    val content: String? = null,
+) {
     val host: String get() = runCatching { URI(url).host ?: "" }.getOrDefault("")
 }
 
@@ -146,7 +152,7 @@ sealed class WebSearchException(message: String) : Exception(message) {
     class BadResponse : WebSearchException("bad response")
 }
 
-enum class NotConfiguredReason { SearxngAddress, BraveKey }
+enum class NotConfiguredReason { SearxngAddress, BraveKey, ApiKey }
 
 /** Источник результатов. Поиск получает только текст запроса: ни диалога, ни профиля, ни сведений об устройстве. */
 interface SearchProvider {
@@ -172,6 +178,40 @@ object WebClient {
             throw WebSearchException.InvalidAddress()
         }
         try {
+            val code = connection.responseCode
+            if (code !in 200..299) throw WebSearchException.Http(code)
+            connection.inputStream.use { it.readBytes().decodeToString() }
+        } catch (error: UnknownHostException) {
+            throw WebSearchException.Offline()
+        } catch (error: SocketTimeoutException) {
+            throw WebSearchException.Offline()
+        } catch (error: java.net.ConnectException) {
+            throw WebSearchException.Offline()
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /** A JSON POST, for the search APIs that take their query as a body. */
+    suspend fun post(url: String, body: JSONObject, headers: Map<String, String> = emptyMap()): String = withContext(Dispatchers.IO) {
+        val connection = try {
+            (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 10_000
+                // Services that read the pages themselves answer slower than a plain search.
+                readTimeout = 40_000
+                useCaches = false
+                setRequestProperty("User-Agent", "LocalChat")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Content-Type", "application/json")
+                for ((name, value) in headers) setRequestProperty(name, value)
+            }
+        } catch (_: IllegalArgumentException) {
+            throw WebSearchException.InvalidAddress()
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray()) }
             val code = connection.responseCode
             if (code !in 200..299) throw WebSearchException.Http(code)
             connection.inputStream.use { it.readBytes().decodeToString() }

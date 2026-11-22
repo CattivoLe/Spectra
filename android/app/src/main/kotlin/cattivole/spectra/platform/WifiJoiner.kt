@@ -40,6 +40,8 @@ class WifiJoiner(private val context: Context) {
         data class Joined(val ssid: String) : Status
         /** Added as a suggestion; the system connects when the network is in range. */
         data class Suggested(val ssid: String) : Status
+        /** Saved in Android's own Wi-Fi list (Android 11+): the phone switches to it, or the user picks it there. */
+        data class Saved(val ssid: String) : Status
         data class Failed(val ssid: String, val reason: Reason) : Status
     }
 
@@ -81,16 +83,54 @@ class WifiJoiner(private val context: Context) {
         is Status.Joining -> s.ssid == ssid
         is Status.Joined -> s.ssid == ssid
         is Status.Suggested -> s.ssid == ssid
+        is Status.Saved -> s.ssid == ssid
         is Status.Failed -> s.ssid == ssid
         else -> false
     }
 
-    fun join(ssid: String, passphrase: String?, wep: Boolean) {
+    /** Whether the phone is on [ssid] right now. */
+    fun isOn(ssid: String): Boolean = currentSsid == ssid
+
+    /**
+     * Android 11+: the system's "Save this network?" sheet. The network lands in Android's own Wi-Fi list like one
+     * the user typed in, so the phone joins it at once and keeps it — unlike a suggestion, which Android takes up
+     * only when it decides to. Null on older Android, where [join] does the work. [auth] is [cattivole.spectra.core.AuthMode.raw].
+     */
+    fun addNetworkIntent(ssid: String, passphrase: String?, auth: Int): android.content.Intent? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        val suggestion = suggestionFor(ssid, passphrase, auth) ?: return null
+        status = Status.Joining(ssid)
+        pending = ssid to passphrase
+        return android.content.Intent(android.provider.Settings.ACTION_WIFI_ADD_NETWORKS)
+            .putParcelableArrayListExtra(android.provider.Settings.EXTRA_WIFI_NETWORK_LIST, arrayListOf(suggestion))
+    }
+
+    /** What the "Save this network?" sheet answered. */
+    fun onAddResult(ssid: String, resultCode: Int, data: android.content.Intent?) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        val results = data?.getIntegerArrayListExtra(android.provider.Settings.EXTRA_WIFI_NETWORK_RESULT_LIST)
+        val result = results?.firstOrNull()
+        val saved = resultCode == android.app.Activity.RESULT_OK && (
+            result == null ||
+                result == android.provider.Settings.ADD_WIFI_RESULT_SUCCESS ||
+                result == android.provider.Settings.ADD_WIFI_RESULT_ALREADY_EXISTS
+            )
+        status = when {
+            currentSsid == ssid -> Status.Joined(ssid)
+            saved -> Status.Saved(ssid)
+            resultCode == android.app.Activity.RESULT_CANCELED -> Status.Idle
+            else -> Status.Failed(ssid, Reason.ADD_FAILED)
+        }
+        if (status == Status.Idle || status is Status.Failed) pending = null
+        if (currentSsid == ssid) noteCurrent(currentSsid, currentBssid)
+    }
+
+    fun join(ssid: String, passphrase: String?, wep: Boolean, auth: Int = -1) {
         status = Status.Joining(ssid)
         pending = ssid to passphrase
         status = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                joinViaSuggestion(ssid, passphrase, wep)
+                joinViaSuggestion(ssid, passphrase, wep, auth)
             } else {
                 joinLegacy(ssid, passphrase, wep)
             }
@@ -106,7 +146,7 @@ class WifiJoiner(private val context: Context) {
         val manager = wifi ?: return
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                suggestionFor(ssid, null, false)?.let { manager.removeNetworkSuggestions(listOf(it)) }
+                suggestionFor(ssid, null, -1)?.let { manager.removeNetworkSuggestions(listOf(it)) }
             } else {
                 forgetLegacy(manager, ssid)
             }
@@ -166,13 +206,13 @@ class WifiJoiner(private val context: Context) {
         if (ssid != wanted) return
         pending = null
         if (status !is Status.Failed) status = Status.Joined(wanted)
-        if (!password.isNullOrEmpty()) onJoined?.invoke(wanted, password)
+        onJoined?.invoke(wanted, password.orEmpty())
     }
 
-    private fun joinViaSuggestion(ssid: String, passphrase: String?, wep: Boolean): Status {
+    private fun joinViaSuggestion(ssid: String, passphrase: String?, wep: Boolean, auth: Int): Status {
         if (wep) return Status.Failed(ssid, Reason.WEP_UNSUPPORTED) // suggestions have no WEP
         val manager = wifi ?: return Status.Failed(ssid, Reason.GENERIC)
-        val suggestion = suggestionFor(ssid, passphrase, wep) ?: return Status.Failed(ssid, Reason.GENERIC)
+        val suggestion = suggestionFor(ssid, passphrase, auth) ?: return Status.Failed(ssid, Reason.GENERIC)
         val list = listOf(suggestion)
         manager.removeNetworkSuggestions(list) // so a re-add is not a duplicate
         return when (manager.addNetworkSuggestions(list)) {
@@ -183,10 +223,19 @@ class WifiJoiner(private val context: Context) {
         }
     }
 
-    private fun suggestionFor(ssid: String, passphrase: String?, wep: Boolean): WifiNetworkSuggestion? {
+    /**
+     * WPA3-only networks need an SAE passphrase and OWE "enhanced open" its own flag; a WPA2 passphrase covers
+     * WPA, WPA2 and WPA2/WPA3 mixed. [auth] is the scan's [cattivole.spectra.core.AuthMode.raw]; -1 when unknown.
+     */
+    private fun suggestionFor(ssid: String, passphrase: String?, auth: Int): WifiNetworkSuggestion? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
         val builder = WifiNetworkSuggestion.Builder().setSsid(ssid)
-        if (!passphrase.isNullOrEmpty()) builder.setWpa2Passphrase(passphrase) // covers WPA2 and WPA2/WPA3 mixed
+        when {
+            auth == 9 -> builder.setIsEnhancedOpen(true)
+            passphrase.isNullOrEmpty() -> Unit
+            auth == 6 || auth == 11 -> builder.setWpa3Passphrase(passphrase)
+            else -> builder.setWpa2Passphrase(passphrase)
+        }
         return builder.build()
     }
 

@@ -2,7 +2,9 @@ package cattivole.spectra.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -221,12 +223,17 @@ fun LinkCheckScreen(model: cattivole.spectra.SpectraModel, nav: Navigator) {
                 maxLines = 5,
                 modifier = Modifier.fillMaxWidth(),
             )
+            // The cover screen of a foldable leaves about 280 dp here: Paste drops its word there, and no label
+            // ever wraps, or the Check button turns into a tall pill with letters stacked inside.
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+            val narrow = maxWidth < 330.dp
+            val compact = PaddingValues(horizontal = 12.dp)
             Row(
-                Modifier.fillMaxWidth().padding(top = 12.dp),
+                Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                OutlinedButton(onClick = {
+                OutlinedButton(contentPadding = compact, onClick = {
                     focus.clearFocus()
                     scanQr(context, onRead = { raw ->
                         when (val payload = QrPayload.classify(raw)) {
@@ -244,7 +251,7 @@ fun LinkCheckScreen(model: cattivole.spectra.SpectraModel, nav: Navigator) {
                 }) {
                     Icon(Icons.Rounded.QrCodeScanner, contentDescription = tr("Scan QR code"), modifier = Modifier.size(18.dp))
                 }
-                OutlinedButton(onClick = {
+                OutlinedButton(contentPadding = if (narrow) compact else PaddingValues(horizontal = 16.dp), onClick = {
                     val pasted = clipboard.getText()?.text?.trim().orEmpty()
                     if (pasted.isNotEmpty()) {
                         text = pasted
@@ -252,20 +259,22 @@ fun LinkCheckScreen(model: cattivole.spectra.SpectraModel, nav: Navigator) {
                         focus.clearFocus()
                     }
                 }) {
-                    Icon(Icons.Rounded.ContentPaste, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text(tr("Paste"), modifier = Modifier.padding(start = 6.dp))
+                    Icon(Icons.Rounded.ContentPaste, contentDescription = if (narrow) tr("Paste") else null, modifier = Modifier.size(18.dp))
+                    if (!narrow) Text(tr("Paste"), modifier = Modifier.padding(start = 6.dp), maxLines = 1, softWrap = false)
                 }
+                Spacer(Modifier.weight(1f))
                 Button(
                     onClick = {
                         checked = text
                         focus.clearFocus()
                     },
                     enabled = text.isNotBlank(),
-                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(start = 16.dp, end = 20.dp),
                 ) {
                     Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text(tr("Check"), modifier = Modifier.padding(start = 6.dp))
+                    Text(tr("Check"), modifier = Modifier.padding(start = 6.dp), maxLines = 1, softWrap = false)
                 }
+            }
             }
         }
         if (scannerMissing) {

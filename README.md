@@ -30,25 +30,35 @@
 
 Spectra shows what is around you and what it says about your security, in
 plain words. Nothing is sent to a server: scans, history and the on-device
-assistant (llama.cpp) all stay on the phone.
+assistant (llama.cpp) all stay on the phone. The one exception is opt-in: with
+web search turned on, the assistant sends a short query (a device's maker and
+model, never an address or a name) to the search service you pick.
 
 ## What it does
 
 - **Wi‑Fi.** Networks with channel, security, Wi‑Fi generation, signal over
   time and the clients on them. With the sensor: deauthentication attacks,
   hidden networks, steady traffic that may be a camera, and phones probing for
-  networks they joined before.
+  networks they joined before. On Android the phone joins a network through
+  the system's own "save network" sheet, and **Saved networks** keeps the
+  passwords that worked (they go to the sensor too).
 - **LAN.** Every device on your network, its maker, open ports and what they
   mean: Telnet, open shares, camera streams, unencrypted web pages, UPnP port
-  forwarding on the router. A device new to the network gets a notification.
+  forwarding on the router. Smart-home appliances that open no TCP port at all,
+  such as Xiaomi Mi Home devices, are found by their own UDP hello. A device
+  new to the network gets a notification.
 - **Internet.** A connection check, a link checker for phishing and look-alike
   names, a speed test, traceroute on a map and a recording of the phone's own
   traffic.
 - **Bluetooth.** Nearby devices with their names, makers and signal, and
   trackers (Find My, Tile, SmartTag, Chipolo, Pebblebee) that may be following
   you.
-- **Assistant.** A language model on the phone that explains a scan and
-  answers questions about it (Android 12+, downloaded once).
+- **Assistant.** A language model on the phone that explains a scan
+  (Android 12+, downloaded once). ✨ on a screen opens a summary card: the
+  findings at once, the model's plain words under them, and buttons for the
+  next check. **More detail** and **Deep analysis** can also search the web for
+  the device's model and known problems and show its photo, with the sources
+  listed. Summaries are filed in folders.
 - **History.** Finished scans are kept per network and day; a saved network,
   host or Bluetooth device opens the same card as a live one.
 
@@ -228,7 +238,24 @@ language (English or Russian); strings live in
 The LAN tab reads `/proc/net/arp`, so neighbour hardware addresses are
 usually visible, and it walks the joined Wi-Fi or Ethernet subnet. A prefix
 wider than /20 is limited to the local /24. There is no raw ICMP, so a host
-counts as present when a TCP connect opens or is refused, or ARP already has it.
+counts as present when a TCP connect opens or is refused, ARP already has it,
+or it answers the miIO hello on UDP 54321 (Xiaomi Mi Home appliances). Their
+model is read from an `_miio._udp` mDNS name when the device announces one.
+
+### Assistant and the web
+
+Web search is off by default (Assistant → ⋮ → Internet). It works with
+SearXNG (your own server, no key) or a service with your own API key:
+Brave Search, Tavily, Exa, Firecrawl, You.com or Serper (Google). Keys are
+kept encrypted on the phone. Tavily, Exa, Firecrawl and You.com read the
+pages themselves, so the sites see the service rather than the phone; Brave,
+Serper and SearXNG return links that the phone then reads. Each query can be
+shown for approval before it goes out, and every query sent is listed under
+**What was sent**. On a summary card only the device's maker and model (or a
+link's domain) is searched: never an IP or MAC address, a network name or a
+name someone gave their device.
+
+Spectra and Probe Lab, its App Store sibling, share one icon.
 
 ## Protocol
 

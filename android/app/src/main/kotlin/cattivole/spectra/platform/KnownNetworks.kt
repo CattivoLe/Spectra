@@ -18,6 +18,10 @@ class KnownNetworks(context: Context) {
         save(rows)
     }
 
+    fun forget(ssid: String) {
+        save(all().filterNot { it.first == ssid })
+    }
+
     /** Newest first. */
     fun all(): List<Pair<String, String>> {
         val text = prefs.getString(KEY, null) ?: return emptyList()

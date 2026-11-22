@@ -140,6 +140,14 @@ class ChatSession(
     /** Получает каждый кусочек ответа сразу, как только модель его выдала (для озвучки по предложениям). */
     var onPiece: ((String) -> Unit)? = null
 
+    /** An answer was written to its end (not stopped, not failed): the host app can give a tap of haptics. */
+    var onAnswered: (() -> Unit)? = null
+
+    private fun reportAnswered() {
+        val last = messages.lastOrNull() ?: return
+        if (errorText == null && last.role == ChatMessage.Role.Assistant && !last.interrupted && last.content.isNotBlank()) onAnswered?.invoke()
+    }
+
     /** Как сформулировать ошибку для человека: задаёт приложение (там переводы). */
     var describeError: (Throwable) -> String = { it.message ?: it.toString() }
 
@@ -264,6 +272,7 @@ class ChatSession(
         task = scope.launch {
             try {
                 generate(continuing = true)
+                reportAnswered()
             } catch (_: CancellationException) {
             } catch (error: Throwable) {
                 errorText = describeError(error)
@@ -321,6 +330,7 @@ class ChatSession(
                         if (appDataProvider != null) attachAppData() else recallIfNeeded()
                     }
                     generate(reusePreflight = resuming)
+                    reportAnswered()
                 }
             } catch (_: CancellationException) {
             } catch (error: Throwable) {

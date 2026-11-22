@@ -46,9 +46,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
 
     /** The capture last decoded and the traffic last handed over, for the assistant to talk about. */
     val captures = cattivole.spectra.assistant.CaptureShelf()
-    /** Notes and per-device baselines the assistant keeps between chats. */
-    val assistantMemory = cattivole.spectra.assistant.AssistantMemory(java.io.File(app.filesDir, "assistant/memory.json"))
-    val assistantSources = cattivole.spectra.assistant.AssistantSources(this, captures, assistantMemory)
+    val assistantSources = cattivole.spectra.assistant.AssistantSources(this, captures)
 
     /** The on-device assistant. Created the first time anything needs it: its tab or a ✨ button. */
     val assistant: cattivole.spectra.assistant.AssistantModel by lazy {
@@ -159,8 +157,6 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
      * to call often.
      */
     fun autosave() {
-        // The same tick teaches the assistant what is usual for each device, so "is this normal for it?" has an answer.
-        runCatching { assistantSources.recordBaselines() }
         if (!autosaveHistory) return
         history.upsertNetworks(store, PHONE_SOURCE)
         history.upsertLan(lan.devices, lan.networkKey, lan.networkLabel, PHONE_SOURCE)

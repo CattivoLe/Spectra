@@ -29,6 +29,15 @@ class AssistantNextStepsTest {
     }
 
     @Test
+    fun aHostWithEveryPortCheckedGetsNoScanButton() {
+        val scanned = listOf(PortTarget("192.168.1.1", true), PortTarget("192.168.1.95", false, allScanned = true))
+        val answer = "Просканируйте все порты на `192.168.1.95`, чтобы убедиться."
+        assertTrue(AssistantActions.suggestedOffers(answer, ran = emptyList(), devices = emptyList(), hosts = scanned).isEmpty())
+        val unscanned = listOf(PortTarget("192.168.1.95", false))
+        assertEquals(1, AssistantActions.suggestedOffers(answer, ran = emptyList(), devices = emptyList(), hosts = unscanned).size)
+    }
+
+    @Test
     fun adviceInWordsBecomesButtons() {
         val answer = """
             Сканирование показало 5 устройств, Wi‑Fi в порядке.

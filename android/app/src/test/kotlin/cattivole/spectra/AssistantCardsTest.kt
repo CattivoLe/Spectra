@@ -79,6 +79,19 @@ class AssistantCardsTest {
     }
 
     @Test
+    fun aHostWithEveryPortCheckedIsNotOfferedTheSameScan() {
+        // Seen on the phone: all ports scanned, then ✨ still offered «Scan every port».
+        val fryer = camera.copy(isNew = false, portsScanned = true, allPortsScanned = true, ports = listOf("54321 miIO (UDP)"))
+        val facts = AssistantCards.host(AssistantSnapshot(hosts = listOf(fryer)), fryer.ip, now)
+        assertTrue(facts.steps.none { it.tool == AssistantActions.Name.SCAN_PORTS.raw })
+        assertTrue(facts.findings.any { it.text.contains("All 65535 ports checked") })
+        val empty = fryer.copy(ports = emptyList())
+        val quiet = AssistantCards.host(AssistantSnapshot(hosts = listOf(empty)), empty.ip, now)
+        assertTrue(quiet.findings.any { it.text.contains("none is open") })
+        assertTrue(quiet.steps.isEmpty())
+    }
+
+    @Test
     fun anUnscannedHostOffersAPortScan() {
         val facts = AssistantCards.host(AssistantSnapshot(hosts = listOf(router, camera)), "192.168.1.64", now)
         assertEquals(CardRisk.WARNING, facts.findings.first().risk) // New on the network.

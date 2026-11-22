@@ -8,6 +8,8 @@
     <!-- Wi-Fi names. Nearby devices covers the scan on API 33+. Fine location
          is still required: without it the system returns an empty list, and
          the app never appears under Location because it never asked. -->
+    <!-- A short tap when the assistant finishes writing. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission
         android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation" />

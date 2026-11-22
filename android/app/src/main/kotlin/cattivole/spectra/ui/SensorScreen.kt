@@ -1,5 +1,12 @@
 package cattivole.spectra.ui
 
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Gavel
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.foundation.clickable
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -123,7 +130,7 @@ private fun List<BundledFirmware>.matching(chip: String): BundledFirmware? =
     firstOrNull { it.chip == chip } ?: if (any { it.chip != null }) null else firstOrNull()
 
 @Composable
-fun SensorScreen(model: SpectraModel, onBack: (() -> Unit)? = null, onFlash: () -> Unit = {}) {
+fun SensorScreen(model: SpectraModel, onBack: (() -> Unit)? = null, onFlash: () -> Unit = {}, onLicenses: () -> Unit = {}) {
     model.generation
     // USB attach is not always delivered while the screen is up, so the port is
     // re-read here. An unchanged list does not redraw.
@@ -168,12 +175,31 @@ fun SensorScreen(model: SpectraModel, onBack: (() -> Unit)? = null, onFlash: () 
         )
     }
     val included = remember(model.usb.bundles) { bundledFirmware(model.usb.bundles.values) }
-    SpectraScreen(tr("Sensor"), onBack = onBack) {
+    var boardsOpen by rememberSaveable { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
+    SpectraScreen(
+        tr("Sensor"),
+        onBack = onBack,
+        actions = {
+            Box {
+                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("More")) }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text(tr("Licenses…")) },
+                        leadingIcon = { Icon(Icons.Rounded.Gavel, null) },
+                        onClick = {
+                            menu = false
+                            onLicenses()
+                        },
+                    )
+                }
+            }
+        },
+    ) {
         freeCard("status") { SensorStatus(model) }
         card(
             header = tr("Flash from the phone"),
             key = "usb-flash",
-            footer = tr("The app carries a firmware image for each board that was built in: the bootloader, the partition table and the application. A blank chip is already in the ROM bootloader, so plug it in with a data cable and flash it here. It then shows up over Bluetooth, and later updates are sent from this screen without the cable. If a program is already running, hold BOOT — G0 on the Cardputer — tap reset, and let go. A WROOM-32 uses its CH340 USB port the same way."),
             rows = buildList {
                 if (model.usb.boards.isNotEmpty()) {
                     add { NoteRow(tr("A board is connected over USB."), warning = false) }
@@ -405,40 +431,68 @@ fun SensorScreen(model: SpectraModel, onBack: (() -> Unit)? = null, onFlash: () 
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        card(
-            header = tr("Supported boards"),
-            key = "boards",
-            rows = listOf(
-                {
-                    ListRow(
-                        title = "M5Stack Cardputer",
-                        subtitle = tr("ESP32-S3 with a screen and keyboard. 2.4 GHz, plus clients, probes and deauth frames a phone scan never includes."),
-                        leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
+        // The board list is reference: folded into one row until asked for.
+        item(key = "header-boards") {
+            SectionHeader(
+                tr("Supported boards"),
+                Modifier.clickable { boardsOpen = !boardsOpen },
+                trailing = {
+                    Icon(
+                        if (boardsOpen) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                        contentDescription = if (boardsOpen) tr("Collapse") else tr("Expand"),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
                     )
                 },
-                {
+            )
+        }
+        if (!boardsOpen) {
+            item(key = "boards-folded") {
+                CardCell(CardPosition.ONLY) {
                     ListRow(
-                        title = "M5Stack Cardputer-Adv",
-                        subtitle = tr("The same ESP32-S3. The LoRa cap with GPS fits this board."),
+                        title = tr("4 boards"),
+                        subtitle = "Cardputer · Cardputer-Adv · ESP32-C5 · WROOM-32",
                         leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
+                        trailing = { Icon(Icons.Rounded.ExpandMore, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                        onClick = { boardsOpen = true },
                     )
-                },
-                {
-                    ListRow(
-                        title = "ESP32-C5 N4",
-                        subtitle = tr("No screen. Hears 2.4 and 5 GHz, so 5 GHz networks and their clients show up. The phone is the display."),
-                        leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
-                    )
-                },
-                {
-                    ListRow(
-                        title = "ESP32-WROOM-32",
-                        subtitle = tr("No screen. 2.4 GHz, with the same client and deauth detail as the Cardputer. The phone flashes it through the CH340 port."),
-                        leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
-                    )
-                },
-            ),
-        )
+                }
+            }
+        } else {
+            card(
+                key = "boards",
+                rows = listOf(
+                    {
+                        ListRow(
+                            title = "M5Stack Cardputer",
+                            subtitle = tr("ESP32-S3 with a screen and keyboard. 2.4 GHz, plus clients, probes and deauth frames a phone scan never includes."),
+                            leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
+                        )
+                    },
+                    {
+                        ListRow(
+                            title = "M5Stack Cardputer-Adv",
+                            subtitle = tr("The same ESP32-S3. The LoRa cap with GPS fits this board."),
+                            leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
+                        )
+                    },
+                    {
+                        ListRow(
+                            title = "ESP32-C5 N4",
+                            subtitle = tr("No screen. Hears 2.4 and 5 GHz, so 5 GHz networks and their clients show up. The phone is the display."),
+                            leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
+                        )
+                    },
+                    {
+                        ListRow(
+                            title = "ESP32-WROOM-32",
+                            subtitle = tr("No screen. 2.4 GHz, with the same client and deauth detail as the Cardputer. The phone flashes it through the CH340 port."),
+                            leading = { IconTile(Icons.Rounded.Memory, MaterialTheme.colorScheme.primary) },
+                        )
+                    },
+                ),
+            )
+        }
     }
 }
 
