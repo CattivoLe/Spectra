@@ -26,6 +26,10 @@ nonisolated final class TrafficProxy {
     private let onFlows: ([TrafficFlow]) -> Void
     private let decryptTLS: () -> Bool
     private let certificate: () -> LocalCertificateAuthority?
+    private let hostFilter: () -> TlsHostFilter
+    /// Where finished HTTP bodies are written; nil keeps none. Writes go to their own queue, off the loop.
+    private let bodies: TrafficBodies?
+    private let bodyQueue = DispatchQueue(label: "cattivole.spectra.proxy.bodies", qos: .utility)
 
     private var tcp: [String: TCPLink] = [:]
     private var udp: [String: UDPLink] = [:]
@@ -60,8 +64,12 @@ nonisolated final class TrafficProxy {
         writer: @escaping TunnelWriter,
         decryptTLS: @escaping () -> Bool,
         certificate: @escaping () -> LocalCertificateAuthority?,
+        hostFilter: @escaping () -> TlsHostFilter = { TlsHostFilter() },
+        bodies: TrafficBodies? = nil,
         onFlows: @escaping ([TrafficFlow]) -> Void
     ) {
+        self.hostFilter = hostFilter
+        self.bodies = bodies
         self.loop = group.next()
         self.writer = writer
         self.decryptTLS = decryptTLS
@@ -126,7 +134,10 @@ nonisolated final class TrafficProxy {
             }
         case IPCodec.udp:
             guard let header = IPCodec.parseUDP(ip.payload) else { return }
-            if header.dstPort == 443 && shouldDecrypt() {
+            // QUIC hides HTTP from the TLS handshake; dropping it makes the app fall back to TCP, which can be
+            // read. A host the filter leaves encrypted keeps its QUIC; one whose name is not known yet loses it.
+            let name = names[IPCodec.text(ip.dst)]
+            if header.dstPort == 443 && shouldDecrypt() && (name == nil || hostFilter().allows(name)) {
                 udp.removeValue(forKey: key("UDP", ip.src, header.srcPort, ip.dst, header.dstPort))?.close()
                 return
             }
@@ -262,7 +273,18 @@ nonisolated final class TrafficProxy {
     /// Only reported (`Backlog.decryptOff`), since it cannot be told apart from a run of pinned services.
     static let refusalsBeforeNotice = 10
 
-    func mitmAllowed(host: String) -> Bool { !refusedHosts.contains(host) }
+    /// Refused once already, or left encrypted by the host list: straight through.
+    func mitmAllowed(host: String, sni: String?) -> Bool {
+        !refusedHosts.contains(host) && hostFilter().allows(sni?.isEmpty == false ? sni : nil)
+    }
+
+    /// Hands a finished body to the store, within the recording's budget. True when it will be written.
+    func keepBody(flowID: Int64, index: Int, request: Bool, body: [UInt8]) -> Bool {
+        guard let bodies, bodies.reserve(body.count) else { return false }
+        let data = Data(body)
+        bodyQueue.async { bodies.write(flowID: flowID, index: index, request: request, body: data) }
+        return true
+    }
 
     func mitmVerdict(host: String, accepted: Bool) {
         if accepted {

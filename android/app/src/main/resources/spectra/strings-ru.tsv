@@ -784,7 +784,6 @@ Stop keeping at top	Больше не держать вверху
 Parameters	Параметры
 Request headers	Заголовки запроса
 Response headers	Заголовки ответа
-Response JSON	JSON ответа
 Response	Ответ
 This response has no body.	В этом ответе нет тела.
 The body is encoded as %s and is not text.	Тело сжато как %s и это не текст.
@@ -793,9 +792,6 @@ Status	Статус
 Nothing in this filter	В этом фильтре пусто
 No connection matches these filters.	Ни одно соединение не подходит под эти фильтры.
 Connections are forwarded. Names, headers, parameters and JSON come from cleartext DNS and HTTP, not from decrypted TLS.	Соединения проксируются. Имена, заголовки, параметры и JSON берутся из открытых DNS и HTTP, а не из расшифрованного TLS.
-The body was cut short, so the JSON may be incomplete.	Тело обрезано, поэтому JSON может быть неполным.
-No JSON	Нет JSON
-No JSON in this response.	В этом ответе нет JSON.
 Copy	Копировать
 Copy request	Копировать запрос
 Decrypt TLS	Расшифровывать TLS
@@ -1627,3 +1623,45 @@ too many requests	слишком много запросов
 New summaries are saved to «%s»	Новые сводки сохраняются в «%s»
 New summaries go to the highlighted folder. Hold another folder to save there.	Новые сводки идут в выделенную папку. Удержите другую, чтобы сохранять в неё.
 Every summary and folder is erased from this phone. Models and settings stay.	Все сводки и папки будут удалены с телефона. Модели и настройки останутся.
+Export HAR	Экспорт в HAR
+Export HAR for this connection	Экспорт соединения в HAR
+Hosts to decrypt	Какие хосты расшифровывать
+Copy as cURL	Скопировать как cURL
+cURL	cURL
+Leave %s encrypted	Не расшифровывать %s
+Timing	Время
+Waiting for the response	Ожидание ответа
+Request size	Размер запроса
+Response size	Размер ответа
+%s (headers %s, body %s)	%s (заголовки %s, тело %s)
+%.2f s	%.2f с
+Request body	Тело запроса
+Only the first %s of this body were kept.	Сохранены только первые %s тела.
+This body was not kept: the recording reached its limit for stored bodies.	Тело не сохранено: запись исчерпала лимит на хранение тел.
+This request has no body.	В этом запросе нет тела.
+Loading…	Загрузка…
+The stored body could not be read.	Не удалось прочитать сохранённое тело.
+Image, %d × %d, %s	Картинка, %d × %d, %s
+Image, %s. This phone cannot draw this format.	Картинка, %s. Этот телефон не умеет показывать такой формат.
+Binary data, %s.	Двоичные данные, %s.
+The first %s are shown.	Показаны первые %s.
+%d characters	%d символов
+Show all	Показать все
+Every host is decrypted. A host whose app refuses the certificate goes through unread.	Расшифровываются все хосты. Если приложение отвергает сертификат, его хост пропускается без расшифровки.
+Only the hosts in the first list are decrypted, except those in the second. Everything else goes through unread.	Расшифровываются только хосты из первого списка, кроме тех, что во втором. Всё остальное идёт без расшифровки.
+Every host is decrypted except those in the list. They go through unread.	Расшифровываются все хосты, кроме перечисленных: они идут без расшифровки.
+Decrypt these hosts	Расшифровывать эти хосты
+Leave these encrypted	Не расшифровывать эти
+Add a host	Добавить хост
+*.example.com matches example.com and all its subdomains. * stands for any characters. Changes apply to new connections.	*.example.com подходит к example.com и всем его поддоменам, * означает любые символы. Изменения действуют на новые соединения.
+Host or pattern	Хост или шаблон
+Decrypt	Расшифровывать
+Leave encrypted	Не расшифровывать
+Refused the certificate	Отвергли сертификат
+These hosts did not trust the Spectra certificate in this recording, often because the app pins its own. Leaving them encrypted saves a failed first connection next time.	Эти хосты не приняли сертификат Spectra в этой записи, чаще всего потому, что приложение доверяет только своему. Если их не расшифровывать, в следующий раз первое соединение не сорвётся.
+The list is empty.	Список пуст.
+All hosts	Все хосты
+Only these	Только эти
+All except these	Все, кроме этих
+Only listed hosts (%d)	Только из списка (%d)
+All except listed hosts (%d)	Все, кроме списка (%d)

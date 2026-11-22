@@ -96,8 +96,8 @@ struct TrafficProxyTableTests {
         defer { proxy.stop() }
         try proxy.loop.submit {
             proxy.mitmVerdict(host: "pinned.example", accepted: false)
-            #expect(!proxy.mitmAllowed(host: "pinned.example"))
-            #expect(proxy.mitmAllowed(host: "other.example"))
+            #expect(!proxy.mitmAllowed(host: "pinned.example", sni: "pinned.example"))
+            #expect(proxy.mitmAllowed(host: "other.example", sni: "other.example"))
             for i in 0..<(TrafficProxy.refusalsBeforeNotice * 2) { proxy.mitmVerdict(host: "h\(i).example", accepted: false) }
             #expect(proxy.shouldDecrypt())
         }.wait()

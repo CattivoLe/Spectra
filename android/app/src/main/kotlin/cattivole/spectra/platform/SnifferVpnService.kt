@@ -86,6 +86,8 @@ class SnifferVpnService : VpnService() {
                 Thread { shutdown() }.start()
             },
             onRefusedCertificate = { CaptureBus.noteRefusedCertificate() },
+            bodies = CaptureBus.bodies,
+            hostFilter = CaptureBus.hostFilter,
         )
         proxy = created
         CaptureBus.publish(running = true, flows = emptyList(), startedAt = startedAt, error = null)

@@ -12,7 +12,7 @@ import Observation
 /// shared across the two processes lives in the group container, never in memory.
 @MainActor @Observable
 final class TrafficSniffer {
-    static let appGroup = "group.cattivole.Spectra"
+    nonisolated static let appGroup = "group.cattivole.Spectra"
     static let tunnelBundleID = "cattivole.Spectra.SpectraTunnel"
 
     private(set) var running = false
@@ -42,6 +42,11 @@ final class TrafficSniffer {
     var decryptTLS: Bool {
         didSet { defaults?.set(decryptTLS, forKey: Self.tlsKey) }
     }
+    /// Which hosts are decrypted, like SSL Proxying in Charles. The tunnel reads it from the App Group within
+    /// a couple of seconds; it applies to new connections.
+    var hostFilter: TlsHostFilter {
+        didSet { hostFilter.save(defaults) }
+    }
 
     private var manager: NETunnelProviderManager?
     private var pollTask: Task<Void, Never>?
@@ -56,6 +61,7 @@ final class TrafficSniffer {
 
     init() {
         decryptTLS = UserDefaults(suiteName: TrafficSniffer.appGroup)?.bool(forKey: Self.tlsKey) ?? false
+        hostFilter = TlsHostFilter.load(UserDefaults(suiteName: TrafficSniffer.appGroup))
         loadSaved()
         refreshCA()
         // The tunnel outlives the app: after a relaunch, pick up one that is still recording, so it can be
@@ -141,6 +147,7 @@ final class TrafficSniffer {
         flows = []
         currentSessionID = nil
         savedMark = nil
+        liveBodies()?.clear()
         if let url = containerURL()?.appendingPathComponent("live.json") {
             try? FileManager.default.removeItem(at: url)
         }
@@ -203,11 +210,13 @@ final class TrafficSniffer {
             self.error = error.localizedDescription
             return false
         }
+        liveBodies()?.copy(to: bodiesDir(dir, id))
         let all = [session] + saved.filter { $0.id != id }
         saved = Array(all.prefix(Self.keepSessions))
         // Whatever no longer fits goes from disk too (the old code computed this after trimming, so never did).
         for old in all.dropFirst(Self.keepSessions) {
             try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(old.id).json"))
+            try? FileManager.default.removeItem(at: bodiesDir(dir, old.id))
         }
         currentSessionID = id
         savedMark = SaveMark(flows)
@@ -217,6 +226,7 @@ final class TrafficSniffer {
     func delete(_ session: TrafficSession) {
         if let dir = sessionsDir() {
             try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(session.id).json"))
+            try? FileManager.default.removeItem(at: bodiesDir(dir, session.id))
         }
         saved.removeAll { $0.id == session.id }
         if session.id == currentSessionID {
@@ -233,6 +243,29 @@ final class TrafficSniffer {
             .compactMap { TrafficSession.decode($0) }
             .sorted { $0.stoppedAt > $1.stoppedAt }
             .prefix(Self.keepSessions).map { $0 }
+    }
+
+    // MARK: Bodies
+
+    /// A stored body of the live recording (`sessionID` nil) or of a saved session. Reads the disk.
+    nonisolated func body(sessionID: String?, flowID: Int64, index: Int, request: Bool) -> Data? {
+        guard let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) else { return nil }
+        let dir = sessionID.map { base.appendingPathComponent("traffic/\($0).bodies", isDirectory: true) }
+            ?? base.appendingPathComponent(PacketTunnelBodies.folder, isDirectory: true)
+        return TrafficBodies(dir: dir).read(flowID: flowID, index: index, request: request)
+    }
+
+    /// Hosts whose apps refused the certificate in `flows`, so they can be left encrypted.
+    static func refusedHosts(_ flows: [TrafficFlow]) -> [String] {
+        Array(Set(flows.filter(\.refused).compactMap { $0.host?.isEmpty == false ? $0.host : nil })).sorted()
+    }
+
+    private func liveBodies() -> TrafficBodies? {
+        containerURL().map { TrafficBodies(dir: $0.appendingPathComponent(PacketTunnelBodies.folder, isDirectory: true)) }
+    }
+
+    private func bodiesDir(_ sessions: URL, _ id: String) -> URL {
+        sessions.appendingPathComponent("\(id).bodies", isDirectory: true)
     }
 
     // MARK: CA (for the TLS-decrypt install flow)

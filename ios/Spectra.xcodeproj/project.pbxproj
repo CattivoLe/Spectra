@@ -72,6 +72,8 @@
 				Sniffer/LocalCertificateAuthority.swift,
 				Sniffer/SnifferTLS.swift,
 				Sniffer/TLSBridge.swift,
+				Sniffer/TlsHostFilter.swift,
+				Sniffer/TrafficBodies.swift,
 				Sniffer/TrafficHints.swift,
 				Sniffer/TrafficModels.swift,
 				Sniffer/TrafficProxy.swift,

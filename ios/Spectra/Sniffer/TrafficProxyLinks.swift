@@ -30,7 +30,10 @@ final class TCPLink {
     private var inbound: [[UInt8]] = []     // bytes waiting to be sent to the phone
     private var unackedBytes = 0
     private var prelude: [UInt8] = []
-    private let http = HttpAssembler()
+    private lazy var http = HttpAssembler(sink: { [weak self] index, request, body in
+        guard let self else { return false }
+        return self.proxy.keepBody(flowID: self.flow.id, index: index, request: request, body: body)
+    })
     private var held: [UInt8]?
     private var mitm: TLSBridge?
     private enum Inspect { case unknown, tls, http, other }
@@ -217,7 +220,7 @@ final class TCPLink {
         guard let ca = proxy.authority() else { return false }
         let host = (sni?.isEmpty == false ? sni : nil) ?? IPCodec.text(dst)
         // Refused once already, or decryption gave up for this run: straight through, no second failure.
-        guard proxy.mitmAllowed(host: host) else { return false }
+        guard proxy.mitmAllowed(host: host, sni: sni) else { return false }
         proxy.phase("mitm \(host)")
         defer { proxy.phase("packet") }
         do {

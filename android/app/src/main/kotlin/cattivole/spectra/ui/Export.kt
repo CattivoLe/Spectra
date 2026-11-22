@@ -87,13 +87,13 @@ fun sharePcap(context: Context, bytes: ByteArray, label: String) {
 }
 
 /** Writes a text recording to cacheDir/exports and hands it to a share chooser. */
-fun shareTextFile(context: Context, name: String, contents: String) {
+fun shareTextFile(context: Context, name: String, contents: String, mime: String = "text/plain") {
     val dir = File(context.cacheDir, "exports").apply { mkdirs() }
     val out = File(dir, name)
     out.writeText(contents)
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", out)
     val send = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
+        type = mime
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }

@@ -32,6 +32,30 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.WifiTethering
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import android.content.Context
+import android.graphics.BitmapFactory
+import cattivole.spectra.core.BodyPreview
+import cattivole.spectra.core.BodyView
+import cattivole.spectra.core.Curl
+import cattivole.spectra.core.Har
+import cattivole.spectra.core.HttpAssembler
+import cattivole.spectra.core.TlsHostFilter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -45,6 +69,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -129,6 +154,7 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
     val notify = LocalNotify.current
     val context = LocalContext.current
     val begin = rememberTrafficConsent(traffic)
+    val coroutines = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var kindName by rememberSaveable { mutableStateOf<String?>(null) }
     var method by rememberSaveable { mutableStateOf<String?>(null) }
@@ -272,6 +298,14 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
             if (session != null || (live && flows.isNotEmpty())) {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text(tr("Export HAR")) },
+                        leadingIcon = { Icon(Icons.Rounded.Description, null) },
+                        onClick = {
+                            menu = false
+                            coroutines.launch { shareHar(context, traffic, sessionId, flows) }
+                        },
+                    )
                     if (session != null) {
                         DropdownMenuItem(
                             text = { Text(tr("Share")) },
@@ -375,6 +409,16 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
                 key = "tls",
                 rows = buildList {
                     add { TlsSwitch(traffic) }
+                    if (traffic.decryptTls) {
+                        add {
+                            ListRow(
+                                title = tr("Hosts to decrypt"),
+                                subtitle = hostFilterSummary(traffic.hostFilter),
+                                leading = { IconTile(Icons.Rounded.Tune, MaterialTheme.colorScheme.primary) },
+                                onClick = nav::trafficHosts,
+                            )
+                        }
+                    }
                     traffic.certificateFingerprint()?.let { digest ->
                         add { InfoRow(tr("Fingerprint"), digest, mono = true, copyable = true) }
                     }
@@ -492,6 +536,9 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
         }) {}
         return
     }
+    val coroutines = rememberCoroutineScope()
+    val context = LocalContext.current
+    val copy = rememberCopier()
     SpectraScreen(title = http?.summary ?: flow.title, subtitle = flow.host ?: flow.app, onBack = nav::back) {
         freeCard("hero") {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -531,12 +578,41 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
             },
         )
         if (focusKey != null) {
-            card(key = "focus", rows = listOf {
-                ActionRow(
-                    if (model.traffic.focusedKey == focusKey) tr("Stop keeping at top") else tr("Keep at top"),
-                    Icons.Rounded.PushPin,
-                    onClick = { model.traffic.toggleFocus(focusKey) },
-                )
+            card(key = "focus", rows = buildList {
+                add {
+                    ActionRow(
+                        if (model.traffic.focusedKey == focusKey) tr("Stop keeping at top") else tr("Keep at top"),
+                        Icons.Rounded.PushPin,
+                        onClick = { model.traffic.toggleFocus(focusKey) },
+                    )
+                }
+                if (http != null) {
+                    add {
+                        ActionRow(tr("Copy as cURL"), Icons.Rounded.Terminal, onClick = {
+                            coroutines.launch {
+                                val body = withContext(Dispatchers.IO) {
+                                    if (http.requestBodyStored) traffic.body(sessionId, flow.id, exchange!!, true) else null
+                                }
+                                copy(tr("cURL"), Curl.command(flow, http, body))
+                            }
+                        })
+                    }
+                }
+                if (flow.exchanges.isNotEmpty()) {
+                    add {
+                        ActionRow(tr("Export HAR for this connection"), Icons.Rounded.Description, onClick = {
+                            coroutines.launch { shareHar(context, traffic, sessionId, listOf(flow)) }
+                        })
+                    }
+                }
+                val refusedHost = flow.host?.takeIf { flow.refused && it.isNotEmpty() && traffic.hostFilter.allows(it) }
+                if (refusedHost != null) {
+                    add {
+                        ActionRow(tr("Leave %s encrypted", refusedHost), Icons.Rounded.LockOpen, onClick = {
+                            traffic.setHostFilter(traffic.hostFilter.excluding(refusedHost))
+                        })
+                    }
+                }
             })
         }
         if (http != null) {
@@ -562,30 +638,31 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
                     rows = buildList { for (field in http.responseHeaders) add { FieldRow(field) } },
                 )
             }
-            card(
-                header = tr("Response"),
-                key = "response",
-                rows = buildList {
-                    if (http.responseCut) add { NoteRow(tr("The body was cut short, so the JSON may be incomplete."), warning = true) }
-                    val body = http.responseJson
-                    if (body != null) {
-                        add {
-                            SelectionContainer(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                                Text(body, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                            }
-                        }
-                    } else {
-                        val encoding = http.responseHeaders.firstOrNull { it.name.equals("Content-Encoding", true) }?.value
-                        add {
-                            NoteRow(
-                                if (encoding.isNullOrBlank()) tr("This response has no body.")
-                                else tr("The body is encoded as %s and is not text.", encoding),
-                                warning = encoding != null,
-                            )
-                        }
+            if (http.startedAt != null) {
+                card(
+                    header = tr("Timing"),
+                    key = "timing",
+                    rows = buildList {
+                        add { InfoRow(tr("Started"), preciseTime(http.startedAt)) }
+                        http.waitMs?.let { add { InfoRow(tr("Waiting for the response"), millis(it)) } }
+                        http.durationMs?.let { add { InfoRow(tr("Duration"), millis(it)) } }
+                        http.requestSize?.let { add { InfoRow(tr("Request size"), sizeLine(it, http.requestHeaderBytes, http.requestBodyBytes)) } }
+                        http.responseSize?.let { add { InfoRow(tr("Response size"), sizeLine(it, http.responseHeaderBytes, http.responseBodyBytes)) } }
+                    },
+                )
+            }
+            if (http.requestBodyStored || (http.requestBodyBytes ?: 0) > 0) {
+                freeCard(key = "request-body", header = tr("Request body")) {
+                    BodyContent(traffic, sessionId, flow, exchange!!, http, request = true, full = false) {
+                        nav.trafficBody(flow.id, exchange, sessionId, request = true)
                     }
-                },
-            )
+                }
+            }
+            freeCard(key = "response-body", header = tr("Response")) {
+                BodyContent(traffic, sessionId, flow, exchange!!, http, request = false, full = false) {
+                    nav.trafficBody(flow.id, exchange, sessionId, request = false)
+                }
+            }
         }
         card(
             header = tr("Observed"),
@@ -621,7 +698,7 @@ private fun FlowRow(
         ListRow(
             title = exchange?.summary ?: flow.title,
             subtitle = subtitle,
-            detail = exchange?.status?.toString()
+            detail = exchange?.let { exchangeLine(it) }
                 ?: flow.request?.takeIf { exchange == null }
                 ?: tr("This app did not trust the Spectra certificate.").takeIf { flow.refused && exchange == null },
             leading = { IconTile(flow.icon(), flow.tint()) },
@@ -637,7 +714,7 @@ private fun FlowRow(
                         )
                     }
                     Text(
-                        byteSize(flow.sent + flow.received),
+                        byteSize(exchange?.let { (it.requestSize ?: 0) + (it.responseSize ?: 0) }?.takeIf { it > 0 } ?: (flow.sent + flow.received)),
                         style = MaterialTheme.typography.titleSmall.merge(Tabular),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -771,7 +848,7 @@ private fun FieldRow(field: HttpField) {
 }
 
 @Composable
-fun TrafficJsonScreen(model: SpectraModel, nav: Navigator, flowId: Long, exchange: Int, sessionId: String?) {
+fun TrafficBodyScreen(model: SpectraModel, nav: Navigator, flowId: Long, exchange: Int, sessionId: String?, request: Boolean) {
     model.generation
     val traffic = model.traffic
     val flow = if (sessionId != null) {
@@ -780,44 +857,293 @@ fun TrafficJsonScreen(model: SpectraModel, nav: Navigator, flowId: Long, exchang
         traffic.flows.firstOrNull { it.id == flowId }
     }
     val http = flow?.exchanges?.getOrNull(exchange)
-    val json = http?.responseJson
-    val copy = rememberCopier()
+    val title = if (request) tr("Request body") else tr("Response")
     if (flow == null || http == null) {
-        SpectraScreen(tr("Response JSON"), onBack = nav::back, overlay = {
+        SpectraScreen(title, onBack = nav::back, overlay = {
             EmptyState(Icons.Rounded.DataObject, tr("Gone"), tr("This connection is no longer in the list."))
         }) {}
         return
     }
-    SpectraScreen(
-        title = tr("Response JSON"),
-        subtitle = http.summary,
-        onBack = nav::back,
-        actions = {
-            if (!json.isNullOrEmpty()) {
-                IconButton(onClick = { copy(tr("Response JSON"), json) }) {
-                    Icon(Icons.Rounded.ContentCopy, contentDescription = tr("Copy"))
+    SpectraScreen(title = title, subtitle = http.summary, onBack = nav::back) {
+        freeCard("body") {
+            BodyContent(traffic, sessionId, flow, exchange, http, request = request, full = true, onOpen = null)
+        }
+    }
+}
+
+/** What a stored body holds, read from disk off the main thread. */
+private class LoadedBody(val bytes: ByteArray?, val view: BodyView?)
+
+/**
+ * One side's body: a picture, formatted JSON, text, or the bytes in hex, with a
+ * note when it was cut or not kept. [full] shows all of it; otherwise a start,
+ * with [onOpen] leading to the rest.
+ */
+@Composable
+private fun BodyContent(
+    traffic: TrafficSniffer,
+    sessionId: String?,
+    flow: TrafficFlow,
+    index: Int,
+    http: HttpExchange,
+    request: Boolean,
+    full: Boolean,
+    onOpen: (() -> Unit)?,
+) {
+    val stored = if (request) http.requestBodyStored else http.responseBodyStored
+    val type = http.header("Content-Type", response = !request)
+    val loaded by produceState<LoadedBody?>(null, flow.id, index, request, stored, sessionId) {
+        value = withContext(Dispatchers.IO) {
+            val bytes = if (stored) traffic.body(sessionId, flow.id, index, request) else null
+            LoadedBody(bytes, bytes?.let { BodyPreview.of(it, type) })
+        }
+    }
+    val copy = rememberCopier()
+    val cut = if (request) http.requestCut else http.responseCut
+    val wire = if (request) http.requestBodyBytes else http.responseBodyBytes
+    val legacy = if (request) null else http.responseJson
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (cut) {
+            val cap = if (request) HttpAssembler.REQUEST_CAP else HttpAssembler.RESPONSE_CAP
+            NoteRow(tr("Only the first %s of this body were kept.", byteSize(cap.toLong())), warning = true, modifier = Modifier.padding(0.dp))
+        }
+        val state = loaded
+        when {
+            !stored && legacy != null -> MonoText(legacy, full, onOpen, copy)
+            !stored && (wire ?: 0) > 0 -> NoteRow(
+                tr("This body was not kept: the recording reached its limit for stored bodies."),
+                warning = true,
+            )
+            !stored -> NoteRow(if (request) tr("This request has no body.") else tr("This response has no body."), warning = false)
+            state == null -> Text(tr("Loading…"), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            state.bytes == null -> NoteRow(tr("The stored body could not be read."), warning = true)
+            else -> when (val view = state.view) {
+                is BodyView.Image -> {
+                    val bitmap = remember(view) { BitmapFactory.decodeByteArray(view.bytes, 0, view.bytes.size) }
+                    if (bitmap != null) {
+                        Image(
+                            bitmap.asImageBitmap(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxWidth().heightIn(max = if (full) 2000.dp else 320.dp),
+                        )
+                        Text(
+                            tr("Image, %d × %d, %s", bitmap.width, bitmap.height, byteSize(view.bytes.size.toLong())),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Text(tr("Image, %s. This phone cannot draw this format.", byteSize(view.bytes.size.toLong())), style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
-            }
-        },
-        overlay = {
-            if (json.isNullOrEmpty()) {
-                EmptyState(Icons.Rounded.DataObject, tr("No JSON"), tr("No JSON in this response."))
-            }
-        },
-    ) {
-        if (!json.isNullOrEmpty()) {
-            if (http.responseCut) {
-                card(key = "cut", rows = listOf {
-                    NoteRow(tr("The body was cut short, so the JSON may be incomplete."), warning = true)
-                })
-            }
-            freeCard("json") {
-                SelectionContainer {
-                    Text(json, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                is BodyView.Json -> MonoText(view.text, full, onOpen, copy)
+                is BodyView.Text -> MonoText(view.text, full, onOpen, copy)
+                is BodyView.Binary -> {
+                    val encoding = http.header("Content-Encoding", response = !request)
+                    Text(
+                        if (encoding.isNullOrBlank()) tr("Binary data, %s.", byteSize(view.size.toLong()))
+                        else tr("The body is encoded as %s and is not text.", encoding),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    val hex = if (full) BodyPreview.hexDump(state.bytes, 64 * 1024) else view.hex.lineSequence().take(16).joinToString("\n")
+                    SelectionContainer {
+                        Text(hex, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    }
+                    if (full && state.bytes.size > 64 * 1024) {
+                        Text(tr("The first %s are shown.", byteSize(64L * 1024)), style = MaterialTheme.typography.bodySmall)
+                    } else if (!full && onOpen != null && view.size > 256) {
+                        TextButton(onClick = onOpen) { Text(tr("Show all")) }
+                    }
                 }
+                BodyView.Empty, null -> NoteRow(if (request) tr("This request has no body.") else tr("This response has no body."), warning = false)
             }
         }
     }
+}
+
+/** Monospaced text: a start of it, or as much as a screen can carry. */
+@Composable
+private fun MonoText(text: String, full: Boolean, onOpen: (() -> Unit)?, copy: (String, String) -> Unit) {
+    val limit = if (full) FULL_TEXT else PREVIEW_TEXT
+    val shown = if (text.length > limit) text.take(limit) else text
+    SelectionContainer {
+        Text(shown, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!full && text.length > limit && onOpen != null) TextButton(onClick = onOpen) { Text(tr("Show all")) }
+        TextButton(onClick = { copy(tr("Body"), text) }) { Text(tr("Copy")) }
+    }
+    if (full && text.length > limit) {
+        Text(tr("The first %s are shown.", tr("%d characters", limit)), style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+private const val PREVIEW_TEXT = 3_000
+private const val FULL_TEXT = 400_000
+
+/** Which hosts get decrypted, like SSL Proxying in Charles. */
+@Composable
+fun TrafficHostsScreen(model: SpectraModel, nav: Navigator) {
+    model.generation
+    val traffic = model.traffic
+    val filter = traffic.hostFilter
+    var draft by rememberSaveable { mutableStateOf("") }
+    var draftOnly by rememberSaveable { mutableStateOf(true) }
+    val refused = traffic.refusedHosts().filter { filter.allows(it) }
+    fun add(onlyList: Boolean) {
+        val clean = TlsHostFilter.normalize(draft) ?: return
+        val next = if (onlyList) {
+            filter.copy(only = (filter.only + clean).distinct())
+        } else {
+            filter.copy(except = (filter.except + clean).distinct())
+        }
+        traffic.setHostFilter(next)
+        draft = ""
+    }
+    SpectraScreen(title = tr("Hosts to decrypt"), onBack = nav::back) {
+        item(key = "modes") {
+            ChipRow(contentPadding = FilterChipPadding) {
+                TlsHostFilter.Mode.entries.forEach { mode ->
+                    ToggleChip(modeName(mode), filter.mode == mode, { traffic.setHostFilter(filter.copy(mode = mode)) })
+                }
+            }
+        }
+        card(key = "mode-note", rows = listOf {
+            NoteRow(
+                when (filter.mode) {
+                    TlsHostFilter.Mode.ALL -> tr("Every host is decrypted. A host whose app refuses the certificate goes through unread.")
+                    TlsHostFilter.Mode.ONLY -> tr("Only the hosts in the first list are decrypted, except those in the second. Everything else goes through unread.")
+                    TlsHostFilter.Mode.EXCEPT -> tr("Every host is decrypted except those in the list. They go through unread.")
+                },
+                warning = false,
+            )
+        })
+        if (filter.mode == TlsHostFilter.Mode.ONLY) {
+            hostList("only", tr("Decrypt these hosts"), filter.only) { host ->
+                traffic.setHostFilter(filter.copy(only = filter.only - host))
+            }
+        }
+        if (filter.mode != TlsHostFilter.Mode.ALL) {
+            hostList("except", tr("Leave these encrypted"), filter.except) { host ->
+                traffic.setHostFilter(filter.copy(except = filter.except - host))
+            }
+        }
+        if (filter.mode != TlsHostFilter.Mode.ALL) {
+            freeCard(
+                key = "add",
+                header = tr("Add a host"),
+                footer = tr("*.example.com matches example.com and all its subdomains. * stands for any characters. Changes apply to new connections."),
+            ) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it.take(253) },
+                    label = { Text(tr("Host or pattern")) },
+                    placeholder = { Text("*.example.com") },
+                    singleLine = true,
+                    isError = draft.isNotBlank() && TlsHostFilter.normalize(draft) == null,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (filter.mode == TlsHostFilter.Mode.ONLY) {
+                    ChipRow(contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 8.dp)) {
+                        ToggleChip(tr("Decrypt"), draftOnly, { draftOnly = true })
+                        ToggleChip(tr("Leave encrypted"), !draftOnly, { draftOnly = false })
+                    }
+                }
+                TextButton(
+                    onClick = { add(filter.mode == TlsHostFilter.Mode.ONLY && draftOnly) },
+                    enabled = TlsHostFilter.normalize(draft) != null,
+                ) {
+                    Icon(Icons.Rounded.Add, null)
+                    Text(tr("Add"))
+                }
+            }
+        }
+        if (refused.isNotEmpty()) {
+            card(
+                header = tr("Refused the certificate"),
+                footer = tr("These hosts did not trust the Spectra certificate in this recording, often because the app pins its own. Leaving them encrypted saves a failed first connection next time."),
+                key = "refused",
+                rows = refused.map { host ->
+                    {
+                        ListRow(
+                            title = host,
+                            trailing = {
+                                TextButton(onClick = { traffic.setHostFilter(traffic.hostFilter.excluding(host)) }) {
+                                    Text(tr("Leave encrypted"))
+                                }
+                            },
+                        )
+                    }
+                },
+            )
+        }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.hostList(
+    key: String,
+    header: String,
+    hosts: List<String>,
+    onRemove: (String) -> Unit,
+) {
+    card(
+        header = header,
+        key = key,
+        rows = if (hosts.isEmpty()) {
+            listOf { NoteRow(tr("The list is empty."), warning = false) }
+        } else {
+            hosts.map { host ->
+                {
+                    ListRow(
+                        title = host,
+                        trailing = {
+                            IconButton(onClick = { onRemove(host) }) {
+                                Icon(Icons.Rounded.Close, contentDescription = tr("Remove"))
+                            }
+                        },
+                    )
+                }
+            }
+        },
+    )
+}
+
+private fun modeName(mode: TlsHostFilter.Mode): String = when (mode) {
+    TlsHostFilter.Mode.ALL -> tr("All hosts")
+    TlsHostFilter.Mode.ONLY -> tr("Only these")
+    TlsHostFilter.Mode.EXCEPT -> tr("All except these")
+}
+
+private fun hostFilterSummary(filter: TlsHostFilter): String = when (filter.mode) {
+    TlsHostFilter.Mode.ALL -> tr("All hosts")
+    TlsHostFilter.Mode.ONLY -> tr("Only listed hosts (%d)", filter.only.size)
+    TlsHostFilter.Mode.EXCEPT -> tr("All except listed hosts (%d)", filter.except.size)
+}
+
+/** Status, time to the end of the response and size, for a request's row. */
+private fun exchangeLine(exchange: HttpExchange): String? {
+    val parts = buildList {
+        exchange.status?.let { add(it.toString()) }
+        exchange.durationMs?.let { add(millis(it)) }
+    }
+    return parts.joinToString(" · ").takeIf { it.isNotEmpty() }
+}
+
+private fun millis(ms: Long): String = if (ms < 1000) tr("%d ms", ms) else tr("%.2f s", ms / 1000.0)
+
+private fun preciseTime(millis: Long): String = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date(millis))
+
+private fun sizeLine(total: Long, headers: Long?, body: Long?): String =
+    if (headers == null) byteSize(total) else tr("%s (headers %s, body %s)", byteSize(total), byteSize(headers), byteSize(body ?: 0))
+
+/** Builds a HAR of [flows] off the main thread and hands it to the share sheet. */
+private suspend fun shareHar(context: Context, traffic: TrafficSniffer, sessionId: String?, flows: List<TrafficFlow>) {
+    val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
+    val text = withContext(Dispatchers.IO) {
+        Har.build(flows, { flow, index, request -> traffic.body(sessionId, flow.id, index, request) }, version)
+    }
+    val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+    shareTextFile(context, "spectra-traffic-$stamp.har", text, mime = "application/json")
 }
 
 private data class TrafficHit(val flow: TrafficFlow, val index: Int?)

@@ -5,6 +5,8 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import cattivole.spectra.core.TlsHostFilter
+import cattivole.spectra.core.TrafficBodies
 import cattivole.spectra.core.TrafficFlow
 import cattivole.spectra.core.TrafficSession
 import cattivole.spectra.core.LocalCa
@@ -12,6 +14,7 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /** What the VPN thread last published. The service and the screen share it. */
 internal object CaptureBus {
@@ -26,6 +29,13 @@ internal object CaptureBus {
 
     /** When on, new TLS connections are opened with [LocalCa] and read as HTTP. */
     val decryptTls: AtomicBoolean = AtomicBoolean(false)
+
+    /** Which hosts are decrypted. Read by the proxy for every new TLS connection. */
+    val hostFilter: AtomicReference<TlsHostFilter> = AtomicReference(TlsHostFilter())
+
+    /** Where the live recording writes HTTP bodies. */
+    @Volatile
+    var bodies: TrafficBodies? = null
 
     /** Apps keep refusing the certificate during this recording. */
     @Volatile
@@ -125,8 +135,22 @@ class TrafficSniffer(context: Context) {
     /** True when new TLS connections are opened with this app's certificate. */
     val decryptTls: Boolean get() = CaptureBus.decryptTls.get()
 
+    /** Which hosts are decrypted, like SSL Proxying in Charles. */
+    val hostFilter: TlsHostFilter get() = CaptureBus.hostFilter.get()
+
+    /** Bodies of the recording on screen. Kept out of backups: they can hold decrypted traffic. */
+    private val liveBodies = TrafficBodies(File(app.noBackupFilesDir, "traffic-live-bodies"))
+
     init {
         CaptureBus.decryptTls.set(prefs.getBoolean(KEY_TLS, false))
+        CaptureBus.hostFilter.set(
+            TlsHostFilter(
+                mode = TlsHostFilter.Mode.of(prefs.getString(KEY_TLS_MODE, null)),
+                only = prefs.getString(KEY_TLS_ONLY, null).orEmpty().lines().filter { it.isNotBlank() },
+                except = prefs.getString(KEY_TLS_EXCEPT, null).orEmpty().lines().filter { it.isNotBlank() },
+            ),
+        )
+        CaptureBus.bodies = liveBodies
         running = CaptureBus.running
         flows = CaptureBus.flows
         startedAt = CaptureBus.startedAt
@@ -176,11 +200,34 @@ class TrafficSniffer(context: Context) {
         }
     }
 
+    fun setHostFilter(filter: TlsHostFilter) {
+        prefs.edit()
+            .putString(KEY_TLS_MODE, filter.mode.key)
+            .putString(KEY_TLS_ONLY, filter.only.joinToString("\n"))
+            .putString(KEY_TLS_EXCEPT, filter.except.joinToString("\n"))
+            .apply()
+        CaptureBus.hostFilter.set(filter)
+        changed()
+    }
+
+    /** Hosts whose apps refused the certificate in the recording on screen, so they can be left encrypted. */
+    fun refusedHosts(flows: List<TrafficFlow> = this.flows): List<String> =
+        flows.filter { it.refused }.mapNotNull { it.host?.takeIf { host -> host.isNotEmpty() } }.distinct().sorted()
+
+    /** A stored body of the live recording, or of the saved session [sessionId]. Reads the disk. */
+    fun body(sessionId: String?, flowId: Long, index: Int, request: Boolean): ByteArray? {
+        val store = if (sessionId == null) liveBodies else TrafficBodies(bodiesDir(sessionId))
+        return store.read(flowId, index, request)
+    }
+
+    private fun bodiesDir(sessionId: String) = File(dir, "$sessionId.bodies")
+
     fun certificateFingerprint(): String? = CaptureBus.authority?.fingerprint()
 
     fun start() {
         error = null
         currentSessionId = null
+        liveBodies.clear()
         if (CaptureBus.decryptTls.get() && CaptureBus.authority == null) {
             CaptureBus.authority = openAuthority()
         }
@@ -203,8 +250,12 @@ class TrafficSniffer(context: Context) {
         )
         dir.mkdirs()
         File(dir, "${session.id}.json").writeText(session.toJson().toString())
+        liveBodies.copyTo(bodiesDir(id))
         val next = listOf(session) + saved.filterNot { it.id == id }
-        next.drop(KEEP).forEach { File(dir, "${it.id}.json").delete() }
+        next.drop(KEEP).forEach {
+            File(dir, "${it.id}.json").delete()
+            bodiesDir(it.id).deleteRecursively()
+        }
         saved = next.take(KEEP)
         currentSessionId = id
         savedBytes = flows.sumOf { it.sent + it.received }
@@ -217,6 +268,7 @@ class TrafficSniffer(context: Context) {
 
     fun delete(id: String) {
         File(dir, "$id.json").delete()
+        bodiesDir(id).deleteRecursively()
         if (currentSessionId == id) currentSessionId = null
         saved = saved.filterNot { it.id == id }
         changed()
@@ -230,6 +282,7 @@ class TrafficSniffer(context: Context) {
     fun clear() {
         if (running) return
         flows = emptyList()
+        liveBodies.clear()
         unsaved = false
         savedBytes = -1L
         currentSessionId = null
@@ -250,5 +303,8 @@ class TrafficSniffer(context: Context) {
     private companion object {
         const val KEEP = 30
         const val KEY_TLS = "traffic_decrypt_tls"
+        const val KEY_TLS_MODE = "traffic_tls_mode"
+        const val KEY_TLS_ONLY = "traffic_tls_only"
+        const val KEY_TLS_EXCEPT = "traffic_tls_except"
     }
 }

@@ -7,6 +7,8 @@ import cattivole.spectra.core.HttpExchange
 import cattivole.spectra.core.IpCodec
 import cattivole.spectra.core.LocalCa
 import cattivole.spectra.core.TlsBridge
+import cattivole.spectra.core.TlsHostFilter
+import cattivole.spectra.core.TrafficBodies
 import cattivole.spectra.core.TrafficFlow
 import cattivole.spectra.core.TrafficHints
 import java.io.FileInputStream
@@ -52,6 +54,11 @@ class TrafficProxy(
     private val onGiveUp: (StopReason) -> Unit = {},
     /** Apps keep refusing the certificate and none has accepted it: it is probably not trusted. */
     private val onRefusedCertificate: () -> Unit = {},
+    /** Where finished HTTP bodies are written. Null keeps none. */
+    private val bodies: TrafficBodies? = null,
+    /** Which hosts are decrypted while [decryptTls] is on. */
+    private val hostFilter: java.util.concurrent.atomic.AtomicReference<TlsHostFilter> =
+        java.util.concurrent.atomic.AtomicReference(TlsHostFilter()),
 ) {
     enum class StopReason { STALLED, OVERLOADED }
 
@@ -80,6 +87,16 @@ class TrafficProxy(
     private var refusals = 0
     private var acceptances = 0
     private var refusalNoticeSent = false
+
+    /** Writes bodies off the loop: a slow disk must not hold up packets. */
+    private val bodyWriter = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "spectra-bodies").apply { isDaemon = true } }
+
+    private fun keepBody(flowId: Long, index: Int, request: Boolean, body: ByteArray): Boolean {
+        val store = bodies ?: return false
+        if (!store.reserve(body.size)) return false
+        bodyWriter.execute { store.write(flowId, index, request, body) }
+        return true
+    }
 
     fun start() {
         reader = Thread(this::readTun, "spectra-tun").also { it.start() }
@@ -127,6 +144,7 @@ class TrafficProxy(
         }
         reader?.join(400)
         loop?.join(400)
+        bodyWriter.shutdown()
         try {
             selector.close()
         } catch (_: Exception) {
@@ -219,7 +237,9 @@ class TrafficProxy(
             IpCodec.UDP -> {
                 val header = IpCodec.parseUdp(ip.payload) ?: return
                 // QUIC hides HTTP from the TLS handshake. Dropping it makes the app try TCP, which can be read.
-                if (decryptTls.get() && header.dstPort == 443) {
+                // A host the filter leaves encrypted keeps its QUIC; one whose name is not known yet loses it.
+                val name = names[IpCodec.text(ip.dst)]
+                if (decryptTls.get() && header.dstPort == 443 && (name == null || hostFilter.get().allows(name))) {
                     udp.remove(key("UDP", ip.src, header.srcPort, ip.dst, header.dstPort))?.close()
                     return
                 }
@@ -443,7 +463,7 @@ class TrafficProxy(
         private val inbound = ArrayDeque<ByteArray>()
         private var inboundBytes = 0
         private val prelude = java.io.ByteArrayOutputStream()
-        private val http = HttpAssembler()
+        private val http = HttpAssembler(sink = { index, request, body -> keepBody(flow.id, index, request, body) })
         private var held: ByteArray? = null
         private var mitm: TlsBridge? = null
         private var inspect = Inspect.UNKNOWN
@@ -670,9 +690,10 @@ class TrafficProxy(
                 return true
             }
             val sni = TrafficHints.tlsServerName(buf)
-            if (sni != null && sni in refusedHosts) {
-                // This host's app refused our certificate before: read nothing, but let it work.
-                if (sni.isNotEmpty()) flow.host = sni
+            if ((sni != null && sni in refusedHosts) || !hostFilter.get().allows(sni?.takeIf { it.isNotEmpty() })) {
+                // This host's app refused our certificate before, or the user left it encrypted: read nothing,
+                // but let it work.
+                if (!sni.isNullOrEmpty()) flow.host = sni
                 flow.tls = true
                 inspect = Inspect.OTHER
                 passthroughHeld()
