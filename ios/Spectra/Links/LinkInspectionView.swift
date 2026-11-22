@@ -11,6 +11,8 @@ struct LinkInspectionView: View {
     @State private var tracing = false
     @State private var site: SiteReport?
     @State private var probing = false
+    /// Shared with the link's summary card: what either side checked shows on both.
+    @Environment(LinkShelf.self) private var shelf
 
     /// The address findings plus whatever the site check added.
     private var combinedVerdict: LinkInspection.Verdict {
@@ -77,20 +79,19 @@ struct LinkInspectionView: View {
             }
         }
         .navigationTitle("Link")
+        .summaryButton(subject: { .link(inspection.link) })
+        .onAppear {
+            let kept = shelf.entry(inspection.link)
+            if site == nil { site = kept.site }
+            if trace == nil, followsRedirects { trace = kept.redirects }
+        }
         .navigationBarTitleDisplayMode(.inline)
     }
 
     /// The registered name the registry should be asked about: none for an
     /// address or for an account on a shared platform, whose age is the
     /// platform's and says nothing about the account.
-    private var registryDomain: String? {
-        let ascii = inspection.asciiHost ?? inspection.host
-        guard IPv4Address(ascii) == nil, IPv6Address(ascii) == nil else { return nil }
-        let labels = ascii.lowercased().split(separator: ".").map(String.init)
-        guard labels.count >= 2 else { return nil }
-        let (site, platform) = LinkInspector.siteOf(labels)
-        return platform == nil ? site : nil
-    }
+    private var registryDomain: String? { LinkShelf.registryName(inspection) }
 
     @ViewBuilder
     private var siteSection: some View {
@@ -137,7 +138,9 @@ struct LinkInspectionView: View {
         let host = inspection.asciiHost ?? inspection.host
         let domain = registryDomain
         Task {
-            site = await SiteProbe.probe(host: host, domain: domain)
+            let report = await SiteProbe.probe(host: host, domain: domain)
+            site = report
+            shelf.keep(site: report, for: inspection.link)
             probing = false
         }
     }
@@ -214,7 +217,9 @@ struct LinkInspectionView: View {
                 Button("Expand redirects", systemImage: "arrow.triangle.turn.up.right.diamond") {
                     tracing = true
                     Task {
-                        trace = await RedirectTracer.trace(url)
+                        let found = await RedirectTracer.trace(url)
+                        trace = found
+                        shelf.keep(redirects: found, for: inspection.link)
                         tracing = false
                     }
                 }

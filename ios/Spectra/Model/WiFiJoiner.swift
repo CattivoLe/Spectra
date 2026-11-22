@@ -71,8 +71,9 @@ final class WiFiJoiner {
             if currentSSID == ssid { break }
             try? await Task.sleep(for: .seconds(1))
         }
-        if currentSSID == ssid, let passphrase, !passphrase.isEmpty {
-            onJoined?(ssid, passphrase)
+        // An open network is kept too, with no password: the Saved networks list shows what the phone joined.
+        if currentSSID == ssid {
+            onJoined?(ssid, passphrase ?? "")
         }
     }
 

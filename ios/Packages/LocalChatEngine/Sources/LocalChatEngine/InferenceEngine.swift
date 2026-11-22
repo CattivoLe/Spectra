@@ -40,16 +40,9 @@ public struct GenerationParams: Sendable, Codable, Equatable {
     public var seed: UInt32 = 42
     /// Разрешить модели «думать вслух» перед ответом, если она это умеет.
     public var thinking: Bool = false
-    /// A GBNF grammar that the output must switch to once one of `grammarTriggers` appears in the stream.
-    /// `nil` (or empty triggers) generates exactly as before: the grammar costs nothing unless it fires.
-    public var grammar: String?
-    /// Literal substrings that arm `grammar`, scanned for from the start of this generation's own output.
-    public var grammarTriggers: [String] = []
 
     public init(maxTokens: Int = 512, temperature: Float = 0.7, topP: Float = 0.9, topK: Int32 = 40, seed: UInt32 = 42,
-                thinking: Bool = false, grammar: String? = nil, grammarTriggers: [String] = []) {
-        self.grammar = grammar
-        self.grammarTriggers = grammarTriggers
+                thinking: Bool = false) {
         self.maxTokens = maxTokens
         self.temperature = temperature
         self.topP = topP
@@ -156,22 +149,4 @@ public protocol InferenceEngine: Sendable {
     func load(modelAt url: URL, config: EngineConfig) async throws -> ModelInfo
     func unload() async
     func generate(messages: [ChatMessage], params: GenerationParams) -> AsyncThrowingStream<GenerationEvent, Error>
-    /// Сколько токенов займёт этот диалог в контексте модели, без обрезки старого. `nil`, если модель не загружена
-    /// или движок не умеет считать. По нему рисуется «градусник» заполнения контекста.
-    func countTokens(messages: [ChatMessage], thinking: Bool) async -> Int?
-    /// A short side answer in one piece (no stream), always the most likely continuation.
-    /// The engine may run it in a separate context so the conversation's cache stays intact.
-    func complete(messages: [ChatMessage], maxTokens: Int) async throws -> String
-}
-
-extension InferenceEngine {
-    public func countTokens(messages: [ChatMessage], thinking: Bool) async -> Int? { nil }
-
-    public func complete(messages: [ChatMessage], maxTokens: Int) async throws -> String {
-        var text = ""
-        for try await event in generate(messages: messages, params: GenerationParams(maxTokens: maxTokens, temperature: 0, thinking: false)) {
-            if case .text(let piece) = event { text += piece }
-        }
-        return text
-    }
 }

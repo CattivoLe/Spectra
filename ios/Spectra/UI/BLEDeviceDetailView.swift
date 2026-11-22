@@ -183,9 +183,8 @@ struct BLEDeviceDetailView: View {
                 }
             }
         }
-        // Once its services were read, the assistant can explain them: `lastRead` outlives the link this screen drops.
-        .askAssistant(isShown: snapshot == nil && scanner.lastRead?.deviceID == device.id,
-                      question: { String(localized: "Analyze the GATT services of “\(device.displayName)”: what is this device, and what does it tell about itself?") })
+        // A summary of the device, before a GATT read too: `lastRead` outlives the link this screen drops and joins it.
+        .summaryButton(isShown: snapshot == nil, subject: { .bluetooth(id: device.id.uuidString) })
     }
 
     /// What kind of tag this is and whether it looks like it is travelling with the user.

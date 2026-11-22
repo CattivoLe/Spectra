@@ -7,6 +7,27 @@ notes name.
 
 ## Unreleased
 
+iPhone app, brought level with Android 1.1.0 (its version is now 1.1.0 too).
+
+- Assistant: summary cards instead of the chat, as on Android. ✨ on a screen
+  opens a card with the findings, the model's words and buttons for the next
+  check; More detail and Deep analysis can search the web for the device's
+  maker and model. Summaries live in folders. The old chats and the dossier
+  are erased on the first start. The Face ID lock stays.
+- Tabs: Wi‑Fi, LAN, Internet, Bluetooth and Assistant. The new Internet tab
+  holds the link check, the connection check, your sites, traceroute, the
+  speed test and the phone's traffic. There is no shared History tab: the
+  clock on each tab opens that tab's own history, and deleting or clearing
+  there removes only that tab's records.
+- LAN: Xiaomi Mi Home appliances are found through their UDP hello (sent to
+  each address in turn) and `_miio._udp`; a full port scan stands for 30
+  minutes across a rescan.
+- Wi‑Fi: a Saved networks screen with the passwords that worked (show, copy,
+  connect, add, edit, delete); the join prompt can show the password and
+  offers the saved one.
+- Bluetooth: the Trackers section is folded to the tags that need a look.
+- Licenses moved to the Sensor screen's menu; a slim "add a site" field.
+
 Android app.
 
 - Assistant: the old chats are gone. The assistant has worked through summary

@@ -40,8 +40,8 @@ model, never an address or a name) to the search service you pick.
   time and the clients on them. With the sensor: deauthentication attacks,
   hidden networks, steady traffic that may be a camera, and phones probing for
   networks they joined before. On Android the phone joins a network through
-  the system's own "save network" sheet, and **Saved networks** keeps the
-  passwords that worked (they go to the sensor too).
+  the system's own "save network" sheet. **Saved networks** (Android and
+  iPhone) keeps the passwords that worked (they go to the sensor too).
 - **LAN.** Every device on your network, its maker, open ports and what they
   mean: Telnet, open shares, camera streams, unencrypted web pages, UPnP port
   forwarding on the router. Smart-home appliances that open no TCP port at all,
@@ -59,8 +59,9 @@ model, never an address or a name) to the search service you pick.
   next check. **More detail** and **Deep analysis** can also search the web for
   the device's model and known problems and show its photo, with the sources
   listed. Summaries are filed in folders.
-- **History.** Finished scans are kept per network and day; a saved network,
-  host or Bluetooth device opens the same card as a live one.
+- **History.** Finished scans are kept per network and day; the clock on each
+  tab opens that tab's own history. A saved network, host or Bluetooth device
+  opens the same card as a live one.
 
 iOS does not let apps list nearby networks, so on iPhone the Wi-Fi list comes
 from the sensor: an M5Stack Cardputer (ESP32-S3), an ESP32-C5 or an
@@ -187,8 +188,17 @@ Copy `ios/Config/Signing.local.xcconfig.example` to
 `ios/Config/Signing.local.xcconfig`, set your team, open
 `ios/Spectra.xcodeproj` and run. Requires iOS 18.
 
-On the Sensor tab, **Find sensor** lists Cardputers in range; the app
-reconnects to the last one by itself. The **Demo sensor** switch feeds made-up
+The iPhone app is at 1.1.0, like the Android one, and has the same tabs: Wi‑Fi,
+LAN, Internet, Bluetooth and Assistant with its summary cards. What iOS does
+not allow is left out: the phone's own Wi-Fi scan, flashing the sensor over
+USB, and a broadcast miIO hello (the iPhone asks each address in turn). The
+assistant and the whole app can be locked with Face ID. If the matching
+`firmware/.pio/build/` directory is present, the build embeds each board's
+`firmware.bin` for updating the sensor over Bluetooth; a git worktree takes
+them from the main checkout.
+
+On the Sensor screen (the sensor capsule on the Wi‑Fi tab), **Find sensor**
+lists Cardputers in range; the app reconnects to the last one by itself. The **Demo sensor** switch feeds made-up
 networks through the same protocol, so the app can be worked on without the
 hardware; in the simulator, which has no Bluetooth, it turns on by itself.
 

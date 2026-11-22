@@ -345,7 +345,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Each board's pio build, under the name the app looks for. The app picks the one\n# whose chip matches the connected sensor (FirmwareUpdate.chipName).\nBUILD=\"${SRCROOT}/../firmware/.pio/build\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nmkdir -p \"$DEST\"\nembed() {\n  if [ -f \"$BUILD/$1/firmware.bin\" ]; then\n    cp \"$BUILD/$1/firmware.bin\" \"$DEST/$2\"\n  else\n    rm -f \"$DEST/$2\"\n  fi\n}\nembed m5stack-cardputer-adv firmware.bin\nembed esp32-c5-n4 firmware-esp32-c5.bin\nembed esp32-wroom32-ch340 firmware-esp32.bin\n";
+			shellScript = "# Each board's pio build, under the name the app looks for. The app picks the one\n# whose chip matches the connected sensor (FirmwareUpdate.chipName).\n# firmware/.pio is not in git, so a git worktree has no builds of its own: there the\n# main checkout's are used (as firmwareBuild in android/app/build.gradle.kts does).\n# This reads outside the declared inputs, so the target runs scripts unsandboxed.\nBUILD=\"${SRCROOT}/../firmware/.pio/build\"\nMAIN=\"\"\nif [ -f \"${SRCROOT}/../.git\" ]; then\n  # \"gitdir: <main>/.git/worktrees/<name>\"\n  GITDIR=$(sed -n 's/^gitdir: *//p' \"${SRCROOT}/../.git\")\n  MAIN=$(cd \"${SRCROOT}/..\" && cd \"$GITDIR/../../..\" 2>/dev/null && pwd)\nfi\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nmkdir -p \"$DEST\"\nembed() {\n  SOURCE=\"$BUILD/$1/firmware.bin\"\n  if [ ! -f \"$SOURCE\" ] && [ -n \"$MAIN\" ]; then\n    SOURCE=\"$MAIN/firmware/.pio/build/$1/firmware.bin\"\n  fi\n  if [ -f \"$SOURCE\" ]; then\n    cp \"$SOURCE\" \"$DEST/$2\"\n  else\n    rm -f \"$DEST/$2\"\n  fi\n}\nembed m5stack-cardputer-adv firmware.bin\nembed esp32-c5-n4 firmware-esp32-c5.bin\nembed esp32-wroom32-ch340 firmware-esp32.bin\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -490,13 +490,14 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/Spectra-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Spectra;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Spectra uses Bluetooth to connect to your Cardputer and to scan for nearby Bluetooth devices.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Spectra uses the camera to read QR codes and check the links in them. Nothing is recorded.";
-				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID locks Spectra and your assistant chats from other people. The check stays in iOS; the app never receives it.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID locks Spectra and your assistant summaries from other people. The check stays in iOS; the app never receives it.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Spectra scans the local network to find devices, their MAC addresses and open ports.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Spectra tags a saved scan with where your phone is, so you can tell captures apart on the map.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -508,7 +509,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1;
+				MARKETING_VERSION = 1.1.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -532,13 +533,14 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/Spectra-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Spectra;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Spectra uses Bluetooth to connect to your Cardputer and to scan for nearby Bluetooth devices.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Spectra uses the camera to read QR codes and check the links in them. Nothing is recorded.";
-				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID locks Spectra and your assistant chats from other people. The check stays in iOS; the app never receives it.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID locks Spectra and your assistant summaries from other people. The check stays in iOS; the app never receives it.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Spectra scans the local network to find devices, their MAC addresses and open ports.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Spectra tags a saved scan with where your phone is, so you can tell captures apart on the map.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -550,7 +552,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1;
+				MARKETING_VERSION = 1.1.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -637,7 +639,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = cattivole.Spectra.SpectraTunnel;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -681,7 +683,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = cattivole.Spectra.SpectraTunnel;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

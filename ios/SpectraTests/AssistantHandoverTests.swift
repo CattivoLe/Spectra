@@ -50,16 +50,19 @@ struct AssistantHandoverTests {
         let sources = AssistantSources(
             store: store, lan: LANScanner(), ble: BLEScanner(), history: history,
             link: SensorLink(store: store, history: history), probe: LinkProbe(), joiner: WiFiJoiner(),
-            speed: SpeedTester(), captures: shelf, memory: AssistantMemory()
+            speed: SpeedTester(), captures: shelf
         )
-        #expect(sources.readiness().hasCapture)
-        let english = sources.attachment(for: "Analyze the recorded traffic of this phone: which servers and apps did it talk to, and is anything unusual?")
-        #expect(english?.text.contains("Recorded traffic of this phone") == true)
-        #expect(english?.text.contains("api.example.com") == true)
-        let russian = sources.attachment(for: "Проанализируй записанный трафик этого телефона: с какими серверами и приложениями он связывался и нет ли чего-то необычного?")
-        #expect(russian?.text.contains("api.example.com") == true)
-        // Asking about it runs nothing: it is a reading, not a new capture.
-        #expect(AssistantActions.requested(in: "Проанализируй записанный трафик этого телефона: с какими серверами и приложениями он связывался и нет ли чего-то необычного?").isEmpty)
+        let facts = sources.cardFacts(.traffic)
+        #expect(facts?.data.contains("Recorded traffic of this phone") == true)
+        #expect(facts?.data.contains("api.example.com") == true)
+        #expect(facts?.title == "current recording")
+        // Nothing recorded and nothing handed over: there is no traffic card to open.
+        let empty = AssistantSources(
+            store: store, lan: LANScanner(), ble: BLEScanner(), history: history,
+            link: SensorLink(store: store, history: history), probe: LinkProbe(), joiner: WiFiJoiner(),
+            speed: SpeedTester(), captures: CaptureShelf()
+        )
+        #expect(empty.cardFacts(.traffic) == nil)
     }
 
     /// Without the button, the Traffic screen's own list is what the assistant reads.
@@ -72,42 +75,12 @@ struct AssistantHandoverTests {
 
     // MARK: One Wi‑Fi network
 
-    /// In a crowded place the network asked about is listed first, with its BSSID, even when it is the weakest.
-    @Test func theNetworkAskedAboutComesFirst() {
-        var snapshot = AssistantSnapshot()
-        snapshot.wifi = (0..<20).map { i in
-            AssistantSnapshot.Wifi(name: "Net\(i)", bssid: String(format: "AA:BB:CC:00:00:%02X", i), rssi: -40 - i,
-                                   channel: 6, band: "2.4", security: "WPA2")
-        }
-        let question = "Проанализируй Wi‑Fi сеть «Net19» (AA:BB:CC:00:00:13): шифрование, канал, сигнал, клиенты — всё ли с ней в порядке?"
-        #expect(AssistantDigest.topics(for: question) == [.wifi])
-        #expect(AssistantActions.requested(in: question).isEmpty)
-        let text = AssistantDigest.attachment(for: question, snapshot: snapshot)?.text ?? ""
-        let first = text.components(separatedBy: "\n").first { $0.hasPrefix("- ") }
-        #expect(first?.contains("Net19") == true)
-        #expect(first?.contains("AA:BB:CC:00:00:13") == true)
-    }
-
-    @Test func theLANQuestionIsAboutTheLAN() {
-        let english = "Analyze the devices on my local network: what each one is and what deserves attention?"
-        #expect(AssistantDigest.topics(for: english) == [.lan])
-        #expect(AssistantActions.requested(in: english).isEmpty)
-        let russian = "Проанализируй устройства в моей локальной сети: что это за устройства и на что стоит обратить внимание?"
-        #expect(AssistantDigest.topics(for: russian).contains(.lan))
-        #expect(AssistantActions.requested(in: russian).isEmpty)
-    }
-
     // MARK: GATT
 
     private static func device(_ name: String, rssi: Int = -50) -> BLEDevice {
         let device = BLEDevice(id: UUID(), rssi: rssi, seen: .now)
         device.absorb(BLEAdvertisement.parse(BLEFields(localName: name)), peripheralName: nil, rssi: rssi, at: .now)
         return device
-    }
-
-    @Test func gattQuestionsReadTheBluetoothSection() {
-        #expect(AssistantDigest.topics(for: "Проанализируй GATT-сервисы «Momentum 3»: что это за устройство и что оно сообщает о себе?") == [.bluetooth])
-        #expect(AssistantDigest.topics(for: "what do these characteristics mean") == [.bluetooth])
     }
 
     @Test func theLastGATTReadTravelsWithABluetoothQuestion() {
@@ -119,29 +92,9 @@ struct AssistantHandoverTests {
             ]),
         ], readAt: .now)
         snapshot.gatt = GATTDigest.text(read, intro: "Read just now from")
-        let text = AssistantDigest.attachment(for: "Analyze the GATT services of “Momentum 3”", snapshot: snapshot)?.text ?? ""
+        let text = AssistantDigest.section(.bluetooth, snapshot: snapshot)
         #expect(text.contains("Device Information"))
         #expect(text.contains("Sennheiser"))
     }
 
-    /// «подключись к Momentum 3» with the device already heard: the app reads it before the model speaks,
-    /// instead of sweeping Bluetooth and hoping the model calls connect_bluetooth itself.
-    @Test func aNamedDeviceIsReadBeforeTheModelSpeaks() throws {
-        let devices = [Self.device("Momentum 3", rssi: -70), Self.device("Galaxy Buds2 Pro"), Self.device("Galaxy")]
-        let calls = AssistantActions.preflightCalls(for: "подключись к Momentum 3", devices: devices)
-        #expect(calls.count == 1)
-        let call = try #require(calls.first)
-        let object = try #require(try JSONSerialization.jsonObject(with: Data(call.utf8)) as? [String: String])
-        #expect(object["tool"] == "connect_bluetooth")
-        #expect(object["text"] == "Momentum 3")
-
-        // The longest name named wins, and a read verb is enough.
-        let read = AssistantActions.preflightCalls(for: "прочитай GATT galaxy buds2 pro", devices: devices)
-        #expect(read.first?.contains("Galaxy Buds2 Pro") == true)
-
-        // Unknown name: sweep first, as before. Asking to analyze a read already made: nothing runs.
-        #expect(AssistantActions.preflightCalls(for: "подключись к Momentum 4", devices: devices) == ["scan_bluetooth"])
-        #expect(AssistantActions.preflightCalls(for: "Проанализируй GATT-сервисы «Momentum 3»: что это за устройство?", devices: devices).isEmpty)
-        #expect(AssistantActions.preflightCalls(for: "не подключайся к Momentum 3", devices: devices).isEmpty)
-    }
 }

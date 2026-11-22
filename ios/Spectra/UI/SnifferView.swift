@@ -85,9 +85,9 @@ struct SnifferView: View {
         .navigationTitle("Traffic")
         .sensoryFeedback(.success, trigger: saves)
         .searchable(text: $search, prompt: "Host or request")
-        .askAssistant(isShown: !sniffer.flows.isEmpty,
-                      question: { String(localized: "Analyze the recorded traffic of this phone: which servers and apps did it talk to, and is anything unusual?") },
-                      prepare: { captures.keep(traffic: sniffer.flows, name: sniffer.running ? "recording in progress" : "current recording") })
+        .summaryButton(isShown: !sniffer.flows.isEmpty,
+                       subject: { .traffic },
+                       prepare: { captures.keep(traffic: sniffer.flows, name: sniffer.running ? "recording in progress" : "current recording") })
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -252,9 +252,9 @@ struct SavedSessionView: View {
         }
         .navigationTitle("Session")
         .navigationBarTitleDisplayMode(.inline)
-        .askAssistant(isShown: !session.flows.isEmpty,
-                      question: { String(localized: "Analyze the recorded traffic of this phone: which servers and apps did it talk to, and is anything unusual?") },
-                      prepare: {
+        .summaryButton(isShown: !session.flows.isEmpty,
+                       subject: { .traffic },
+                       prepare: {
                           let stopped = Date(timeIntervalSince1970: Double(session.stoppedAt) / 1000)
                           captures.keep(traffic: session.flows,
                                         name: "saved session of " + stopped.formatted(.dateTime.day().month().hour().minute()))

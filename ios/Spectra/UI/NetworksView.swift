@@ -10,6 +10,8 @@ struct NetworksView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var search = ""
     @State private var showChannels = false
+    @State private var showHistory = false
+    @State private var showSaved = false
     @State private var expandedThreats: Set<String> = []
     @State private var pickingPcap = false
     @State private var pcapURL: URL?
@@ -248,6 +250,12 @@ struct NetworksView: View {
             .navigationDestination(isPresented: $showChannels) {
                 ChannelsView()
             }
+            .navigationDestination(isPresented: $showHistory) {
+                HistoryView(area: .wifi)
+            }
+            .navigationDestination(isPresented: $showSaved) {
+                SavedNetworksView()
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     SensorBar(openSensor: openSensor)
@@ -263,9 +271,14 @@ struct NetworksView: View {
                 if #available(iOS 26, *) {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 }
+                HistoryButton(area: .wifi, isPresented: $showHistory)
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("Decode pcap…", systemImage: "doc.text.magnifyingglass") { pickingPcap = true }
+                        Button("Saved networks…", systemImage: "key") { showSaved = true }
                         Divider()
                         Picker("Sort by", selection: $sort) {
                             ForEach(Sort.allCases) { Text($0.label).tag($0) }

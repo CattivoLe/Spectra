@@ -102,18 +102,6 @@ public final class EngineController {
         }
     }
 
-    /// A short side answer (for example, a search query). Only while the model is loaded and idle.
-    public func complete(messages: [ChatMessage], maxTokens: Int = 32) async throws -> String {
-        guard state == .ready else { throw state == .generating || state == .loading ? EngineError.busy : EngineError.noModelLoaded }
-        return try await engine.complete(messages: messages, maxTokens: maxTokens)
-    }
-
-    /// Сколько токенов займёт диалог в контексте. Считается, только пока модель загружена и свободна.
-    public func countTokens(messages: [ChatMessage], thinking: Bool = false) async -> Int? {
-        guard state == .ready else { return nil }
-        return await engine.countTokens(messages: messages, thinking: thinking)
-    }
-
     /// Останавливает текущую генерацию. Движок заканчивает на ближайшем токене.
     public func stop() {
         generation?.cancel()

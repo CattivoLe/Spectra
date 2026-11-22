@@ -1,11 +1,22 @@
 import SwiftUI
 
-/// The tools that check something on demand: a link, and the connection.
+/// The Internet tab: checks of the way out of whatever network the phone is on. The connection check, a link,
+/// the speed, the route, and the phone's own traffic. The LAN tab keeps the devices of the local network.
+struct InternetView: View {
+    var body: some View {
+        NavigationStack {
+            ChecksView()
+        }
+    }
+}
+
+/// The tools that check something on demand: a link, the connection, the speed, the route and the traffic.
 struct ChecksView: View {
     @Environment(LinkProbe.self) private var probe
     @Environment(SpeedTester.self) private var tester
     @AppStorage("probeViaVpn") private var viaVpn = false
     @State private var showConnection = false
+    @State private var showHistory = false
     @State private var linkText = ""
     @State private var inspection: LinkInspection?
     @State private var noLink = false
@@ -170,6 +181,12 @@ struct ChecksView: View {
                 } footer: {
                     Text("Eight seconds down and eight up, to Cloudflare or a Measurement Lab server you pick, with latency under load.")
                 }
+
+                Section {
+                    NavigationLink { SnifferView() } label: {
+                        Label("Traffic", systemImage: "waveform.path.ecg")
+                    }
+                }
             }
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
@@ -178,9 +195,15 @@ struct ChecksView: View {
                         Button("Done") { editingLink = false }
                             .fontWeight(.semibold)
                     }
+                } else {
+                    HistoryButton(area: .internet, isPresented: $showHistory)
                 }
             }
-            .navigationTitle("Checks")
+            .navigationTitle("Internet")
+            .navigationDestination(isPresented: $showHistory) {
+                HistoryView(area: .internet)
+            }
+            .summaryButton(placement: .topBarLeading, subject: { .internet })
             .navigationDestination(isPresented: $showConnection) {
                 LinkView()
             }

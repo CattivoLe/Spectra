@@ -23,6 +23,7 @@
 		<string>_smb._tcp</string>
 		<string>_ssh._tcp</string>
 		<string>_http._tcp</string>
+		<string>_miio._udp</string>
 	</array>
 </dict>
 </plist>

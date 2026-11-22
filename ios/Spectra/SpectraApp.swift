@@ -17,10 +17,10 @@ struct SpectraApp: App {
     @State private var speedTester = SpeedTester()
     @State private var resourceWatch = ResourceWatch()
     @State private var routeTracer = RouteTracer()
+    @State private var linkShelf = LinkShelf()
     @State private var assistant = AssistantModel()
     /// The capture last decoded, for the assistant to talk about.
     @State private var captures = CaptureShelf()
-    @State private var assistantMemory = AssistantMemory()
 
     init() {
         let store = NetworkStore()
@@ -48,6 +48,7 @@ struct SpectraApp: App {
                 .environment(speedTester)
                 .environment(resourceWatch)
                 .environment(routeTracer)
+                .environment(linkShelf)
                 .environment(bleScanner)
                 .environment(location)
                 .environment(watchList)
@@ -67,19 +68,20 @@ struct SpectraApp: App {
                     let sources = AssistantSources(
                         store: store, lan: lanScanner, ble: bleScanner, history: history,
                         link: link, probe: linkProbe, joiner: joiner, speed: speedTester, captures: captures,
-                        memory: assistantMemory
+                        resources: resourceWatch, tracer: routeTracer, links: linkShelf
                     )
                     captures.recordedTraffic = { [weak sniffer] in sniffer?.assistantRecording }
-                    assistant.dataSource = { question in sources.attachment(for: question) }
-                    assistant.memory = assistantMemory
-                    assistant.actions = AssistantActions(sources: sources, memory: assistantMemory)
+                    let actions = AssistantActions(sources: sources)
+                    assistant.actions = actions
+                    assistant.cards = AssistantCardRunner(assistant: assistant, sources: sources, actions: actions)
                 }
         }
     }
 }
 
 struct RootView: View {
-    enum Tab: Hashable { case networks, lan, bluetooth, history, assistant }
+    /// No shared History tab: each tab with saved scans opens its own history (the clock in its top bar).
+    enum Tab: Hashable { case networks, lan, internet, bluetooth, assistant }
 
     @Environment(HistoryStore.self) private var history
     @Environment(LinkProbe.self) private var linkProbe
@@ -108,9 +110,6 @@ struct RootView: View {
             source: "This iPhone"
         )
         history.upsertBluetooth(Array(bleScanner.devices.values), source: "This iPhone")
-        // The same tick teaches the assistant what is usual for each device, so "is this normal for it?" has
-        // something to compare against later.
-        assistant.actions?.sources.recordBaselines()
     }
 
     /// One notice per finished scan, for the hosts that scan marked new.
@@ -139,12 +138,13 @@ struct RootView: View {
             LANView()
                 .tabItem { Label("LAN", systemImage: "network") }
                 .tag(Tab.lan)
+            // Checks of the way out: connection, link, speed, route and the phone's own traffic.
+            InternetView()
+                .tabItem { Label("Internet", systemImage: "globe") }
+                .tag(Tab.internet)
             BLEView()
                 .tabItem { Label("Bluetooth", systemImage: "wave.3.right") }
                 .tag(Tab.bluetooth)
-            HistoryView()
-                .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
-                .tag(Tab.history)
             AssistantView()
                 .tabItem { Label("Assistant", systemImage: "sparkles") }
                 .tag(Tab.assistant)

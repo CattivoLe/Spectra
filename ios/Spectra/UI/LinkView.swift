@@ -157,6 +157,7 @@ struct LinkView: View {
         }
         .navigationTitle("Connection")
         .navigationBarTitleDisplayMode(.inline)
+        .summaryButton(isShown: !probe.running && probe.report?.status != nil, subject: { .internet })
         .toolbar {
             if !autosave, !probe.running, let report, report.status != nil, report.status != .noNetwork {
                 ToolbarItem(placement: .topBarTrailing) {

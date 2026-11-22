@@ -203,25 +203,15 @@ struct NetworkDetailView: View {
         .navigationDestination(item: $decoding) { capture in
             PcapView(capture: capture)
         }
-        // Only a network still in the live list: a saved one is not in what the assistant reads.
-        .askAssistant(isShown: lookup != nil, question: { askQuestion(network) })
+        // Only a network still in the live list: a saved one is not in what the summary reads.
+        .summaryButton(isShown: lookup != nil, subject: { .wifi(bssid: network.latest.bssid.description) })
         .onDisappear { link.stopRawCapture() }
         .task { await joiner.refreshCurrent() }
-        .alert(
-            pendingJoin.map { String(localized: "Join “\($0.ssid)”") } ?? "",
-            isPresented: Binding(
-                get: { pendingJoin != nil },
-                set: { if !$0 { pendingJoin = nil } }
-            ),
-            presenting: pendingJoin
-        ) { join in
-            SecureField("Password", text: $passphrase)
-            Button("Connect") {
-                Task { await joiner.join(ssid: join.ssid, passphrase: passphrase, isWEP: join.isWEP, hidden: join.hidden) }
+        .sheet(item: $pendingJoin) { join in
+            JoinPasswordSheet(ssid: join.ssid, password: $passphrase) {
+                let password = passphrase
+                Task { await joiner.join(ssid: join.ssid, passphrase: password, isWEP: join.isWEP, hidden: join.hidden) }
             }
-            Button("Cancel", role: .cancel) {}
-        } message: { join in
-            Text("Enter the password for “\(join.ssid)”.")
         }
     }
 
@@ -277,26 +267,25 @@ struct NetworkDetailView: View {
                 Label("Connect to this network", systemImage: "wifi")
             }
         case .psk, .wep:
+            let saved = link.knownPassword(for: ssid)
+            if let saved {
+                Button {
+                    Task { await joiner.join(ssid: ssid, passphrase: saved, isWEP: method == .wep, hidden: hidden) }
+                } label: {
+                    Label("Connect with the saved password", systemImage: "wifi")
+                }
+            }
             Button {
-                passphrase = link.knownPassword(for: ssid) ?? ""
+                passphrase = saved ?? ""
                 pendingJoin = PendingJoin(ssid: ssid, isWEP: method == .wep, hidden: hidden)
             } label: {
-                Label("Enter password & connect", systemImage: "wifi")
+                Label(saved == nil ? "Enter password & connect" : "Use another password", systemImage: saved == nil ? "wifi" : "key")
             }
         }
     }
 
     /// What the ✨ button asks: this one network by name and BSSID, so the assistant's Wi‑Fi list puts it first,
     /// plus the traffic captured on it when the sensor still holds that capture.
-    private func askQuestion(_ network: TrackedNetwork) -> String {
-        let name = network.revealedSSID ?? network.latest.displayName
-        let bssid = network.latest.bssid.description
-        let captured = link.rawCaptureNetwork == network.latest.bssid && !link.rawCapturing && link.rawFrameCount > 0
-        return captured
-            ? String(localized: "Analyze the Wi‑Fi network “\(name)” (\(bssid)) and the traffic captured on it: encryption, channel, signal, clients — is everything fine with it?")
-            : String(localized: "Analyze the Wi‑Fi network “\(name)” (\(bssid)): encryption, channel, signal, clients — is everything fine with it?")
-    }
-
     // MARK: Capture traffic → .pcap
 
     @ViewBuilder

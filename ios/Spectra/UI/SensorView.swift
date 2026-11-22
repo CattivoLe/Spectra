@@ -8,6 +8,7 @@ struct SensorView: View {
     @State private var pickingFirmware = false
     @State private var pendingFirmware: PendingFirmware?
     @State private var installTaps = 0
+    @State private var showLicenses = false
 
     struct PendingFirmware: Identifiable {
         let id = UUID()
@@ -220,9 +221,19 @@ struct SensorView: View {
             }
             .navigationTitle("Sensor")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button("Licenses…", systemImage: "doc.text") { showLicenses = true }
+                    } label: {
+                        Label("More", systemImage: "ellipsis.circle")
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .navigationDestination(isPresented: $showLicenses) {
+                LicensesView()
             }
             .sensoryFeedback(trigger: link.firmwareUpdate?.stage) { _, stage in
                 switch stage {

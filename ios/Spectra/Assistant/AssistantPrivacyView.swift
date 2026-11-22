@@ -44,10 +44,10 @@ struct AssistantPrivacyView: View {
                 }
 
                 Section("How it works") {
-                    fact("sparkle.magnifyingglass", "The assistant reads what Spectra found (networks, devices, history) only on this phone, and only when a question needs it. It can also run a scan or check itself — only ones that read or measure, never anything that transmits over the air.")
-                    fact("bolt.horizontal", "With that same switch, it can also run a fresh scan or check itself — the same ones you can run by hand on the other tabs. It never does anything that sends to the air, such as deauthenticating a device or flashing the sensor.")
-                    fact("lock.doc.fill", "Chats are encrypted (AES-256). The key is in this phone's keychain and is never copied anywhere.")
-                    fact("icloud.slash", "Chats are not included in iCloud or computer backups.")
+                    fact("sparkle.magnifyingglass", "A summary reads what Spectra found (networks, devices, history) on this phone only. Its findings come from the app's own rules; the model on this phone only puts them into words.")
+                    fact("bolt.horizontal", "The buttons under a summary run the same scans and checks you can run by hand on the other tabs. Nothing that sends to the air, such as deauthenticating a device or flashing the sensor, is ever among them.")
+                    fact("lock.doc.fill", "Summaries are encrypted (AES-256). The key is in this phone's keychain and is never copied anywhere.")
+                    fact("icloud.slash", "Summaries are not included in iCloud or computer backups.")
                     if model.web.isEnabled {
                         fact("globe", "Web search is allowed: the query text goes out, and you can see it in the log. With page reading on, the phone also opens the pages found, as a browser does. Besides this, the internet is used to download models.")
                     } else {
@@ -57,7 +57,7 @@ struct AssistantPrivacyView: View {
                 }
 
                 Section {
-                    Button("Delete all chats (\(chatCount))", systemImage: "trash", role: .destructive) { confirmErase = true }
+                    Button("Delete all summaries (\(chatCount))", systemImage: "trash", role: .destructive) { confirmErase = true }
                         .disabled(chatCount == 0)
                 } footer: {
                     Text("Models and settings stay.")
@@ -67,7 +67,7 @@ struct AssistantPrivacyView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task { await refresh() }
-            .confirmationDialog("Delete all chats?", isPresented: $confirmErase, titleVisibility: .visible) {
+            .confirmationDialog("Delete all summaries?", isPresented: $confirmErase, titleVisibility: .visible) {
                 Button("Delete for good", role: .destructive) {
                     Task {
                         do { try await model.eraseChats() } catch { errorText = error.localizedDescription }

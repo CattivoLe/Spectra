@@ -87,6 +87,9 @@ final class LANDevice: Identifiable {
     }
     /// Set while a manual port scan of this host is in progress, 0...1.
     var portScanFraction: Double?
+    /// When every TCP port of this host was last checked, not only the common list.
+    var allPortsScannedAt: Date?
+    var allPortsScanned: Bool { allPortsScannedAt != nil }
     var firstSeen: Date
     var lastSeen: Date
 
@@ -109,6 +112,7 @@ final class LANDevice: Identifiable {
     /// A hostname worth showing. Blank, "." and the address itself are not:
     /// those used to replace a real name with an empty title.
     nonisolated static func usefulHostname(_ name: String, ip: String) -> String? {
+        if Miio.isInstanceName(name) { return nil }
         guard let shown = presentable(name), shown.caseInsensitiveCompare(ip) != .orderedSame else { return nil }
         return shown
     }

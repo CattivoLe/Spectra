@@ -4,6 +4,7 @@ struct BLEView: View {
     @Environment(BLEScanner.self) private var scanner
     @Environment(\.scenePhase) private var scenePhase
     @State private var search = ""
+    @State private var showHistory = false
     @AppStorage("bleSort") private var sort: Sort = .signal
     @AppStorage("bleScope") private var scope: Scope = .all
     @AppStorage("bleShowOutOfRange") private var showOutOfRange = false
@@ -43,6 +44,9 @@ struct BLEView: View {
             .navigationDestination(for: UUID.self) { id in
                 BLEDeviceDetailView(id: id)
             }
+            .navigationDestination(isPresented: $showHistory) {
+                HistoryView(area: .bluetooth)
+            }
             .toolbar {
                 if !autosave {
                     ToolbarItem(placement: .topBarLeading) {
@@ -54,6 +58,10 @@ struct BLEView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     BLEStatusBar()
                 }
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+                HistoryButton(area: .bluetooth, isPresented: $showHistory)
                 if #available(iOS 26, *) {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 }
@@ -84,6 +92,8 @@ private struct BLEDeviceList: View {
     var sort: BLEView.Sort
     var scope: BLEView.Scope
     var showOutOfRange: Bool
+    /// The Trackers section, folded to the tags that need a look; open, it lists every tag heard.
+    @State private var trackersOpen = false
 
     private var watching: [BLEDevice] {
         WatchList.present(watchList.ids, in: Array(scanner.devices.values), now: scanner.now)
@@ -128,20 +138,52 @@ private struct BLEDeviceList: View {
     var body: some View {
         List {
             if !trackers.isEmpty, search.isEmpty {
+                let alarming = trackers.contains { $0.assessment.level == .alert }
+                // Tags near their owners are everyday keys and bags: folded away unless asked for, the alarming ones stay.
+                let shown = trackersOpen ? trackers : trackers.filter { $0.assessment.level != .info }
                 Section {
-                    ForEach(trackers, id: \.device.id) { item in
+                    ForEach(shown, id: \.device.id) { item in
                         NavigationLink(value: item.device.id) {
                             TrackerRow(device: item.device, assessment: item.assessment)
                         }
                     }
                 } header: {
-                    Label("Trackers", systemImage: "tag.fill")
-                        .foregroundStyle(trackers.contains { $0.assessment.level == .alert } ? .red : .orange)
+                    Button {
+                        withAnimation { trackersOpen.toggle() }
+                    } label: {
+                        HStack {
+                            Label {
+                                if shown.isEmpty {
+                                    Text("Trackers: \(trackers.count), all near their owners")
+                                } else {
+                                    Text("Trackers")
+                                }
+                            } icon: {
+                                Image(systemName: "tag.fill")
+                            }
+                            .foregroundStyle(alarming ? .red : .orange)
+                            Spacer()
+                            if trackersOpen || shown.count < trackers.count {
+                                HStack(spacing: 4) {
+                                    if trackersOpen {
+                                        Text("Fold")
+                                    } else {
+                                        Text("All \(trackers.count)")
+                                    }
+                                    Image(systemName: trackersOpen ? "chevron.up" : "chevron.down")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .foregroundStyle(.tint)
+                            }
+                        }
                         .font(.subheadline.weight(.semibold))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 } footer: {
-                    if trackers.contains(where: { $0.assessment.level == .alert }) {
+                    if alarming {
                         Text("A tag away from its owner has stayed near you for a while. Move somewhere else and check whether it is still here.")
-                    } else {
+                    } else if trackersOpen {
                         Text("Tile, Samsung SmartTag, Chipolo and Find My Device tags report their position through other people's phones. One near its owner is just someone's keys.")
                     }
                 }

@@ -61,6 +61,7 @@ struct SpeedTestView: View {
         }
         .navigationTitle("Speed test")
         .navigationBarTitleDisplayMode(.inline)
+        .summaryButton(isShown: !tester.running && tester.result != nil, subject: { .internet })
         .toolbar {
             // The result rides on the current connection check, which is what gets saved.
             if !autosave, !tester.running, tester.result != nil, let report = probe.report {

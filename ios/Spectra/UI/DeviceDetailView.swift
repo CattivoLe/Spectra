@@ -245,6 +245,8 @@ struct DeviceDetailView: View {
         }
         .navigationTitle(device.ipAddress)
         .navigationBarTitleDisplayMode(.inline)
+        // A host in the live list: a saved one is not in what the summary reads.
+        .summaryButton(isShown: snapshot == nil, subject: { .host(ip: device.ipAddress) })
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Label", systemImage: device.trust == .unknown && device.customName == nil ? "tag" : "tag.fill") {

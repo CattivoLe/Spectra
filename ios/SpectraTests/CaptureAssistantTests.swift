@@ -45,20 +45,11 @@ struct CaptureAssistantTests {
         #expect(CaptureDigest.text(analysis, name: "x", origin: "y").contains("holds no packets"))
     }
 
-    @Test func decodeRequestsReadTheCapture() throws {
-        #expect(AssistantDigest.topics(for: "Расшифруй записанный pcap") == [.capture])
-        #expect(AssistantDigest.topics(for: "Что в захвате трафика?").contains(.capture))
-        #expect(AssistantDigest.topics(for: "Decode the capture I just took") == [.capture])
-        #expect(!AssistantDigest.topics(for: "Analyze everything around me").contains(.capture), "an overview does not drag in a capture")
-
+    @Test func theCaptureSectionReadsTheCapture() throws {
         var snapshot = AssistantSnapshot()
         snapshot.capture = "Traffic capture \"Home\", taken by the Spectra sensor: 9 packets."
-        let attachment = try #require(AssistantDigest.attachment(for: "Расшифруй записанный pcap", snapshot: snapshot))
-        #expect(attachment.text.contains("Traffic capture \"Home\""))
-        #expect(attachment.topics == [String(localized: "Traffic capture")])
-
-        let none = try #require(AssistantDigest.attachment(for: "расшифруй pcap", snapshot: AssistantSnapshot()))
-        #expect(none.text.contains("none yet"), "with no capture the model can say where to take one")
+        #expect(AssistantDigest.section(.capture, snapshot: snapshot).contains("Traffic capture \"Home\""))
+        #expect(AssistantDigest.section(.capture, snapshot: AssistantSnapshot()).contains("none yet"), "with no capture the model can say where to take one")
     }
 
     @Test func decodedCaptureReachesTheAssistant() throws {
@@ -68,7 +59,7 @@ struct CaptureAssistantTests {
         let sources = AssistantSources(
             store: store, lan: LANScanner(), ble: BLEScanner(), history: history,
             link: SensorLink(store: store, history: history), probe: LinkProbe(), joiner: WiFiJoiner(), speed: SpeedTester(),
-            captures: shelf, memory: AssistantMemory()
+            captures: shelf
         )
         #expect(sources.snapshot().capture == nil)
         shelf.keep(name: "office.pcap", analysis: try Self.sample, fromSensor: false)

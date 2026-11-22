@@ -28,6 +28,37 @@ public enum ContentExtractor {
     private static let junkNamePattern = #"(^|[\s_-])(nav|navbar|menu|footer|sidebar|comments?|share|social|advert|ads?|banner|cookie|subscribe|related|breadcrumbs?|promo|popup|modal|newsletter|navbox|mw-editsection|reference|toc)([\s_-]|$)"#
     private static let blockTags: Set<String> = ["h1", "h2", "h3", "h4", "p", "li", "pre", "blockquote", "dd", "tr"]
 
+    /// Text a search service already took out of the page (markdown or plain): «#» lines become headings, the rest
+    /// paragraphs, so `Chunker` cuts it like a fetched page.
+    public static func fromText(title: String, text: String) -> ExtractedPage {
+        var blocks: [ExtractedPage.Block] = []
+        var paragraph: [String] = []
+        func flush() {
+            let text = plainMarkdown(paragraph.joined(separator: " "))
+            if !text.isEmpty { blocks.append(.init(text: text, isHeading: false)) }
+            paragraph = []
+        }
+        for raw in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                flush()
+            } else if line.hasPrefix("#") {
+                flush()
+                let heading = plainMarkdown(String(line.drop { $0 == "#" || $0 == " " }))
+                if !heading.isEmpty { blocks.append(.init(text: heading, isHeading: true)) }
+            } else {
+                paragraph.append(line)
+            }
+        }
+        flush()
+        return ExtractedPage(title: title, blocks: blocks)
+    }
+
+    /// Markdown links and images carry addresses the model does not need: only their words stay.
+    private static func plainMarkdown(_ text: String) -> String {
+        clean(text.replacing(/!\[[^\]]*\]\([^)]*\)/, with: "").replacing(/\[([^\]]*)\]\([^)]*\)/) { String($0.output.1) })
+    }
+
     public static func extract(html: String, url: URL) -> ExtractedPage {
         guard let document = try? SwiftSoup.parse(html, url.absoluteString) else { return ExtractedPage(title: "", blocks: []) }
 

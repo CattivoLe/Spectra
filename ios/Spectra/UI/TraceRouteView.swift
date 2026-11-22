@@ -82,6 +82,7 @@ struct TraceRouteView: View {
             }
         }
         .navigationTitle("Traceroute")
+        .summaryButton(isShown: !tracer.running && tracer.trace != nil, subject: { .internet })
         .scrollDismissesKeyboard(.interactively)
         .onChange(of: tracer.places) { _, _ in camera = .automatic }
     }
