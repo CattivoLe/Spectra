@@ -10,6 +10,7 @@ struct NetworksView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var search = ""
     @State private var showChannels = false
+    @State private var showHistory = false
     @State private var expandedThreats: Set<String> = []
     @State private var pickingPcap = false
     @State private var pcapURL: URL?
@@ -248,6 +249,9 @@ struct NetworksView: View {
             .navigationDestination(isPresented: $showChannels) {
                 ChannelsView()
             }
+            .navigationDestination(isPresented: $showHistory) {
+                HistoryView(area: .wifi)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     SensorBar(openSensor: openSensor)
@@ -260,6 +264,10 @@ struct NetworksView: View {
                         showChannels = true
                     }
                 }
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+                HistoryButton(area: .wifi, isPresented: $showHistory)
                 if #available(iOS 26, *) {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 }

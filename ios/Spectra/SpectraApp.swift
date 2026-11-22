@@ -80,7 +80,8 @@ struct SpectraApp: App {
 }
 
 struct RootView: View {
-    enum Tab: Hashable { case networks, lan, bluetooth, history, assistant }
+    /// No shared History tab: each tab with saved scans opens its own history (the clock in its top bar).
+    enum Tab: Hashable { case networks, lan, internet, bluetooth, assistant }
 
     @Environment(HistoryStore.self) private var history
     @Environment(LinkProbe.self) private var linkProbe
@@ -137,12 +138,13 @@ struct RootView: View {
             LANView()
                 .tabItem { Label("LAN", systemImage: "network") }
                 .tag(Tab.lan)
+            // Checks of the way out: connection, link, speed, route and the phone's own traffic.
+            InternetView()
+                .tabItem { Label("Internet", systemImage: "globe") }
+                .tag(Tab.internet)
             BLEView()
                 .tabItem { Label("Bluetooth", systemImage: "wave.3.right") }
                 .tag(Tab.bluetooth)
-            HistoryView()
-                .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
-                .tag(Tab.history)
             AssistantView()
                 .tabItem { Label("Assistant", systemImage: "sparkles") }
                 .tag(Tab.assistant)

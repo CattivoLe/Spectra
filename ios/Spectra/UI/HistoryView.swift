@@ -10,16 +10,19 @@ enum HistoryGrouping: String, CaseIterable, Identifiable {
     var systemImage: String { self == .date ? "calendar" : "mappin.and.ellipse" }
 }
 
+/// One tab's saved sessions: only the records of `area`, each session cut down to them. Pushed from the tab's
+/// clock button; every tab has its own.
 struct HistoryView: View {
+    var area: HistoryArea
     @Environment(HistoryStore.self) private var history
     @AppStorage("historyGrouping") private var grouping: HistoryGrouping = .date
     @AppStorage("autosaveHistory") private var autosave = true
     @State private var confirmClear = false
     @State private var showSettings = false
-    @State private var kindFilter: HistoryEntry.Kind?
     /// Expanded group keys. Today starts open; every other group stays folded until tapped.
     @State private var expanded: Set<String> = [Self.dateGroupID(Calendar.current.startOfDay(for: .now))]
-    @State private var path = NavigationPath()
+    /// A session opened from the map.
+    @State private var opened: UUID?
     @State private var selectedPin: HistoryPin?
     @State private var showUnlocated = false
     @State private var camera: MapCameraPosition = .automatic
@@ -31,22 +34,14 @@ struct HistoryView: View {
     // Live map is hidden for now.
     // @State private var showLive = false
 
-    private var hasImported: Bool { history.entries.contains { $0.importedFrom != nil } }
+    /// This tab's part of every saved session.
+    private var all: [HistoryEntry] { history.entries.forArea(area) }
+
+    private var hasImported: Bool { all.contains { $0.importedFrom != nil } }
 
     private var shown: [HistoryEntry] {
         let imported = importedShelf && hasImported
-        let shelf = history.entries.filter { ($0.importedFrom != nil) == imported }
-        guard let kind = kindFilter else { return shelf }
-        return shelf.filter { $0.kind == kind }
-    }
-
-    private var availableKinds: [HistoryEntry.Kind] {
-        var seen: Set<HistoryEntry.Kind> = []
-        let imported = importedShelf && hasImported
-        for entry in history.entries where (entry.importedFrom != nil) == imported {
-            seen.insert(entry.kind)
-        }
-        return HistoryEntry.Kind.allCases.filter(seen.contains)
+        return all.filter { ($0.importedFrom != nil) == imported }
     }
 
     /// One collapsible group of sessions: a day, or a place.
@@ -55,9 +50,9 @@ struct HistoryView: View {
         var label: String
         var entries: [HistoryEntry]
         /// Which scan types this group holds, for the icon row on the header.
-        var kinds: [HistoryEntry.Kind] {
-            var seen: Set<HistoryEntry.Kind> = []
-            return entries.compactMap { seen.insert($0.kind).inserted ? $0.kind : nil }
+        var symbols: [String] {
+            var seen: Set<String> = []
+            return entries.compactMap { seen.insert($0.rowSystemImage).inserted ? $0.rowSystemImage : nil }
         }
         var itemCount: Int { entries.reduce(0) { $0 + $1.itemCount } }
     }
@@ -99,7 +94,7 @@ struct HistoryView: View {
     private var showsMap: Bool { grouping == .place && !pins.isEmpty }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        SwiftUI.Group {
             SwiftUI.Group {
                 if showsMap {
                     placeMap
@@ -119,6 +114,7 @@ struct HistoryView: View {
                 }
             }
             .navigationTitle("History")
+            .modifier(HistorySubtitle(text: area.title))
             .fileImporter(isPresented: $importing, allowedContentTypes: [.json, .data]) { result in
                 guard case .success(let url) = result else { return }
                 importHistory(from: url)
@@ -131,20 +127,20 @@ struct HistoryView: View {
             } message: {
                 Text(importResult ?? "")
             }
-            .navigationDestination(for: UUID.self) { id in
-                HistoryDetailView(id: id)
+            .navigationDestination(item: $opened) { id in
+                HistoryDetailView(id: id, area: area)
             }
             .confirmationDialog("Clear history?", isPresented: $confirmClear, titleVisibility: .visible) {
                 Button("Clear history", role: .destructive) {
-                    history.clear(imported: importedShelf && hasImported)
+                    history.clear(imported: importedShelf && hasImported, area: area)
                     if !hasImported { importedShelf = false }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 if importedShelf && hasImported {
-                    Text("Imported scans are removed. Scans on this iPhone stay.")
+                    Text("Imported \(area.title) records are removed. Scans on this iPhone and other tabs stay.")
                 } else {
-                    Text("Saved scans from this iPhone and the Cardputer are removed.")
+                    Text("Saved \(area.title) records are removed. Other tabs keep theirs.")
                 }
             }
             .sheet(isPresented: $showSettings) {
@@ -227,41 +223,21 @@ struct HistoryView: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private var kindFilterChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(availableKinds, id: \.self) { kind in
-                    FilterChip(title: LocalizedStringKey(kind.title), systemImage: kind.systemImage, isOn: kindFilter == kind) {
-                        kindFilter = kindFilter == kind ? nil : kind
-                    }
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 2)
-        }
-    }
-
     private var sessionList: some View {
         List {
-            if availableKinds.count > 1 {
-                Section {
-                    kindFilterChips
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                }
-                .listSectionSpacing(.compact)
-            }
             ForEach(groups) { group in
                 let isExpanded = expanded.contains(group.id)
                 Section {
                     if isExpanded {
                         ForEach(group.entries) { entry in
-                            NavigationLink(value: entry.id) {
+                            NavigationLink {
+                                HistoryDetailView(id: entry.id, area: area)
+                            } label: {
                                 EntryRow(entry: entry, showPlace: grouping == .date)
                             }
                             .swipeActions {
                                 Button("Delete", role: .destructive) {
-                                    history.delete(entry.id)
+                                    history.delete(entry.id, area: area)
                                 }
                             }
                         }
@@ -269,7 +245,7 @@ struct HistoryView: View {
                 } header: {
                     GroupHeader(
                         label: group.label,
-                        kinds: group.kinds,
+                        symbols: group.symbols,
                         count: group.itemCount,
                         isExpanded: isExpanded
                     ) {
@@ -285,7 +261,7 @@ struct HistoryView: View {
                 ContentUnavailableView(
                     "Nothing saved",
                     systemImage: "clock.arrow.circlepath",
-                    description: Text("Scans are saved here automatically. The Cardputer's side button saves its own scan, and it arrives here when the phone connects.")
+                    description: Text(area.emptyHint)
                 )
             }
         }
@@ -317,7 +293,7 @@ struct HistoryView: View {
 
     private func open(_ pin: HistoryPin) {
         if pin.entries.count == 1, let entry = pin.entries.first {
-            path.append(entry.id)
+            opened = entry.id
         } else {
             selectedPin = pin
         }
@@ -329,7 +305,7 @@ struct HistoryView: View {
                 Button {
                     selectedPin = nil
                     showUnlocated = false
-                    path.append(entry.id)
+                    opened = entry.id
                 } label: {
                     EntryRow(entry: entry, showPlace: false)
                 }
@@ -377,6 +353,31 @@ struct HistoryView: View {
     }
 }
 
+/// The tab's name under the History title, where the system can show one.
+private struct HistorySubtitle: ViewModifier {
+    var text: String
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.navigationSubtitle(text)
+        } else {
+            content
+        }
+    }
+}
+
+/// The clock in a tab's top bar: that tab's saved sessions, pushed onto the tab's own stack.
+struct HistoryButton: ToolbarContent {
+    var area: HistoryArea
+    @Binding var isPresented: Bool
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button("History", systemImage: "clock.arrow.circlepath") { isPresented = true }
+        }
+    }
+}
+
 /// Scans that share a place, drawn as one point.
 private struct HistoryPin: Identifiable {
     var id: String
@@ -385,8 +386,8 @@ private struct HistoryPin: Identifiable {
     var entries: [HistoryEntry]
 
     var symbol: String {
-        let kinds = Set(entries.map(\.kind))
-        return kinds.count == 1 ? kinds.first?.systemImage ?? "mappin" : "mappin.and.ellipse"
+        let symbols = Set(entries.map(\.rowSystemImage))
+        return symbols.count == 1 ? symbols.first ?? "mappin" : "mappin.and.ellipse"
     }
 }
 
@@ -432,7 +433,7 @@ private struct HistoryMapPin: View {
 /// types inside it.
 private struct GroupHeader: View {
     var label: String
-    var kinds: [HistoryEntry.Kind]
+    var symbols: [String]
     var count: Int
     var isExpanded: Bool
     var toggle: () -> Void
@@ -442,8 +443,8 @@ private struct GroupHeader: View {
             HStack(spacing: 8) {
                 Text(label)
                 HStack(spacing: 4) {
-                    ForEach(kinds, id: \.self) { kind in
-                        Image(systemName: kind.systemImage)
+                    ForEach(symbols, id: \.self) { symbol in
+                        Image(systemName: symbol)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -468,12 +469,12 @@ private struct EntryRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: entry.kind.systemImage)
+            Image(systemName: entry.rowSystemImage)
                 .font(.title3)
                 .frame(width: 26)
                 .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(entry.kind.title) · \(entry.itemCount)")
+                Text("\(entry.rowTitle) · \(entry.itemCount)")
                     .font(.body.weight(.semibold))
                 HStack(spacing: 4) {
                     Text(entry.savedAt, style: .relative)
@@ -503,13 +504,6 @@ private struct HistorySettingsView: View {
                 } footer: {
                     Text("When on, Wi‑Fi, LAN and Bluetooth scans are kept in History on their own. Scans of the same kind, on the same day, in the same place are merged into one session instead of piling up.")
                 }
-                Section {
-                    NavigationLink {
-                        LicensesView()
-                    } label: {
-                        Label("Licenses", systemImage: "doc.text")
-                    }
-                }
             }
             .navigationTitle("History settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -525,10 +519,13 @@ private struct HistorySettingsView: View {
 
 struct HistoryDetailView: View {
     var id: UUID
+    var area: HistoryArea
     @Environment(HistoryStore.self) private var history
+    @Environment(\.dismiss) private var dismiss
     @State private var shareItem: ShareItem?
 
-    private var entry: HistoryEntry? { history.entries.first { $0.id == id } }
+    /// The session as this tab shows it: another tab's records in it stay out of sight.
+    private var entry: HistoryEntry? { history.entries.first { $0.id == id }?.only(area) }
 
     var body: some View {
         List {
@@ -563,7 +560,7 @@ struct HistoryDetailView: View {
                 }
             }
         }
-        .navigationTitle(entry?.kind.title ?? "History")
+        .navigationTitle(entry?.rowTitle ?? String(localized: "History"))
         .shareSheet(item: $shareItem)
         .toolbar {
             if let entry {
@@ -572,7 +569,8 @@ struct HistoryDetailView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Delete", systemImage: "trash", role: .destructive) {
-                        history.delete(id)
+                        history.delete(id, area: area)
+                        dismiss()
                     }
                 }
             }

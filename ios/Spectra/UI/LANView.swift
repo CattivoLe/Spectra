@@ -3,13 +3,13 @@ import SwiftUI
 struct LANView: View {
     @Environment(LANScanner.self) private var scanner
     @Environment(WiFiInfo.self) private var wifi
-    @Environment(LinkProbe.self) private var probe
     @AppStorage("notifyNewDevices") private var notifyNewDevices = true
     @AppStorage("hideTrusted") private var hideTrusted = false
     @AppStorage("autosaveHistory") private var autosave = true
     @Environment(HistoryStore.self) private var history
     @State private var search = ""
     @State private var confirmForget = false
+    @State private var showHistory = false
     /// Show only the hosts whose services need attention.
     @State private var onlyAtRisk = false
 
@@ -30,27 +30,6 @@ struct LANView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    NavigationLink { ChecksView() } label: {
-                        Label {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Checks")
-                                if probe.report != nil || probe.running {
-                                    Text(connectionTitle(probe))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                            }
-                        } icon: {
-                            Image(systemName: "checkmark.shield")
-                        }
-                    }
-                    NavigationLink { SnifferView() } label: {
-                        Label("Traffic", systemImage: "waveform.path.ecg")
-                    }
-                }
-
                 if case .scanning(let progress, let phase) = scanner.state {
                     Section {
                         VStack(alignment: .leading, spacing: 4) {
@@ -125,7 +104,7 @@ struct LANView: View {
                             ContentUnavailableView {
                                 Label("IPv6-only network", systemImage: "network.badge.shield.half.filled")
                             } description: {
-                                Text("This Wi-Fi gives the iPhone no IPv4 address. The device scan walks an IPv4 subnet, so there is nothing to sweep here. Connection, speed and link checks work as usual.")
+                                Text("This Wi-Fi gives the iPhone no IPv4 address. The device scan walks an IPv4 subnet, so there is nothing to sweep here. Connection, speed and link checks on the Internet tab work as usual.")
                             } actions: {
                                 Button("Scan again", action: scanner.scan)
                             }
@@ -159,6 +138,9 @@ struct LANView: View {
             .navigationDestination(for: String.self) { ip in
                 DeviceDetailView(ip: ip)
             }
+            .navigationDestination(isPresented: $showHistory) {
+                HistoryView(area: .lan)
+            }
             .toolbar {
                 if !autosave {
                     ToolbarItem(placement: .topBarLeading) {
@@ -171,6 +153,10 @@ struct LANView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     LANStatusBar()
                 }
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+                HistoryButton(area: .lan, isPresented: $showHistory)
                 if #available(iOS 26, *) {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 }

@@ -488,6 +488,23 @@ final class HistoryStore {
         persist()
     }
 
+    /// Removes `area`'s records from one session. The session goes when no other tab has anything in it.
+    func delete(_ id: UUID, area: HistoryArea) {
+        reshape { $0.id == id ? $0.without(area) : $0 }
+    }
+
+    /// Clears `area`'s records from one shelf. Other tabs keep their part of the same sessions.
+    func clear(imported: Bool, area: HistoryArea) {
+        reshape { ($0.importedFrom != nil) == imported ? $0.without(area) : $0 }
+    }
+
+    private func reshape(_ change: (HistoryEntry) -> HistoryEntry?) {
+        let next = entries.compactMap(change)
+        guard next != entries else { return }
+        entries = next
+        persist()
+    }
+
     /// Clears one shelf: this phone's own sessions, or the imported ones.
     func clear(imported: Bool = false) {
         entries.removeAll { ($0.importedFrom != nil) == imported }

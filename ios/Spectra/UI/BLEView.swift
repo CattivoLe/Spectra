@@ -4,6 +4,7 @@ struct BLEView: View {
     @Environment(BLEScanner.self) private var scanner
     @Environment(\.scenePhase) private var scenePhase
     @State private var search = ""
+    @State private var showHistory = false
     @AppStorage("bleSort") private var sort: Sort = .signal
     @AppStorage("bleScope") private var scope: Scope = .all
     @AppStorage("bleShowOutOfRange") private var showOutOfRange = false
@@ -43,6 +44,9 @@ struct BLEView: View {
             .navigationDestination(for: UUID.self) { id in
                 BLEDeviceDetailView(id: id)
             }
+            .navigationDestination(isPresented: $showHistory) {
+                HistoryView(area: .bluetooth)
+            }
             .toolbar {
                 if !autosave {
                     ToolbarItem(placement: .topBarLeading) {
@@ -54,6 +58,10 @@ struct BLEView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     BLEStatusBar()
                 }
+                if #available(iOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+                HistoryButton(area: .bluetooth, isPresented: $showHistory)
                 if #available(iOS 26, *) {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 }
