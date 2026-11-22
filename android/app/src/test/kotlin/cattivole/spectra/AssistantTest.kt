@@ -2,7 +2,6 @@ package cattivole.spectra
 
 import cattivole.spectra.assistant.AssistantActions
 import cattivole.spectra.assistant.AssistantDigest
-import cattivole.spectra.assistant.AssistantMemory
 import cattivole.spectra.assistant.AssistantModel
 import cattivole.spectra.assistant.AssistantSnapshot
 import cattivole.spectra.assistant.AssistantStarters
@@ -19,7 +18,7 @@ import org.junit.Test
 import java.io.File
 import java.nio.file.Files
 
-/** The assistant's own rules, ported from the iOS tests: routing, plain requests, starters, memory, History. */
+/** The assistant's own rules, ported from the iOS tests: routing, plain requests, starters, History. */
 class AssistantTest {
     private val surroundings = AssistantTopic.surroundings.size
 
@@ -307,45 +306,6 @@ class AssistantTest {
         val busy = AssistantStarters.questions(AssistantStarters.Readiness(sensorConnected = true, hasHosts = true, hasCapture = true))
         assertEquals("Decode the last traffic capture", busy.first())
         assertTrue(busy.contains("Give me a security summary: network, internet, and what to fix"))
-    }
-
-    // MARK: - Memory
-
-    @Test
-    fun notesSurviveAReopenAndTravelOnlyWithTheirSubject() {
-        val dir = Files.createTempDirectory("memory").toFile()
-        val file = File(dir, "memory.json")
-        val memory = AssistantMemory(file)
-        memory.add("The owner says this camera is theirs", "192.168.1.64")
-        memory.add("The user's router is a Keenetic")
-        val reopened = AssistantMemory(file)
-        assertEquals(2, reopened.notes.size)
-        val general = reopened.digest(setOf("10.0.0.1"))
-        assertNotNull(general)
-        assertTrue(general!!.contains("Keenetic"))
-        assertFalse(general.contains("camera"))
-        assertTrue(reopened.digest(setOf("192.168.1.64"))!!.contains("camera"))
-        assertTrue(reopened.removeMatching("Keenetic"))
-        assertNull(reopened.digest(setOf("10.0.0.1")))
-        dir.deleteRecursively()
-    }
-
-    @Test
-    fun baselinesNeedSeveralVisitsOverAnHour() {
-        val dir = Files.createTempDirectory("memory").toFile()
-        val memory = AssistantMemory(File(dir, "memory.json"))
-        val sighting = AssistantMemory.Sighting("AA:BB:CC:DD:EE:FF", "Camera", AssistantMemory.Baseline.Kind.HOST, ports = listOf(80), portsKnown = true)
-        val start = 1_000_000_000L
-        memory.observe(listOf(sighting), start)
-        memory.observe(listOf(sighting), start + 60_000) // the same visit
-        assertEquals(1, memory.baselines.values.first().sightings)
-        memory.observe(listOf(sighting), start + 1_800_000)
-        memory.observe(listOf(sighting), start + 3_700_000)
-        val base = memory.baselines.values.first()
-        assertTrue(base.isEstablished)
-        val departures = memory.departures(sighting.copy(ports = listOf(80, 23)), start + 3_800_000)
-        assertTrue(departures.first().contains("23"))
-        dir.deleteRecursively()
     }
 
     // MARK: - History

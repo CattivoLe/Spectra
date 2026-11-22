@@ -1,5 +1,7 @@
 package cattivole.spectra.assistant.ui
 
+import androidx.compose.material.icons.rounded.Public
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Subject
@@ -24,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -62,15 +66,25 @@ fun AssistantCardScreen(model: SpectraModel, nav: AssistantNav, id: UUID) {
     val assistant = model.assistant
     var card by remember { mutableStateOf<AssistantCard?>(null) }
     LaunchedEffect(id) {
-        card = assistant.cards.card(id) ?: return@LaunchedEffect nav.back()
+        val loaded = assistant.cards.card(id) ?: return@LaunchedEffect nav.back()
+        // "Continue" in the Assistant tab's list: the stopped text is picked up as the card opens.
+        card = if (assistant.cards.takeContinue(id)) assistant.cards.resume(loaded) else loaded
     }
     val current = card ?: return
+    val onContinue: () -> Unit = { card = assistant.cards.resume(current) }
     val scope = rememberCoroutineScope()
     val notify = cattivole.spectra.ui.LocalNotify.current
     val facts = current.facts
+    var folderName by remember { mutableStateOf<String?>(null) }
+    // A web search of "More detail" asks here before anything goes out.
+    assistant.pendingSearch?.let { SearchApprovalDialog(it, assistant.web.provider.title) }
+    LaunchedEffect(id) { folderName = assistant.folderNameOf(id) }
     SpectraScreen(
         title = facts.title,
-        subtitle = if (current.live) tr("Summary") else tr("Saved %s", dateTime(current.createdAt)),
+        subtitle = listOfNotNull(
+            if (current.live) tr("Summary") else tr("Saved %s", dateTime(current.createdAt)),
+            folderName,
+        ).joinToString(" · "),
         onBack = nav::back,
         actions = {
             if (current.busy) {
@@ -85,6 +99,13 @@ fun AssistantCardScreen(model: SpectraModel, nav: AssistantNav, id: UUID) {
             } else {
                 freeCard(key = "text-$index", header = entry.label, footer = timing(entry)) {
                     EntryText(entry, assistant, nav)
+                    // Stopped by leaving or by another card: the same text can be picked up again.
+                    if (entry === current.stopped && (current.live || current.subject != null)) {
+                        TextButton(onClick = onContinue, modifier = Modifier.padding(top = 4.dp)) {
+                            Icon(Icons.Rounded.PlayArrow, null, Modifier.size(18.dp))
+                            Text(tr("Continue"), Modifier.padding(start = 6.dp))
+                        }
+                    }
                 }
             }
         }
@@ -106,10 +127,20 @@ fun AssistantCardScreen(model: SpectraModel, nav: AssistantNav, id: UUID) {
             val done = current.doneSinceCheck
             val offers = if (facts.awaitsCheck) emptyList() else listOf(CardAction.DETAILS, CardAction.DEEP).filter { it !in done }
             if (offers.isNotEmpty()) {
+                val webHint = when {
+                    current.subject?.let { cattivole.spectra.assistant.CardWeb.lookup(model, it, CardAction.DETAILS) } == null -> null
+                    !assistant.web.isEnabled -> tr("With the internet on (Assistant tab → ⋮ → Internet), both also search the web for this device's model and known problems.")
+                    !assistant.web.isReady -> tr("The web search is not set up: Assistant tab → ⋮ → Internet.")
+                    assistant.web.confirmEachSearch -> tr("Both also search the web through %s; you see the query first.", assistant.web.provider.title)
+                    else -> tr("Both also search the web through %s.", assistant.web.provider.title)
+                }
                 freeCard(
                     key = "more",
                     header = tr("Ask the model"),
-                    footer = if (CardAction.DEEP in offers) tr("Deep analysis reads everything around this subject and writes at length: about 3–4 minutes on this phone.") else null,
+                    footer = listOfNotNull(
+                        if (CardAction.DEEP in offers) tr("Deep analysis reads everything around this subject and writes at length: about 3–4 minutes on this phone.") else null,
+                        webHint,
+                    ).joinToString(" ").ifEmpty { null },
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         for (action in offers) {
@@ -181,6 +212,8 @@ private fun CheckRow(entry: CardEntry) {
 @Composable
 private fun EntryText(entry: CardEntry, assistant: AssistantModel, nav: AssistantNav) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        WebLine(entry)
+        entry.web?.images?.takeIf { it.isNotEmpty() }?.let { ImageStrip(it) }
         when {
             entry.state == CardEntry.State.FAILED -> {
                 Text(entry.text, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
@@ -191,6 +224,7 @@ private fun EntryText(entry: CardEntry, assistant: AssistantModel, nav: Assistan
                     }
                 }
             }
+            entry.webBusy -> Unit
             entry.text.isEmpty() && entry.active -> {
                 val loading = assistant.controller.state.let {
                     it == alexcattivo.localchat.engine.EngineController.State.Loading || it == alexcattivo.localchat.engine.EngineController.State.Empty
@@ -212,6 +246,59 @@ private fun EntryText(entry: CardEntry, assistant: AssistantModel, nav: Assistan
                 MarkdownText(entry.text)
                 if (entry.state == CardEntry.State.STOPPED) {
                     Text(tr("Stopped"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        entry.web?.takeIf { it.results.isNotEmpty() && !entry.active }?.let { WebSources(it) }
+    }
+}
+
+/** The web search's state above the text: running, declined, failed, or where the text's facts came from. */
+@Composable
+private fun WebLine(entry: CardEntry) {
+    val status = entry.webStatus
+    val web = entry.web
+    val text = when {
+        status != null -> status
+        web != null && web.results.isNotEmpty() -> tr("Read on the web: %d sources via %s", web.usedSourceIndices.size, web.provider)
+        else -> return
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (entry.webBusy) {
+            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+        } else {
+            Icon(Icons.Rounded.Public, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+        }
+        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** The pages the text drew on, by number as the text cites them; a tap opens one in the browser. */
+@Composable
+private fun WebSources(web: alexcattivo.localchat.kit.web.SearchPayload) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(tr("Sources"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        for (index in web.usedSourceIndices) {
+            val result = web.results.getOrNull(index) ?: continue
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(result.url))
+                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                    }
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("[${index + 1}]", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f)) {
+                    Text(result.title, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text(result.host, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }

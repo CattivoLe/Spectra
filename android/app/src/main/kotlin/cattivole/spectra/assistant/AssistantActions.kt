@@ -22,7 +22,7 @@ import kotlin.coroutines.coroutineContext
  * lever that transmits. `connect_bluetooth` is the one that opens a link rather than only listening: it reads
  * what one device publishes about itself and drops the link again; nothing is written. Mirrors AssistantActions.swift.
  */
-class AssistantActions(val sources: AssistantSources, private val memory: AssistantMemory) {
+class AssistantActions(val sources: AssistantSources) {
     enum class Name(val raw: String) {
         SCAN_WIFI("scan_wifi"),
         SCAN_LAN("scan_lan"),
@@ -34,8 +34,6 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
         CAPTURE_PCAP("capture_pcap"),
         CONNECT_BLUETOOTH("connect_bluetooth"),
         SEARCH_HISTORY("search_history"),
-        REMEMBER("remember"),
-        FORGET("forget"),
 
         // Summary-card steps only: the chat grammar does not offer them, the card's buttons call them.
         /** A traceroute to "host". */
@@ -58,13 +56,13 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
             instructions = INSTRUCTIONS,
             maxSteps = 4,
             preflight = { question ->
-                preflightCalls(question, sources.model.ble.devices.values, sources.model.lan.devices.map { PortTarget(it.ipAddress, it.isGateway) })
+                preflightCalls(question, sources.model.ble.devices.values, sources.model.lan.devices.map { PortTarget(it.ipAddress, it.isGateway, it.allPortsScanned) })
             },
             // Questions about the user's own network are answered from the app; the web adds nothing but a wait.
             skipsWebSearch = AssistantDigest::answersFromApp,
             offer = ::offer,
             suggest = { answer, ran ->
-                suggestedOffers(answer, ran, sources.model.ble.devices.values, sources.model.lan.devices.map { PortTarget(it.ipAddress, it.isGateway) })
+                suggestedOffers(answer, ran, sources.model.ble.devices.values, sources.model.lan.devices.map { PortTarget(it.ipAddress, it.isGateway, it.allPortsScanned) })
             },
             runningLabel = ::runningLabel,
             run = { name, args -> run(name, args) },
@@ -166,16 +164,6 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
             Name.CAPTURE_PCAP -> capture(argsJson)
             Name.CONNECT_BLUETOOTH -> connectBluetooth(argsJson)
             Name.SEARCH_HISTORY -> HistoryDigest.text(model.history.entries, argument(argsJson, "text", "host", "bssid") ?: "")
-            Name.REMEMBER -> {
-                val text = argument(argsJson, "text") ?: return "Missing \"text\". Provide the note to save."
-                val subject = argument(argsJson, "host", "bssid")
-                memory.add(text, subject)
-                if (subject != null) "Saved to the dossier, filed under $subject." else "Saved to the dossier."
-            }
-            Name.FORGET -> {
-                val text = argument(argsJson, "text") ?: return "Missing \"text\". Provide text to find the note to remove."
-                if (memory.removeMatching(text)) "Removed from the dossier." else "No matching note found in the dossier."
-            }
         }
     }
 
@@ -288,7 +276,7 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
         AssistantDigest.section(topic, sources.snapshot()).ifEmpty { "Nothing new." }
 
     /** A LAN host the app can scan ports on by itself: one named in the question by IP, or the router. */
-    data class PortTarget(val ip: String, val isGateway: Boolean)
+    data class PortTarget(val ip: String, val isGateway: Boolean, val allScanned: Boolean = false)
 
     companion object {
         /**
@@ -302,7 +290,7 @@ class AssistantActions(val sources: AssistantSources, private val memory: Assist
          */
         val GRAMMAR = """
             root  ::= ws "{" ws "\"tool\"" ws ":" ws tool tail ws "}" ws
-            tool  ::= "\"scan_wifi\"" | "\"scan_lan\"" | "\"scan_bluetooth\"" | "\"check_connection\"" | "\"speed_test\"" | "\"scan_ports\"" | "\"check_port_forwarding\"" | "\"capture_pcap\"" | "\"connect_bluetooth\"" | "\"search_history\"" | "\"remember\"" | "\"forget\""
+            tool  ::= "\"scan_wifi\"" | "\"scan_lan\"" | "\"scan_bluetooth\"" | "\"check_connection\"" | "\"speed_test\"" | "\"scan_ports\"" | "\"check_port_forwarding\"" | "\"capture_pcap\"" | "\"connect_bluetooth\"" | "\"search_history\""
             tail  ::= ( ws "," ws addrfield )? ( ws "," ws textfield )?
             addrfield ::= ( "\"host\"" | "\"bssid\"" ) ws ":" ws "\"" [a-zA-Z0-9._:-]+ "\""
             textfield ::= "\"text\"" ws ":" ws "\"" [^\"]+ "\""
@@ -332,10 +320,6 @@ When the user asks for a full, deep or all-ports scan, add "text": "all" (much s
 <tool_call>{"tool": "search_history", "text": "Galaxy Buds"}
 When the user asks to scan, check, test or measure anything about their own network, devices or connection, in any language («просканируй блютуз», «проверь интернет», «замерь скорость», «проверь доступ к гуглу»), call the matching tool even if older data is attached: a web search cannot measure anything. Otherwise call one only when fresher data is needed, and not again when its <tool_result> is already there. Never report a check whose result you did not get.
 When the attached data already holds what the user asks to explain, explain it instead of running a tool again. A GATT read: the standard services, what the values reveal, vendor services that accept writes without pairing. A traffic capture: protocols, the busiest devices and pairs, anything unusual (deauthentication bursts, unknown devices, plain-text protocols). Recorded traffic of this phone: the servers and apps it talked to, plain HTTP, tracking or unexpected destinations.
-Dossier: a notebook shared across chats, shown in <app_data>. Save short facts worth keeping next time (a suspicious device, a resolved incident, the user's setup). When the user asks you to remember something («запомни…»), reply with only the remember call. File a note about one device under its IP, MAC or BSSID so it comes back with that device:
-<tool_call>{"tool": "remember", "host": "192.168.1.64", "text": "the owner says this camera is theirs"}
-Leave "host" out for a general note. To remove a note:
-<tool_call>{"tool": "forget", "text": "words from the note"}
         """.trimIndent()
 
         // MARK: - Plain requests, recognized by the app
@@ -470,7 +454,7 @@ Leave "host" out for a general note. To remove a note:
             Name.CHECK_SITES -> ToolOffer(name, tr("a check of your sites"))
             Name.CHECK_SITE -> ToolOffer(name, tr("a certificate and domain check"))
             Name.EXPAND_REDIRECTS -> ToolOffer(name, tr("expanding the redirects"))
-            Name.REMEMBER, Name.FORGET, null -> null
+            null -> null
         }
 
         /**
@@ -493,6 +477,8 @@ Leave "host" out for a general note. To remove a note:
                 for (call in preflightCalls(text, devices, hosts)) {
                     val offer = offerFor(call) ?: continue
                     if (offer.name in ran) continue
+                    // Every port of that host was checked already: scanning it again tells nothing new.
+                    if (offer.name == Name.SCAN_PORTS.raw && scansDoneHost(call, hosts)) continue
                     found.putIfAbsent(offer.request ?: offer.name, offer)
                 }
             }
@@ -512,6 +498,11 @@ Leave "host" out for a general note. To remove a note:
             if (text.trimEnd().endsWith("?")) return true
             // English imperative: «Run a speed test», «Check the router's ports».
             return text.split(Regex("""\s+""")).firstOrNull().orEmpty() in ENGLISH_IMPERATIVES
+        }
+
+        private fun scansDoneHost(call: String, hosts: Collection<PortTarget>): Boolean {
+            val host = runCatching { JSONObject(call).optString("host") }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return false
+            return hosts.any { it.ip == host && it.allScanned }
         }
 
         /** A preflight call (a bare name or a whole JSON object) as a button with the question that runs it. */
@@ -548,8 +539,6 @@ Leave "host" out for a general note. To remove a note:
             Name.CAPTURE_PCAP -> tr("traffic capture")
             Name.CONNECT_BLUETOOTH -> tr("device connection")
             Name.SEARCH_HISTORY -> tr("History search")
-            Name.REMEMBER -> tr("saving a note")
-            Name.FORGET -> tr("removing a note")
             Name.TRACE_ROUTE -> tr("traceroute")
             Name.CHECK_SITES -> tr("check of your sites")
             Name.CHECK_SITE -> tr("certificate and domain check")
@@ -568,8 +557,6 @@ Leave "host" out for a general note. To remove a note:
             Name.CAPTURE_PCAP -> tr("Capturing traffic…")
             Name.CONNECT_BLUETOOTH -> tr("Connecting to the device…")
             Name.SEARCH_HISTORY -> tr("Looking through History…")
-            Name.REMEMBER -> tr("Saving a note…")
-            Name.FORGET -> tr("Removing a note…")
             Name.TRACE_ROUTE -> tr("Tracing the path…")
             Name.CHECK_SITES -> tr("Trying your sites…")
             Name.CHECK_SITE -> tr("Asking the site and the registry…")

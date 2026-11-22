@@ -87,7 +87,7 @@ object InternetCards {
             AssistantCards.ranked(found),
             steps.distinctBy { it.tool }.take(3),
             data,
-            deep + "\n\n" + AssistantCards.sections(s, now, AssistantTopic.HISTORY) + AssistantCards.memory(s),
+            deep + "\n\n" + AssistantCards.sections(s, now, AssistantTopic.HISTORY),
             awaitsCheck = !checked && link == null && s.sites.isEmpty() && s.route == null,
         )
     }

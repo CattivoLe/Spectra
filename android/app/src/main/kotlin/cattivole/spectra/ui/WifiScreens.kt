@@ -1,5 +1,7 @@
 package cattivole.spectra.ui
 
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.Password
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.background
@@ -198,6 +200,14 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
                         },
                     )
                     DropdownMenuItem(
+                        text = { Text(tr("Saved networks…")) },
+                        leadingIcon = { Icon(Icons.Rounded.Password, null) },
+                        onClick = {
+                            menu = false
+                            nav.savedNetworks()
+                        },
+                    )
+                    DropdownMenuItem(
                         text = { Text(tr("Sensor…")) },
                         leadingIcon = { Icon(Icons.Rounded.SettingsInputAntenna, null) },
                         onClick = {
@@ -389,7 +399,8 @@ private fun WifiStatusChips(model: SpectraModel, nav: Navigator) {
         val phoneNetworks = store.phoneSightings().filter { it.isInRange }
         val context = LocalContext.current
         val requestPermissions = LocalRequestPermissions.current
-        StatusChip(
+        // With a sensor connected its chip says what is heard; the phone's own radio chip is only noise then.
+        if (!link.isConnected) StatusChip(
             icon = Icons.Rounded.PhoneAndroid,
             title = tr("This phone"),
             detail = when (model.phone.status) {
@@ -730,8 +741,10 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
     val now = if (snapshot) network.lastSeen else rememberNow()
     val joinSsid = network.revealedSsid ?: reading.ssid
     var pendingJoin by remember { mutableStateOf<String?>(null) } // ssid awaiting a password
-    var pendingWep by remember { mutableStateOf(false) }
     var passphrase by remember { mutableStateOf("") }
+    var showPassphrase by remember { mutableStateOf(false) }
+    val join = rememberWifiJoin(model)
+    val context = LocalContext.current
     pendingJoin?.let { ssid ->
         AlertDialog(
             onDismissRequest = { pendingJoin = null },
@@ -742,14 +755,19 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
                     onValueChange = { passphrase = it },
                     label = { Text(tr("Password")) },
                     singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation = if (showPassphrase) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showPassphrase = !showPassphrase }) {
+                            Icon(if (showPassphrase) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, contentDescription = null)
+                        }
+                    },
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    model.wifiJoiner.join(ssid, passphrase, pendingWep)
+                    join(ssid, passphrase, reading.auth.raw)
                     pendingJoin = null
-                }) { Text(tr("Connect")) }
+                }, enabled = passphrase.isNotEmpty()) { Text(tr("Connect")) }
             },
             dismissButton = { TextButton(onClick = { pendingJoin = null }) { Text(tr("Cancel")) } },
         )
@@ -886,16 +904,19 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
             ),
         )
         joinSsid?.let { ssid ->
+            val savedPassword = model.link.knownPassword(ssid)
             connectionCard(
                 ssid = ssid,
                 method = reading.auth.joinMethod,
                 joiner = model.wifiJoiner,
-                onConnectOpen = { model.wifiJoiner.join(ssid, null, false) },
-                onNeedPassword = { wep ->
-                    passphrase = model.link.knownPassword(ssid).orEmpty()
-                    pendingWep = wep
+                savedPassword = savedPassword,
+                onConnectOpen = { join(ssid, null, reading.auth.raw) },
+                onConnectSaved = { join(ssid, savedPassword, reading.auth.raw) },
+                onNeedPassword = {
+                    passphrase = savedPassword.orEmpty()
                     pendingJoin = ssid
                 },
+                onOpenPanel = { openWifiPanel(context) },
             )
         }
         cardSection(
@@ -968,24 +989,37 @@ private fun LazyListScope.connectionCard(
     ssid: String,
     method: AuthMode.JoinMethod,
     joiner: WifiJoiner,
+    savedPassword: String?,
     onConnectOpen: () -> Unit,
-    onNeedPassword: (wep: Boolean) -> Unit,
+    onConnectSaved: () -> Unit,
+    onNeedPassword: () -> Unit,
+    onOpenPanel: () -> Unit,
 ) {
     val status = joiner.status
-    val connectRow: @Composable () -> Unit = {
-        when (method) {
-            AuthMode.JoinMethod.OPEN -> ActionRow(tr("Connect to this network"), Icons.Rounded.Wifi, onClick = onConnectOpen)
-            AuthMode.JoinMethod.PSK -> ActionRow(tr("Enter password & connect"), Icons.Rounded.Wifi, onClick = { onNeedPassword(false) })
-            AuthMode.JoinMethod.WEP -> ActionRow(tr("Enter password & connect"), Icons.Rounded.Wifi, onClick = { onNeedPassword(true) })
-            AuthMode.JoinMethod.UNSUPPORTED -> Unit
-        }
+    val connectRows: List<@Composable () -> Unit> = when (method) {
+        AuthMode.JoinMethod.OPEN -> listOf({ ActionRow(tr("Connect to this network"), Icons.Rounded.Wifi, onClick = onConnectOpen) })
+        AuthMode.JoinMethod.PSK, AuthMode.JoinMethod.WEP -> listOfNotNull(
+            if (savedPassword != null) ({ ActionRow(tr("Connect with the saved password"), Icons.Rounded.Wifi, onClick = onConnectSaved) }) else null,
+            { ActionRow(if (savedPassword != null) tr("Use another password") else tr("Enter password & connect"), Icons.Rounded.Password, onClick = onNeedPassword) },
+        )
+        AuthMode.JoinMethod.UNSUPPORTED -> emptyList()
     }
     val rows = buildList<@Composable () -> Unit> {
         when {
+            // What the phone is on now is the truth, whatever the last join said.
+            joiner.isOn(ssid) -> {
+                add { StatusRow(tr("Connected")) }
+                if (status is WifiJoiner.Status.Suggested && status.ssid == ssid) {
+                    add { ActionRow(tr("Forget this network"), Icons.Rounded.DeleteSweep, onClick = { joiner.forget(ssid) }, tint = Spectra.colors.danger) }
+                }
+            }
             status is WifiJoiner.Status.Joining && status.ssid == ssid -> add { ConnectingRow() }
+            joiner.isFor(ssid) && status is WifiJoiner.Status.Saved -> {
+                add { NoteRow(tr("Saved in Android. If the phone stays on another network, pick “%s” in the Wi‑Fi list.", ssid), warning = false) }
+                add { ActionRow(tr("Open the Wi‑Fi list"), Icons.Rounded.Wifi, onClick = onOpenPanel) }
+            }
             joiner.isFor(ssid) && status is WifiJoiner.Status.Joined -> {
                 add { StatusRow(tr("Connected")) }
-                add { ActionRow(tr("Forget this network"), Icons.Rounded.DeleteSweep, onClick = { joiner.forget(ssid) }, tint = Spectra.colors.danger) }
             }
             joiner.isFor(ssid) && status is WifiJoiner.Status.Suggested -> {
                 add { NoteRow(tr("Added. Android joins “%s” when it is in range; it may ask you to approve Spectra once.", ssid), warning = false) }
@@ -993,9 +1027,9 @@ private fun LazyListScope.connectionCard(
             }
             joiner.isFor(ssid) && status is WifiJoiner.Status.Failed -> {
                 add { NoteRow(reasonText(status.reason), warning = true) }
-                if (method != AuthMode.JoinMethod.UNSUPPORTED) add(connectRow)
+                addAll(connectRows)
             }
-            method != AuthMode.JoinMethod.UNSUPPORTED -> add(connectRow)
+            method != AuthMode.JoinMethod.UNSUPPORTED -> addAll(connectRows)
             else -> add { NoteRow(tr("Enterprise and other 802.1X networks have to be joined from Settings."), warning = false) }
         }
     }
@@ -1004,6 +1038,7 @@ private fun LazyListScope.connectionCard(
         key = "connection",
         footer = when (method) {
             AuthMode.JoinMethod.OPEN -> tr("This network is open. Android will ask you to confirm before joining.")
+            AuthMode.JoinMethod.PSK -> tr("Android asks to save the network, then joins it. Once the phone is on it, Spectra keeps the password in Saved networks and hands it to the Cardputer.")
             AuthMode.JoinMethod.UNSUPPORTED -> null
             else -> tr("Once the phone joins, Spectra keeps the password and hands it to the Cardputer too.")
         },

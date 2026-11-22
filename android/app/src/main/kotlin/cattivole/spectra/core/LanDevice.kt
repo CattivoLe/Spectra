@@ -172,6 +172,11 @@ class LanDevice(
 
     /** 0..1 while a port scan of this host runs. */
     var portScanFraction: Float? = null
+
+    /** When all 65535 TCP ports were last checked; null if only the common list was. */
+    var allPortsScannedAt: Long? = null
+
+    val allPortsScanned: Boolean get() = allPortsScannedAt != null
     private var pinnedRank = 0
 
     val manufacturer: String?
@@ -263,6 +268,7 @@ class LanDevice(
         }
 
         fun usefulHostname(name: String, ip: String): String? {
+            if (Miio.isInstanceName(name)) return null
             val shown = presentable(name) ?: return null
             if (shown.equals(ip, ignoreCase = true)) return null
             return shown

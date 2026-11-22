@@ -7,6 +7,7 @@ import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
+import cattivole.spectra.core.Miio
 import cattivole.spectra.core.DiscoveredPort
 import cattivole.spectra.core.HttpBanner
 import cattivole.spectra.core.LanDevice
@@ -242,6 +243,7 @@ class LanScanner(
                 val found = withContext(Dispatchers.IO) {
                     coroutineScope {
                         val ssdp = async { ssdpSearch() }
+                        val xiaomi = async { miioHello(hosts, info) }
                         val poked = async { poke(hosts) }
                         val names = async { discoverMdns() }
                         val answered = poked.await()
@@ -249,9 +251,10 @@ class LanScanner(
                         val arp = readArp().filterKeys { it in onLan }
                         val mdns = names.await()
                         val announced = ssdp.await()
+                        val miio = xiaomi.await()
                         val alive = (
                             answered + arp.keys + mdns.names.keys + mdns.services.keys +
-                                announced.keys + info.localIp
+                                announced.keys + miio + info.localIp
                             ).filter { it in onLan }.distinct()
                         progress = "Checking ${alive.size} hosts"
                         fraction = 0.6f
@@ -259,7 +262,10 @@ class LanScanner(
                         var checked = 0
                         val profiles = alive.map { ip ->
                             async {
-                                val ports = scanPorts(ip)
+                                // A Mi Home appliance usually has no TCP port: its UDP hello is the one door it has.
+                                val ports = scanPorts(ip) + listOfNotNull(
+                                    if (ip in miio) DiscoveredPort(Miio.PORT, Miio.PORT_NAME) else null,
+                                )
                                 val profile = identify(ip, ports)
                                 withContext(Dispatchers.Main.immediate) {
                                     checked += 1
@@ -338,9 +344,15 @@ class LanScanner(
                     }
                 }
                 ticker.cancel()
-                val profile = withContext(Dispatchers.IO) { identify(ip, found) }
-                device.openPorts = found
+                val miio = withContext(Dispatchers.IO) { miioHello(listOf(ip), null) }
+                val withUdp = if (ip in miio) found + DiscoveredPort(Miio.PORT, Miio.PORT_NAME) else found
+                val profile = withContext(Dispatchers.IO) { identify(ip, withUdp) }
+                device.openPorts = withUdp
                 device.portsScanned = true
+                device.allPortsScannedAt = if (all) System.currentTimeMillis() else null
+                if (ip in miio && device.services.none { it.type.contains("miio") }) {
+                    device.services = device.services + ServiceAdvertisement(Miio.SERVICE_TYPE, "Mi Home")
+                }
                 device.profile = profile.filled(device.profile)
             } finally {
                 device.portScanFraction = null
@@ -359,7 +371,12 @@ class LanScanner(
             val previous = known[ip]
             val mac = found.arp[ip]?.let { MacAddress.parse(it) }
             val names = found.mdns[ip].orEmpty()
-            val services = found.services[ip].orEmpty().ifEmpty { previous?.services.orEmpty() }
+            val announcedServices = found.services[ip].orEmpty().ifEmpty { previous?.services.orEmpty() }
+            val services = if (ports.any { it.number == Miio.PORT } && announcedServices.none { it.type.contains("miio") }) {
+                announcedServices + ServiceAdvertisement(Miio.SERVICE_TYPE, "Mi Home")
+            } else {
+                announcedServices
+            }
             val described = describedHosts[ip]
             val withUpnp = if (described == null) {
                 profile
@@ -381,6 +398,12 @@ class LanScanner(
                 lastSeen = System.currentTimeMillis(),
             )
             device.preservePinnedName(previous)
+            // A rescan of the network only tries the common ports: a recent full scan still stands, with what it found.
+            val full = previous?.allPortsScannedAt?.takeIf { System.currentTimeMillis() - it < FULL_SCAN_KEEP_MS }
+            if (full != null) {
+                device.allPortsScannedAt = full
+                device.openPorts = (ports + previous.openPorts).distinctBy { it.number }.sortedBy { it.number }
+            }
             device.isNew = previous?.isNew == true
             labels.apply(device)
             next[ip] = device
@@ -857,7 +880,7 @@ class LanScanner(
         val types = listOf(
             "_googlecast._tcp", "_device-info._tcp", "_companion-link._tcp", "_apple-mobdev2._tcp",
             "_airplay._tcp", "_raop._tcp", "_hap._tcp", "_spotify-connect._tcp", "_ipp._tcp",
-            "_printer._tcp", "_smb._tcp", "_ssh._tcp", "_http._tcp",
+            "_printer._tcp", "_smb._tcp", "_ssh._tcp", "_http._tcp", Miio.SERVICE_TYPE,
         )
         var resolved = 0
         for (type in types) {
@@ -946,6 +969,11 @@ class LanScanner(
         services: MutableMap<String, MutableList<ServiceAdvertisement>>,
     ) {
         val host = resolved.host?.hostAddress ?: return
+        Miio.modelFromInstance(resolved.serviceName)?.let { model ->
+            val list = services.getOrPut(host) { mutableListOf() }
+            if (list.none { it.type.contains("miio") }) list.add(ServiceAdvertisement(Miio.SERVICE_TYPE, "Mi Home", model))
+            return
+        }
         val tidy = LanIdentity.tidyInstanceName(resolved.serviceName).ifBlank { return }
         val name = LanDevice.usefulHostname(resolved.serviceName, host)
         fun keep(value: String?) {
@@ -1136,7 +1164,65 @@ class LanScanner(
         val profiles: List<Triple<String, List<DiscoveredPort>, LanProfile>>,
     )
 
+    /**
+     * The miIO hello to every address and to the subnet's broadcast; the addresses that answered.
+     * [info] null: unicast only, for one host's port scan.
+     */
+    private fun miioHello(hosts: List<String>, info: SubnetInfo?): Set<String> {
+        val socket = try {
+            DatagramSocket()
+        } catch (_: Exception) {
+            return emptySet()
+        }
+        val found = linkedSetOf<String>()
+        socket.use {
+            bindToRoute(it)
+            try {
+                it.broadcast = true
+            } catch (_: Exception) {
+            }
+            val targets = hosts.mapNotNull(::inet4).toMutableList()
+            info?.let { subnet -> broadcastAddress(subnet)?.let(::inet4)?.let(targets::add) }
+            for (address in targets) {
+                try {
+                    it.send(DatagramPacket(Miio.HELLO, Miio.HELLO.size, address, Miio.PORT))
+                } catch (_: Exception) {
+                }
+            }
+            val buffer = ByteArray(256)
+            val end = System.currentTimeMillis() + MIIO_WAIT_MS
+            while (true) {
+                val left = end - System.currentTimeMillis()
+                if (left <= 0) break
+                try {
+                    it.soTimeout = left.toInt().coerceAtLeast(1)
+                    val incoming = DatagramPacket(buffer, buffer.size)
+                    it.receive(incoming)
+                    if (Miio.parseHello(incoming.data.copyOf(incoming.length)) == null) continue
+                    incoming.address?.hostAddress?.let(found::add)
+                } catch (_: java.net.SocketTimeoutException) {
+                    break
+                } catch (_: Exception) {
+                    break
+                }
+            }
+        }
+        return found
+    }
+
+    private fun broadcastAddress(info: SubnetInfo): String? {
+        val local = ipv4(info.localIp) ?: return null
+        val prefix = info.prefixLength.takeIf { it in 8..30 } ?: return null
+        val mask = (-1L shl (32 - prefix)) and 0xFFFF_FFFFL
+        return formatIp((local and mask) or (mask.inv() and 0xFFFF_FFFFL))
+    }
+
     companion object {
+        private const val MIIO_WAIT_MS = 1500L
+
+        /** How long a full port scan of a host outlives a rescan of the network. */
+        private const val FULL_SCAN_KEEP_MS = 30 * 60 * 1000L
+
         /** Ports tried on every address. Kept in step with iOS `discoveryPorts`. */
         private val discoveryPorts = intArrayOf(80, 443, 22, 445, 62078, 7000, 554, 8080, 9100)
         private const val discoveryTimeoutMs = 1200

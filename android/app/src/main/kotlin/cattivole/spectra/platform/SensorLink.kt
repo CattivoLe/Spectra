@@ -129,6 +129,24 @@ class SensorLink(
         ssid.takeIf { pass.isNotEmpty() }
     }.toSet()
 
+    /** Every network the app keeps, newest first: the password, or "" for an open one. */
+    fun savedNetworks(): List<Pair<String, String>> = knownNetworks.all()
+
+    /** Adds or replaces a network by hand; the sensor gets it too when it has a password. */
+    fun saveNetwork(ssid: String, password: String) {
+        if (ssid.isBlank()) return
+        knownNetworks.remember(ssid.trim(), password)
+        if (password.isNotEmpty()) control?.let { enqueue(it, SensorProtocol.Command.RememberWifi(ssid.trim(), password).data) }
+        publish()
+    }
+
+    /** Drops a network from the app's list. The sensor's own copy goes with the next full list it is sent. */
+    fun forgetSaved(ssid: String) {
+        knownNetworks.forget(ssid)
+        if (control != null) pushKnownNetworks()
+        publish()
+    }
+
     /** The stored password for this network name, or null when none was saved. */
     fun knownPassword(ssid: String): String? =
         knownNetworks.all().firstOrNull { it.first == ssid && it.second.isNotEmpty() }?.second
@@ -138,7 +156,12 @@ class SensorLink(
      * list and handed to the Cardputer, so either can rejoin.
      */
     fun rememberJoined(ssid: String, password: String) {
-        if (password.isEmpty()) return
+        if (password.isEmpty()) {
+            // An open network goes on the phone's own list only; there is nothing for the sensor to keep.
+            if (knownNetworks.all().none { it.first == ssid }) knownNetworks.remember(ssid, "")
+            publish()
+            return
+        }
         knownNetworks.remember(ssid, password)
         control?.let { enqueue(it, SensorProtocol.Command.RememberWifi(ssid, password).data) }
         publish()
@@ -504,7 +527,7 @@ class SensorLink(
     private fun pushKnownNetworks() {
         val ctrl = control ?: return
         enqueue(ctrl, SensorProtocol.Command.ResetKnown.data)
-        knownNetworks.all().take(80).forEach { (ssid, password) ->
+        knownNetworks.all().filter { it.second.isNotEmpty() }.take(80).forEach { (ssid, password) ->
             enqueue(ctrl, SensorProtocol.Command.RememberWifi(ssid, password).data)
         }
     }

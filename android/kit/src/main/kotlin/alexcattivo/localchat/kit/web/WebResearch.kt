@@ -118,8 +118,14 @@ class WebResearch(
             val pages = toRead.mapIndexed { index, result ->
                 async {
                     runCatching {
-                        val page = fetcher.fetch(result.url)
-                        Chunker.chunk(ContentExtractor.extract(page.html, page.url), index)
+                        // The service read the page already: its text is used as it is, the site is not asked again.
+                        val given = result.content?.takeIf { it.length >= MIN_GIVEN_TEXT }
+                        if (given != null) {
+                            Chunker.chunk(ContentExtractor.fromText(result.title, given), index)
+                        } else {
+                            val page = fetcher.fetch(result.url)
+                            Chunker.chunk(ContentExtractor.extract(page.html, page.url), index)
+                        }
                     }.getOrNull()
                 }
             }.awaitAll().filterNotNull()
@@ -137,6 +143,9 @@ class WebResearch(
     companion object {
         /** Сколько кусков считать моделью эмбеддингов: на телефоне 200 кусков — около двух минут, 40 — секунд двадцать. */
         const val MAX_EMBEDDED = 40
+
+        /** Shorter page text from a service is only a snippet: the page itself is read instead. */
+        const val MIN_GIVEN_TEXT = 400
 
         fun sameQuery(a: String, b: String) = Terms.of(a).toSet() == Terms.of(b).toSet()
 

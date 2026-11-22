@@ -1256,7 +1256,6 @@ The on-device assistant needs Android 12 or newer.	Ассистенту на т�
 Every chat is erased from this phone. Models, the dossier and settings stay.	Все диалоги будут стёрты с телефона. Модели, досье и настройки останутся.
 More	Ещё
 Models…	Модели…
-Dossier…	Досье…
 Delete all chats	Удалить все диалоги
 No model yet	Модели пока нет
 The assistant runs a language model on this phone: nothing you ask leaves it. Download one to start; Gemma 4 E2B is the best place to start.	Ассистент работает на языковой модели прямо на телефоне: ваши вопросы никуда не уходят. Скачайте модель, чтобы начать; лучше всего начать с Gemma 4 E2B.
@@ -1295,10 +1294,8 @@ Saved searches forgotten	Сохранённые поиски забыты
 What was sent	Что отправлялось
 Hold an entry to delete it.	Удерживайте запись, чтобы удалить её.
 sent	отправлено
-Clear the dossier?	Очистить досье?
 The notes and what the assistant learned about each device are erased.	Заметки и то, что ассистент узнал о каждом устройстве, будут стёрты.
 Clear all	Очистить всё
-Dossier	Досье
 No notes yet	Заметок пока нет
 The assistant saves important findings here during chats: suspicious devices, weak passwords, conclusions.	Ассистент сохраняет сюда важные находки из диалогов: подозрительные устройства, слабые пароли, выводы.
 Hold a note to delete it.	Удерживайте заметку, чтобы удалить её.
@@ -1382,7 +1379,6 @@ Scan the ports of %s?	Просканировать порты %s?
 Scan the ports of %s	Просканируй порты %s
 Read “%s” over Bluetooth?	Прочитать «%s» по Bluetooth?
 Connect to %s and read its data	Подключись к %s и прочитай его данные
-Every chat and folder is erased from this phone. Models, the dossier and settings stay.	С телефона стираются все диалоги и папки. Модели, досье и настройки остаются.
 New folder	Новая папка
 Rename folder	Переименовать папку
 Folder	Папка
@@ -1596,3 +1592,93 @@ Trying your sites…	Проверяю ваши сайты…
 Measure the speed fully	Замерить скорость полностью
 A short link: the real address is hidden. Expand the redirects to see it.	Короткая ссылка: настоящий адрес скрыт. Раскройте перенаправления, чтобы его увидеть.
 The address has words phishing likes to use: %s.	В адресе есть слова, которые любит фишинг: %s.
+All 65535 ports checked: none is open.	Проверены все 65535 портов: открытых нет.
+All 65535 ports checked. Open: %s — nothing risky among them.	Проверены все 65535 портов. Открыты: %s — ничего опасного среди них.
+Air fryer	Аэрогриль
+Air purifier	Очиститель воздуха
+Air freshener	Бризер
+Air conditioner	Кондиционер
+Robot vacuum	Робот-пылесос
+Multicooker	Мультиварка
+Induction cooker	Индукционная плита
+Kettle	Чайник
+Oven	Духовка
+Microwave	Микроволновка
+Dishwasher	Посудомойка
+Washing machine	Стиральная машина
+Fridge	Холодильник
+Lamp	Лампа
+Smart plug	Умная розетка
+Smart home hub	Шлюз умного дома
+Smart speaker	Умная колонка
+TV	Телевизор
+Curtain motor	Привод штор
+Water purifier	Фильтр для воды
+Pet feeder	Кормушка
+Smart toilet	Умный унитаз
+Door lock	Дверной замок
+Folder · new summaries are saved here	Папка · запись сюда
+Save new summaries here	Сохранять новые сводки сюда
+New summaries are saved to	Сводки сохраняются в
+Saved networks…	Сохранённые сети…
+Saved networks	Сохранённые сети
+Add network	Добавить сеть
+Edit network	Изменить сеть
+Empty for an open network	Пусто для открытой сети
+No saved networks	Сохранённых сетей нет
+Networks the phone or the sensor joins through Spectra show up here with their passwords. Add one with +.	Здесь появляются сети, к которым телефон или сенсор подключились через Spectra, вместе с паролями. Добавить вручную — кнопкой +.
+On this phone: %d	На этом телефоне: %d
+Android keeps its own saved passwords out of reach of apps, so this list is Spectra's: what worked through it, and what you add. Passwords go to the sensor too.	Свои сохранённые пароли Android приложениям не отдаёт, поэтому это список Spectra: что сработало через неё и что вы добавили сами. Пароли передаются и сенсору.
+No password	Без пароля
+In range	Рядом
+Show password	Показать пароль
+Hide password	Скрыть пароль
+Copy password	Скопировать пароль
+Edit…	Изменить…
+“%s” is saved in Android. If the phone stays on another network, pick it in the Wi‑Fi list.	Сеть «%s» сохранена в Android. Если телефон остаётся на другой сети, выберите её в списке Wi‑Fi.
+Saved in Android. If the phone stays on another network, pick “%s” in the Wi‑Fi list.	Сохранено в Android. Если телефон остаётся на другой сети, выберите «%s» в списке Wi‑Fi.
+Open the Wi‑Fi list	Открыть список Wi‑Fi
+Connect with the saved password	Подключиться с сохранённым паролем
+Use another password	Ввести другой пароль
+Android asks to save the network, then joins it. Once the phone is on it, Spectra keeps the password in Saved networks and hands it to the Cardputer.	Android предложит сохранить сеть и подключится к ней. Когда телефон в сети, Spectra сохраняет пароль в «Сохранённых сетях» и передаёт его Cardputer.
+Collapse	Свернуть
+Expand	Развернуть
+4 boards	4 платы
+Tap a site to check it, hold to remove. Asked over HTTPS without loading the page.	Нажмите на сайт, чтобы проверить, удерживайте, чтобы убрать. Запрос идёт по HTTPS без загрузки страницы.
+Mi Home device	Устройство Mi Home
+New ✨ summaries will be saved here.	Новые сводки ✨ будут сохраняться сюда.
+%s API key	Ключ API %s
+A search service built for language models: it reads the pages itself and returns their text, and finds pictures. Key at tavily.com, with a free monthly allowance. The sites see Tavily, not this phone.	Поиск, сделанный для языковых моделей: сам читает страницы и возвращает их текст, находит картинки. Ключ — на tavily.com, есть бесплатный месячный лимит. Сайты видят Tavily, а не этот телефон.
+Both also search the web through %s.	Обе кнопки ещё ищут в интернете через %s.
+Both also search the web through %s; you see the query first.	Обе кнопки ещё ищут в интернете через %s; запрос сначала покажут вам.
+Finds pages by meaning rather than exact words, which helps with odd model names; returns the pages' text and their preview pictures. Key at exa.ai; new accounts get free credits.	Ищет страницы по смыслу, а не по точным словам — помогает со странными названиями моделей; возвращает текст страниц и их картинки-превью. Ключ — на exa.ai, новым аккаунтам дают бесплатные кредиты.
+Google results and Google Images	Выдача Google и Google Картинки
+Google's results and Google Images through one key: the best pictures of devices. Key at serper.dev, 2,500 free searches to start. The pages themselves are read by this phone.	Выдача Google и Google Картинки по одному ключу: лучшие фото устройств. Ключ — на serper.dev, 2500 бесплатных запросов для начала. Сами страницы читает этот телефон.
+Independent index, web and pictures	Свой индекс, веб и картинки
+Looking for pictures: «%s»…	Ищу картинки: «%s»…
+Made for AI: page text and pictures	Для ИИ: текст страниц и картинки
+Nothing found on the web for «%s».	В интернете по запросу «%s» ничего не нашлось.
+Only the query is sent; the key is kept encrypted on this phone.	Отправляется только запрос; ключ хранится на телефоне в зашифрованном виде.
+Own index, page text	Свой индекс, текст страниц
+Read on the web: %d sources via %s	Прочитано в интернете: источников — %d, через %s
+Search by meaning, page text	Поиск по смыслу, текст страниц
+Search with pages read in full, pictures	Поиск с чтением страниц целиком, картинки
+Searches and reads each page into clean text, and has an image search. Key at firecrawl.dev. The sites see Firecrawl, not this phone.	Ищет и превращает каждую страницу в чистый текст, умеет искать картинки. Ключ — на firecrawl.dev. Сайты видят Firecrawl, а не этот телефон.
+Searching the web: «%s»…	Ищу в интернете: «%s»…
+Sources	Источники
+The web search failed (%s): the text uses only what the app measured.	Поиск в интернете не удался (%s): текст опирается только на измерения приложения.
+The web search is not set up: Assistant tab → ⋮ → Internet.	Поиск в интернете не настроен: вкладка «Ассистент» → ⋮ → «Интернет».
+Using an earlier search: «%s»	Беру прежний поиск: «%s»
+Waiting for your OK to search the web…	Жду вашего согласия на поиск в интернете…
+Web search declined: the text uses only what the app measured.	Поиск отклонён: текст опирается только на измерения приложения.
+With the internet on (Assistant tab → ⋮ → Internet), both also search the web for this device's model and known problems.	Если включить интернет («Ассистент» → ⋮ → «Интернет»), обе кнопки ещё ищут в сети модель устройства и известные проблемы.
+You.com's own web index; returns the pages' text. Pictures are the pages' previews. Key at you.com/platform, with free credits.	Собственный веб-индекс You.com; возвращает текст страниц. Картинки — превью страниц. Ключ — на you.com/platform, с бесплатными кредитами.
+Your own metasearch server, no key	Свой сервер метапоиска, без ключа
+no connection	нет соединения
+not set up	не настроен
+the service refused the key	сервис не принял ключ
+the service's credits ran out	у сервиса закончились кредиты
+too many requests	слишком много запросов
+New summaries are saved to «%s»	Новые сводки сохраняются в «%s»
+New summaries go to the highlighted folder. Hold another folder to save there.	Новые сводки идут в выделенную папку. Удержите другую, чтобы сохранять в неё.
+Every chat and folder is erased from this phone. Models and settings stay.	Все чаты и папки будут удалены с телефона. Модели и настройки останутся.

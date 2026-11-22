@@ -108,6 +108,7 @@ data class ServiceAdvertisement(val type: String, val name: String, val model: S
                 "smb" in folded -> "SMB"
                 "ssh" in folded -> "SSH"
                 "http" in folded -> "Web"
+                "miio" in folded -> "Mi Home"
                 else -> folded
             }
         }
@@ -138,6 +139,12 @@ data class HostIdentity(
             for (text in texts) namedIdentity(text)?.let { found = found.apply(it, overwrite = false) }
             if (upnpMaker != null) found = found.apply(upnpHint(upnpMaker, upnpType, upnpName), overwrite = false)
             val types = services.map { it.type.lowercase() }
+            // A Mi Home appliance: the model id from its mDNS name says what it is («careli.fryer.maf02» is an air fryer).
+            if (types.any { "miio" in it } || Miio.PORT in ports) {
+                val kind = services.firstNotNullOfOrNull { service -> service.model?.takeIf { "miio" in service.type.lowercase() }?.let(Miio::kind) }
+                // Without the model in an mDNS name the kind stays unknown: the device only says more to its owner's token.
+                found = found.apply(HostIdentity(manufacturer = "Xiaomi", model = cattivole.spectra.ui.tr(kind ?: "Mi Home device")), overwrite = false)
+            }
             if (types.any { "device-info" in it || "companion-link" in it }) {
                 found = found.apply(HostIdentity(manufacturer = "Apple"), overwrite = false)
             }

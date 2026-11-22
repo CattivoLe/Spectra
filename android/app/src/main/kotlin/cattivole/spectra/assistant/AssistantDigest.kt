@@ -29,8 +29,6 @@ data class AssistantSnapshot(
     val capture: String? = null,
     /** The last GATT read of a Bluetooth device, already written up (see [GattDigest]). Null when none was made. */
     val gatt: String? = null,
-    /** Persistent dossier notes saved by the assistant across chats. */
-    val memory: String? = null,
     /** Which device [gatt] was read from. */
     val gattAddress: String? = null,
     /** The same read, one entry per characteristic: what the summary card turns into findings. */
@@ -72,6 +70,8 @@ data class AssistantSnapshot(
         val system: String? = null,
         val ports: List<String> = emptyList(),
         val portsScanned: Boolean = false,
+        /** All 65535 TCP ports were checked, not only the common list. */
+        val allPortsScanned: Boolean = false,
         val risks: List<String> = emptyList(),
         val isGateway: Boolean = false,
         val isThisPhone: Boolean = false,
@@ -342,30 +342,6 @@ object AssistantDigest {
     }
 
     /**
-     * Everything the question or the snapshot could be about: addresses, BSSIDs and names in front of the user
-     * now, plus the words of the question itself, so a note about an absent device still comes back by name.
-     */
-    fun subjects(question: String, snapshot: AssistantSnapshot): Set<String> {
-        val found = mutableSetOf<String>()
-        fun add(value: String?) {
-            AssistantMemory.normalize(value)?.let(found::add)
-        }
-        for (host in snapshot.hosts) {
-            add(host.ip)
-            add(host.mac)
-            add(host.name)
-        }
-        for (network in snapshot.wifi) if (network.inRange) {
-            add(network.bssid)
-            add(network.name)
-        }
-        for (device in snapshot.bluetooth) if (device.nearby) add(device.name)
-        // Addresses survive the split: dots, colons and dashes are part of a word here, unlike in [matches].
-        for (word in question.lowercase().split(Regex("[^\\p{L}\\p{N}.:\\-]+"))) if (word.length >= 3) found.add(word)
-        return found
-    }
-
-    /**
      * The attachment for a question. A question about the app's data gets the matching sections; one that names
      * nothing gets the header plus any serious findings, so small talk is not buried in data.
      */
@@ -394,7 +370,6 @@ object AssistantDigest {
             parts.add(section.joinToString("\n"))
             used.add(topic)
         }
-        snapshot.memory?.let(parts::add)
 
         var body = parts.joinToString("\n\n")
         if (body.length > BUDGET) body = body.take(BUDGET) + "\n…(cut: the snapshot is longer than fits)"
@@ -498,7 +473,10 @@ object AssistantDigest {
             if (host.isThisPhone) parts.add("THIS PHONE")
             if (host.isNew) parts.add("NEW")
             if (host.trust != "unknown") parts.add(host.trust)
-            if (host.portsScanned) parts.add(if (host.ports.isEmpty()) "no open ports" else "open: " + host.ports.take(8).joinToString(","))
+            if (host.portsScanned) {
+                val scope = if (host.allPortsScanned) " (all 65535 ports checked)" else ""
+                parts.add((if (host.ports.isEmpty()) "no open ports" else "open: " + host.ports.take(8).joinToString(",")) + scope)
+            }
             host.note?.takeIf { it.isNotEmpty() }?.let { parts.add("note: ${clean(it, 50)}") }
             lines.add("- " + parts.joinToString(" · "))
         }

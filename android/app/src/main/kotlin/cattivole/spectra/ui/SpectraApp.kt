@@ -125,7 +125,6 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
 
     override fun internet() = nav.navigate("assistant/internet")
 
-    override fun dossier() = nav.navigate("assistant/dossier")
 
     /** A ✨ button: a summary card about what this screen shows — the findings at once, the model's words under them. */
     fun summary(model: cattivole.spectra.SpectraModel, subject: cattivole.spectra.assistant.CardSubject) {
@@ -178,6 +177,7 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
         nav.navigate(if (entry == null) "ble/${Uri.encode(address)}" else "saved/ble/${Uri.encode(entry)}/${Uri.encode(address)}")
 
     fun channels() = nav.navigate("channels")
+    fun savedNetworks() = nav.navigate("saved-networks")
     fun pcap() = nav.navigate("pcap")
 
     /** Decodes the sensor's last raw capture, shown under [name]. */
@@ -300,11 +300,12 @@ fun SpectraApp(model: SpectraModel) {
                     composable("saved/network/{entry}/{id}") { NetworkDetail(model, navigator, it.mac("id"), it.text("entry")) }
                     composable("saved/client/{entry}/{mac}") { ClientDetail(model, navigator, it.mac("mac"), it.text("entry")) }
                     composable("channels") { ChannelsScreen(model, navigator) }
+                    composable("saved-networks") { SavedNetworksScreen(model, navigator) }
                     composable("pcap") {
                         PcapScreen(navigator::back, onAsk = assistantAsk(model, navigator))
                     }
                     composable("sensor") {
-                        SensorScreen(model, onBack = navigator::back, onFlash = { nav.navigate("flash") })
+                        SensorScreen(model, onBack = navigator::back, onFlash = { nav.navigate("flash") }, onLicenses = navigator::licenses)
                     }
                     composable("flash") { FlashScreen(model) { nav.popBackStack() } }
                     composable("capture-pcap/{name}") {
@@ -394,7 +395,6 @@ fun SpectraApp(model: SpectraModel) {
                     }
                     composable("assistant/models") { cattivole.spectra.assistant.ui.AssistantModelsScreen(model, navigator) }
                     composable("assistant/internet") { cattivole.spectra.assistant.ui.AssistantInternetScreen(model, navigator) }
-                    composable("assistant/dossier") { cattivole.spectra.assistant.ui.AssistantDossierScreen(model, navigator) }
                 }
             }
         }

@@ -1,5 +1,11 @@
 package cattivole.spectra.ui
 
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -198,7 +204,8 @@ internal fun LazyListScope.resourcesCard(link: LinkProbe) {
     freeCard(
         "resources",
         header = tr("Resources"),
-        footer = tr("Tap a site to see whether it opens from the chosen connection; hold it to remove. Each one is asked over HTTPS without loading the page."),
+        footer = tr("Tap a site to check it, hold to remove. Asked over HTTPS without loading the page."),
+        padding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
     ) {
         var text by rememberSaveable { mutableStateOf("") }
         var rejected by rememberSaveable { mutableStateOf(false) }
@@ -228,24 +235,51 @@ internal fun LazyListScope.resourcesCard(link: LinkProbe) {
                 Text(tr("Check all"), modifier = Modifier.padding(start = 6.dp))
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = {
-                    text = it
-                    rejected = false
-                },
-                placeholder = { Text(tr("Add a site, like youtube.com")) },
-                singleLine = true,
-                isError = rejected,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
-                    keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done,
-                ),
-                keyboardActions = KeyboardActions(onDone = { add() }),
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = add, enabled = text.isNotBlank()) { Text(tr("Add")) }
+        // A slim one-line field, the height of a chip: the card is about the sites, not the input.
+        val border = if (rejected) Spectra.colors.danger else Color.Transparent
+        Row(
+            Modifier
+                .padding(top = if (link.resources.isEmpty()) 0.dp else 4.dp)
+                .fillMaxWidth()
+                .height(40.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .border(1.dp, border, RoundedCornerShape(12.dp))
+                .padding(start = 12.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            androidx.compose.material3.Icon(Icons.Rounded.Add, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (text.isEmpty()) {
+                    Text(
+                        tr("Add a site, like youtube.com"),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                BasicTextField(
+                    value = text,
+                    onValueChange = {
+                        text = it
+                        rejected = false
+                    },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
+                        keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { add() }),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (text.isNotBlank()) {
+                TextButton(onClick = add, contentPadding = PaddingValues(horizontal = 10.dp)) { Text(tr("Add")) }
+            }
         }
         if (rejected) {
             Text(

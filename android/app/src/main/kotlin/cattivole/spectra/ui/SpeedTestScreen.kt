@@ -1,5 +1,14 @@
 package cattivole.spectra.ui
 
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -128,7 +137,7 @@ fun SpeedTestScreen(model: SpectraModel, nav: Navigator) {
                 )
             }
             if (tester.downSamples.isNotEmpty() || tester.upSamples.isNotEmpty()) {
-                SpeedChart(tester.downSamples, tester.upSamples, Modifier.fillMaxWidth().height(120.dp).padding(top = 16.dp))
+                SpeedChart(tester.downSamples, tester.upSamples, Modifier.fillMaxWidth().padding(top = 16.dp))
             }
         }
         if (tester.running) {
@@ -293,27 +302,99 @@ private fun SpeedFigure(label: String, bps: Double?, color: Color, modifier: Mod
     }
 }
 
-/** Quarter-second throughput of both directions on one scale. */
+/** Quarter-second throughput of both directions on one scale: smoothed lines over a soft fill, a light grid with Mbit/s marks. */
 @Composable
 private fun SpeedChart(down: List<Double>, up: List<Double>, modifier: Modifier = Modifier) {
     val downColor = Spectra.colors.info
     val upColor = Spectra.colors.success
     val grid = MaterialTheme.colorScheme.outlineVariant
-    Canvas(modifier) {
-        val peak = (down + up).maxOrNull()?.takeIf { it > 0 } ?: return@Canvas
-        val slots = (SpeedTester.SECONDS * 4).toInt()
-        drawLine(grid, Offset(0f, size.height), Offset(size.width, size.height), strokeWidth = 1.dp.toPx())
-        fun trace(samples: List<Double>, color: Color) {
-            if (samples.size < 2) return
-            val path = Path()
-            samples.forEachIndexed { index, value ->
-                val x = size.width * index / (slots - 1).coerceAtLeast(1)
-                val y = size.height - (value / peak).toFloat() * size.height
-                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val measurer = rememberTextMeasurer()
+    val labelStyle = MaterialTheme.typography.labelSmall.merge(Tabular).copy(color = labelColor)
+    Column(modifier) {
+        Canvas(Modifier.fillMaxWidth().height(132.dp)) {
+            val peakBps = (down + up).maxOrNull()?.takeIf { it > 0 } ?: return@Canvas
+            // A round top for the scale: 10, 20, 50, 100… Mbit/s, so the marks read as plain numbers.
+            val top = niceCeiling(peakBps / 1_000_000.0)
+            val slots = (SpeedTester.SECONDS * 4).toInt()
+            val labelWidth = measurer.measure("000", labelStyle).size.width.toFloat() + 6.dp.toPx()
+            val chartLeft = 0f
+            val chartRight = size.width - labelWidth
+            val chartTop = 6.dp.toPx()
+            val chartBottom = size.height - 2.dp.toPx()
+            val height = chartBottom - chartTop
+            val dash = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 4.dp.toPx()))
+            // Grid: the baseline solid, halves and the top dashed, each with its value on the right.
+            for (step in 0..2) {
+                val value = top * step / 2
+                val y = chartBottom - height * step / 2f
+                drawLine(
+                    grid,
+                    Offset(chartLeft, y),
+                    Offset(chartRight, y),
+                    strokeWidth = 1.dp.toPx(),
+                    pathEffect = if (step == 0) null else dash,
+                )
+                if (step > 0) {
+                    val text = measurer.measure(formatMbit(value), labelStyle)
+                    drawText(text, topLeft = Offset(chartRight + 6.dp.toPx(), (y - text.size.height / 2f).coerceAtLeast(0f)))
+                }
             }
-            drawPath(path, color, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
+            fun point(index: Int, value: Double) = Offset(
+                chartLeft + (chartRight - chartLeft) * index / (slots - 1).coerceAtLeast(1),
+                chartBottom - (value / 1_000_000.0 / top).toFloat().coerceIn(0f, 1f) * height,
+            )
+            fun trace(samples: List<Double>, color: Color) {
+                if (samples.size < 2) return
+                val points = samples.mapIndexed(::point)
+                // Smooth: a cubic through the midpoints, so quarter-second jitter reads as a line, not a saw.
+                val line = Path().apply {
+                    moveTo(points[0].x, points[0].y)
+                    for (index in 1 until points.size) {
+                        val previous = points[index - 1]
+                        val current = points[index]
+                        val midX = (previous.x + current.x) / 2f
+                        cubicTo(midX, previous.y, midX, current.y, current.x, current.y)
+                    }
+                }
+                val fill = Path().apply {
+                    addPath(line)
+                    lineTo(points.last().x, chartBottom)
+                    lineTo(points.first().x, chartBottom)
+                    close()
+                }
+                drawPath(fill, Brush.verticalGradient(listOf(color.copy(alpha = 0.32f), color.copy(alpha = 0.02f)), startY = chartTop, endY = chartBottom))
+                drawPath(line, color, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+                val last = points.last()
+                drawCircle(color.copy(alpha = 0.25f), radius = 6.dp.toPx(), center = last)
+                drawCircle(color, radius = 3.dp.toPx(), center = last)
+            }
+            trace(down, downColor)
+            trace(up, upColor)
         }
-        trace(down, downColor)
-        trace(up, upColor)
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            ChartLegend(tr("Download"), downColor)
+            if (up.isNotEmpty()) ChartLegend(tr("Upload"), upColor)
+            Spacer(Modifier.weight(1f))
+            Text(tr("Mbit/s"), style = MaterialTheme.typography.labelSmall, color = labelColor)
+        }
     }
 }
+
+@Composable
+private fun ChartLegend(label: String, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.size(width = 14.dp, height = 3.dp).background(color, RoundedCornerShape(2.dp)))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** 1, 2, 5 × 10ⁿ at or above [value]: the top of the speed scale. */
+internal fun niceCeiling(value: Double): Double {
+    if (value <= 0) return 1.0
+    val magnitude = Math.pow(10.0, Math.floor(Math.log10(value)))
+    return listOf(1.0, 2.0, 5.0, 10.0).map { it * magnitude }.first { it >= value - 1e-9 }
+}
+
+private fun formatMbit(value: Double): String =
+    if (value >= 10 || value == Math.floor(value)) String.format(Locale.getDefault(), "%.0f", value) else String.format(Locale.getDefault(), "%.1f", value)

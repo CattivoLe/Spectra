@@ -23,6 +23,38 @@ object ContentExtractor {
     )
     private val blockTags = setOf("h1", "h2", "h3", "h4", "p", "li", "pre", "blockquote", "dd", "tr")
 
+    /**
+     * Text a search service already took out of the page (markdown or plain): «#» lines become headings, the rest
+     * paragraphs, so [Chunker] cuts it like a fetched page.
+     */
+    fun fromText(title: String, text: String): ExtractedPage {
+        val blocks = mutableListOf<ExtractedPage.Block>()
+        val paragraph = mutableListOf<String>()
+        fun flush() {
+            plainMarkdown(paragraph.joinToString(" ")).takeIf { it.isNotEmpty() }?.let { blocks.add(ExtractedPage.Block(it, isHeading = false)) }
+            paragraph.clear()
+        }
+        for (raw in text.lines()) {
+            val line = raw.trim()
+            when {
+                line.isEmpty() -> flush()
+                line.startsWith("#") -> {
+                    flush()
+                    plainMarkdown(line.trimStart('#', ' ')).takeIf { it.isNotEmpty() }?.let { blocks.add(ExtractedPage.Block(it, isHeading = true)) }
+                }
+                else -> paragraph.add(line)
+            }
+        }
+        flush()
+        return ExtractedPage(title, blocks)
+    }
+
+    /** Markdown links and images carry addresses the model does not need: only their words stay. */
+    private fun plainMarkdown(text: String): String = text
+        .replace(Regex("""!\[[^\]]*\]\([^)]*\)"""), "")
+        .replace(Regex("""\[([^\]]*)\]\([^)]*\)"""), "$1")
+        .split(Regex("""\s+""")).filter { it.isNotEmpty() }.joinToString(" ")
+
     fun extract(html: String, url: String): ExtractedPage {
         val document = runCatching { Jsoup.parse(html, url) }.getOrNull() ?: return ExtractedPage("", emptyList())
         val title = document.select("meta[property=og:title]").first()?.attr("content")?.takeIf { it.isNotEmpty() } ?: document.title()
