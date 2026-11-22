@@ -357,7 +357,7 @@ nonisolated private func resolveHostname(_ ip: String) -> String? {
 nonisolated private let bonjourServiceTypes = [
     "_googlecast._tcp", "_device-info._tcp", "_companion-link._tcp", "_apple-mobdev2._tcp",
     "_airplay._tcp", "_raop._tcp", "_hap._tcp", "_spotify-connect._tcp", "_ipp._tcp",
-    "_printer._tcp", "_smb._tcp", "_ssh._tcp", "_http._tcp",
+    "_printer._tcp", "_smb._tcp", "_ssh._tcp", "_http._tcp", Miio.serviceType,
 ]
 
 /// Browses `bonjourServiceTypes` on Wi-Fi and resolves every instance to an
@@ -451,9 +451,15 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
             return
         }
 
-        let tcp = NWProtocolTCP.Options()
-        tcp.connectionTimeout = 3
-        let params = NWParameters(tls: nil, tcp: tcp)
+        let params: NWParameters
+        if service.hasSuffix("._udp") {
+            // A UDP service (miIO) has no handshake: the connection is ready once the name resolves.
+            params = NWParameters.udp
+        } else {
+            let tcp = NWProtocolTCP.Options()
+            tcp.connectionTimeout = 3
+            params = NWParameters(tls: nil, tcp: tcp)
+        }
         params.requiredInterfaceType = .wifi
         if let ip = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
             ip.version = .v4
@@ -486,6 +492,15 @@ nonisolated private final class BonjourDiscovery: @unchecked Sendable {
     }
 
     private func record(_ name: String, rank: Int, ip: String, service: String, model: String?, friendly: String?) {
+        // A Mi Home instance name is an identifier with the model in it, never a name to show.
+        if service.contains("miio") {
+            var ads = servicesByIP[ip] ?? []
+            if !ads.contains(where: { $0.type.contains("miio") }) {
+                ads.append(ServiceAdvertisement(type: Miio.serviceType, name: "Mi Home", model: Miio.modelFromInstance(name)))
+            }
+            servicesByIP[ip] = ads
+            return
+        }
         // AirPlay audio names its instances "<MAC>@<device name>".
         var clean = name
         if let at = name.firstIndex(of: "@"),
@@ -716,13 +731,17 @@ final class LANScanner {
                     device.portScanFraction = fraction
                 }
             }
+            let miio = await Self.miioHello([ip])
             guard !Task.isCancelled, devices[ip] === device else {
                 device.portScanFraction = nil
                 return
             }
-            device.openPorts = ports
+            device.openPorts = miio.contains(ip) ? Self.mergedPorts(ports + [Miio.discoveredPort], kept: []) : ports
             device.portsScanned = true
-            if scope == .all { device.allPortsScannedAt = .now }
+            device.allPortsScannedAt = scope == .all ? .now : nil
+            if miio.contains(ip), !device.services.contains(where: { $0.type.contains("miio") }) {
+                device.services.append(ServiceAdvertisement(type: Miio.serviceType, name: "Mi Home"))
+            }
             device.portScanFraction = nil
             await enrich([device])
         }
@@ -886,6 +905,8 @@ final class LANScanner {
 
         // Bonjour browses meanwhile, for hosts that drop every probe.
         async let bonjourResult = discoverBonjourHosts(timeout: 5)
+        // Mi Home appliances usually open no TCP port at all: the miIO hello on UDP is their one door.
+        async let miioResult = Self.miioHello(hosts)
 
         let discoveryTargets = hosts.flatMap { ip in
             Self.discoveryPorts.map { (ip: ip, port: $0) }
@@ -894,6 +915,7 @@ final class LANScanner {
             self.state = .scanning(progress: 0.2 + 0.4 * fraction, phase: String(localized: "Discovering devices…"))
         }
         let bonjour = await bonjourResult
+        let miio = await miioResult.intersection(hostSet)
         let bonjourNames = bonjour.names.filter { hostSet.contains($0.key) }
         let bonjourServices = bonjour.services.filter { hostSet.contains($0.key) }
         if Task.isCancelled { return }
@@ -902,6 +924,7 @@ final class LANScanner {
         }
         aliveIPs.formUnion(bonjourNames.keys)
         aliveIPs.formUnion(bonjourServices.keys)
+        aliveIPs.formUnion(miio)
 
         // Phase 4: Re-read ARP after TCP probes — a host that drops every
         // connection still had to answer ARP for them to be sent.
@@ -928,6 +951,13 @@ final class LANScanner {
                 lastSeen: now
             )
             device.preservePinnedName(from: existing)
+            // A rescan of the network only tries the common ports: a recent full scan still stands, with what it found.
+            if let full = existing?.allPortsScannedAt, now.timeIntervalSince(full) < Self.fullScanKeep {
+                device.allPortsScannedAt = full
+            }
+            if miio.contains(ip), !device.services.contains(where: { $0.type.contains("miio") }) {
+                device.services.append(ServiceAdvertisement(type: Miio.serviceType, name: "Mi Home"))
+            }
             labels.apply(to: device)
             newDevices[ip] = device
         }
@@ -942,8 +972,11 @@ final class LANScanner {
         }
         if Task.isCancelled { return }
         for (ip, ports) in portsByIP {
-            newDevices[ip]?.openPorts = ports
-            newDevices[ip]?.portsScanned = true
+            guard let device = newDevices[ip] else { continue }
+            var found = ports
+            if miio.contains(ip) { found.append(Miio.discoveredPort) }
+            device.openPorts = Self.mergedPorts(found, kept: device.allPortsScanned ? device.openPorts : [])
+            device.portsScanned = true
         }
         devices = newDevices
 
@@ -1015,6 +1048,26 @@ final class LANScanner {
             }
         }
         return ads
+    }
+
+    /// How long a full port scan of a host outlives a rescan of the network.
+    static let fullScanKeep: TimeInterval = 30 * 60
+
+    /// Ports found now, plus those a recent full scan found: one entry per number, in order.
+    static func mergedPorts(_ fresh: [DiscoveredPort], kept: [DiscoveredPort]) -> [DiscoveredPort] {
+        var byNumber: [Int: DiscoveredPort] = [:]
+        for port in kept { byNumber[port.number] = port }
+        for port in fresh { byNumber[port.number] = port }
+        return byNumber.values.sorted { $0.number < $1.number }
+    }
+
+    /// The miIO hello to each address in turn (iOS sends nothing to the broadcast address); the ones that answered.
+    nonisolated private static func miioHello(_ hosts: [String]) async -> Set<String> {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: Miio.sayHello(to: hosts))
+            }
+        }
     }
 
     /// Ports tried on every address to tell whether a host is there: web,

@@ -112,6 +112,7 @@ final class LANDevice: Identifiable {
     /// A hostname worth showing. Blank, "." and the address itself are not:
     /// those used to replace a real name with an empty title.
     nonisolated static func usefulHostname(_ name: String, ip: String) -> String? {
+        if Miio.isInstanceName(name) { return nil }
         guard let shown = presentable(name), shown.caseInsensitiveCompare(ip) != .orderedSame else { return nil }
         return shown
     }

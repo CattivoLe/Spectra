@@ -143,10 +143,13 @@ struct ResourcesSection: View {
                 }
                 .disabled(watch.isChecking)
             }
-            HStack(spacing: 10) {
-                Image(systemName: "plus.circle")
+            // A slim one-line field, the height of a chip: the section is about the sites, not the input.
+            HStack(spacing: 8) {
+                Image(systemName: "plus")
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
                 TextField("Add a site, like youtube.com", text: $newSite)
+                    .font(.subheadline)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
@@ -154,10 +157,20 @@ struct ResourcesSection: View {
                     .focused($editing)
                     .onSubmit(add)
                     .onChange(of: newSite) { _, _ in rejected = false }
-                Button("Add", action: add)
-                    .buttonStyle(.borderless)
-                    .disabled(newSite.trimmingCharacters(in: .whitespaces).isEmpty)
+                if !newSite.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Button("Add", action: add)
+                        .font(.subheadline.weight(.semibold))
+                        .buttonStyle(.borderless)
+                }
             }
+            .padding(.leading, 12)
+            .padding(.trailing, 10)
+            .frame(height: 36)
+            .background(.fill.tertiary, in: .rect(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12).stroke(rejected ? Color.red : .clear, lineWidth: 1)
+            }
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
             if rejected {
                 Text("That is not a site name, or it is already in the list.")
                     .font(.footnote)
@@ -166,7 +179,7 @@ struct ResourcesSection: View {
         } header: {
             Text("Resources")
         } footer: {
-            Text("Tap a site to see whether it opens from the chosen connection; hold it to remove. Each one is asked over HTTPS without loading the page.")
+            Text("Tap a site to check it, hold to remove. Asked over HTTPS without loading the page.")
         }
     }
 

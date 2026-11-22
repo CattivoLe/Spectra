@@ -483,10 +483,39 @@ final class SensorLink: NSObject {
         return knownNetworks.all().first { $0.ssid == ssid && !$0.password.isEmpty }?.password
     }
 
+    /// Every network the app keeps, newest first: the password, or "" for an open one.
+    var savedNetworks: [SavedWiFiNetwork] {
+        _ = knownRevision
+        return knownNetworks.all()
+    }
+
+    /// Adds or replaces a network by hand; the sensor gets it too when it has a password.
+    func saveNetwork(ssid: String, password: String) {
+        let name = ssid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        knownNetworks.remember(ssid: name, password: password)
+        knownRevision += 1
+        if !password.isEmpty { send(.rememberWifi(ssid: name, password: password)) }
+    }
+
+    /// Drops a network from the app's list. The sensor's own copy goes with the next full list it is sent.
+    func forgetSaved(ssid: String) {
+        knownNetworks.forget(ssid: ssid)
+        knownRevision += 1
+        pushKnownNetworks()
+    }
+
     /// A password that just put the phone on `ssid`. Kept with the sensor's
     /// list and handed to the Cardputer, so either can rejoin.
     func rememberJoined(ssid: String, password: String) {
-        guard !password.isEmpty else { return }
+        guard !password.isEmpty else {
+            // An open network goes on the phone's own list only; there is nothing for the sensor to keep.
+            if !knownNetworks.all().contains(where: { $0.ssid == ssid }) {
+                knownNetworks.remember(ssid: ssid, password: "")
+                knownRevision += 1
+            }
+            return
+        }
         knownNetworks.remember(ssid: ssid, password: password)
         knownRevision += 1
         send(.rememberWifi(ssid: ssid, password: password))
@@ -497,7 +526,7 @@ final class SensorLink: NSObject {
     /// The sensor draws this list. Eighty is as many as its screen buffer keeps.
     private func pushKnownNetworks() {
         send(.resetKnown)
-        for network in knownNetworks.all().prefix(80) {
+        for network in knownNetworks.all().filter({ !$0.password.isEmpty }).prefix(80) {
             send(.rememberWifi(ssid: network.ssid, password: network.password))
         }
     }
@@ -1085,13 +1114,17 @@ extension SensorLink: CBPeripheralDelegate {
     }
 }
 
-/// Every network a linked sensor has joined and handed over. The sensor only
-/// keeps a short unsent buffer; this is the list it draws from.
+/// A network the app keeps, with its password ("" for an open one).
+struct SavedWiFiNetwork: Equatable, Hashable, Identifiable {
+    var ssid: String
+    var password: String
+    var id: String { ssid }
+}
+
+/// Every network a linked sensor has joined and handed over, the phone joined through Spectra, or the user added.
+/// The sensor only keeps a short unsent buffer; this is the list it draws from.
 private struct KnownNetworks {
-    struct Item {
-        var ssid: String
-        var password: String
-    }
+    typealias Item = SavedWiFiNetwork
 
     private let key = "spectra-known-wifi"
 
@@ -1111,6 +1144,14 @@ private struct KnownNetworks {
         guard !ssid.isEmpty else { return }
         var rows = all().filter { $0.ssid != ssid }
         rows.insert(Item(ssid: ssid, password: password), at: 0)
+        save(rows)
+    }
+
+    func forget(ssid: String) {
+        save(all().filter { $0.ssid != ssid })
+    }
+
+    private func save(_ rows: [Item]) {
         let array = rows.map { ["ssid": $0.ssid, "pass": $0.password] }
         guard let data = try? JSONSerialization.data(withJSONObject: array),
               let text = String(data: data, encoding: .utf8) else { return }

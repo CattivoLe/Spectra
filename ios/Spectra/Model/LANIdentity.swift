@@ -778,6 +778,7 @@ nonisolated struct ServiceAdvertisement: Equatable, Codable, Sendable {
         if folded.contains("smb") { return "SMB" }
         if folded.contains("ssh") { return "SSH" }
         if folded.contains("http") { return "Web" }
+        if folded.contains("miio") { return "Mi Home" }
         return folded
     }
 }
@@ -818,6 +819,15 @@ nonisolated struct HostIdentity: Equatable, Sendable {
             found.apply(upnpHint(maker: upnpMaker, type: upnpType, name: upnpName), overwrite: false)
         }
         let types = services.map { $0.type.lowercased() }
+        // A Mi Home appliance: the model id from its Bonjour name says what it is («careli.fryer.maf02» is an air
+        // fryer). Without it the kind stays unknown: the device only says more to its owner's token.
+        if types.contains(where: { $0.contains("miio") }) || ports.contains(Miio.port) {
+            let kind = services.lazy
+                .filter { $0.type.lowercased().contains("miio") }
+                .compactMap { $0.model.flatMap(Miio.kind) }
+                .first
+            found.apply(HostIdentity(manufacturer: "Xiaomi", model: kind ?? Miio.unknownKind), overwrite: false)
+        }
         // AirPlay and RAOP are licensed widely (Samsung TVs, Eversolo). Only
         // Apple's own discovery services identify the maker.
         if types.contains(where: { $0.contains("device-info") || $0.contains("companion-link") }) {
