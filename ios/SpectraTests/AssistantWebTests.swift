@@ -97,7 +97,7 @@ final class WebScriptedEngine: InferenceEngine {
     }
 }
 
-private let webArticleHTML = """
+let webArticleHTML = """
 <html><head><title>Сайт про Париж</title><meta property="og:title" content="Высота Эйфелевой башни"></head>
 <body>
   <header><nav><a href="/">Главная</a> <a href="/news">Новости</a> <a href="/about">О нас и о том, как мы работаем каждый день</a></nav></header>

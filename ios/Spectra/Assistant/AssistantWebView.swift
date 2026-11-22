@@ -39,8 +39,9 @@ struct AssistantWebView: View {
                             Text("English").tag("en")
                             Text("Automatic").tag("auto")
                         }
-                    case .brave:
-                        SecureField("API key", text: $web.braveKey)
+                    default:
+                        let kind = web.provider
+                        SecureField("API key", text: Binding(get: { web.key(kind) }, set: { web.setKey(kind, $0) }))
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
                     if let problem = web.configurationProblem { Text(problem).font(.footnote).foregroundStyle(.orange) }

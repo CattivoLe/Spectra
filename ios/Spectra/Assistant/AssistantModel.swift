@@ -120,12 +120,13 @@ final class AssistantModel {
         await loadSelectedModel()
     }
 
-    private var started = false
-    /// Loads the model the first time anything needs the assistant: its tab, or a chat opened from another screen.
+    private var startup: Task<Void, Never>?
+    /// Loads the model the first time anything needs the assistant: its tab, or a summary opened from another screen.
+    /// The load runs in a task of its own: a caller that goes away (a screen closed mid-load) does not cancel it,
+    /// and every caller waits for the same load instead of finding the engine busy.
     func ensureStarted() async {
-        guard !started else { return }
-        started = true
-        await start()
+        if startup == nil { startup = Task { await start() } }
+        await startup?.value
     }
 
     /// Questions another screen asked to put to a new chat as soon as it opens, by chat id.

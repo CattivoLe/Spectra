@@ -4,9 +4,16 @@ import LocalChatEngine
 
 public enum ChatStoreError: LocalizedError {
     case encryptionMismatch
+    /// The chat was deleted (say, while the model was still writing into it): there is nothing to add to.
+    case chatMissing
 
     public var errorDescription: String? {
-        String(localized: "Could not move the chats into the encrypted database: the record counts differ. The previous database was left untouched.")
+        switch self {
+        case .encryptionMismatch:
+            String(localized: "Could not move the chats into the encrypted database: the record counts differ. The previous database was left untouched.")
+        case .chatMissing:
+            "The chat no longer exists."
+        }
     }
 }
 
@@ -104,6 +111,7 @@ public final class ChatStore: Sendable {
         try await database.write { db in
             try db.execute(sql: "DELETE FROM message")
             try db.execute(sql: "DELETE FROM chat")
+            try db.execute(sql: "DELETE FROM folder")
             try db.execute(sql: "DELETE FROM websearch_log")
             try db.execute(sql: "DELETE FROM websearch_cache")
         }
@@ -154,16 +162,70 @@ public final class ChatStore: Sendable {
                 table.column("gathered", .blob).notNull()
             }
         }
+        migrator.registerMigration("v3-folders-and-subjects") { db in
+            try db.create(table: "folder") { table in
+                table.primaryKey("id", .blob)
+                table.column("name", .text).notNull()
+                table.column("createdAt", .datetime).notNull()
+            }
+            try db.alter(table: "chat") { table in
+                table.add(column: "folderID", .blob).references("folder", onDelete: .setNull)
+                // What a summary card is about (`spectra-card:…`); chats of earlier versions have none.
+                table.add(column: "subject", .text)
+            }
+        }
         return migrator
     }
 
     // MARK: - Диалоги
 
-    public func createChat() async throws -> Chat {
+    public func createChat(subject: String? = nil, folder: UUID? = nil) async throws -> Chat {
         let now = Date()
-        let chat = Chat(id: UUID(), title: "", createdAt: now, updatedAt: now, modelName: nil)
+        let chat = Chat(id: UUID(), title: "", createdAt: now, updatedAt: now, modelName: nil, subject: subject, folderID: folder)
         try await database.write { try chat.insert($0) }
         return chat
+    }
+
+    public func chat(_ id: UUID) async throws -> Chat? {
+        try await database.read { try Chat.fetchOne($0, id: id) }
+    }
+
+    // MARK: - Folders
+
+    public func folders() async throws -> [ChatFolder] {
+        try await database.read { try ChatFolder.order(sql: "name COLLATE NOCASE").fetchAll($0) }
+    }
+
+    /// The folders, again on every change.
+    public func observeFolders() -> AsyncThrowingStream<[ChatFolder], Error> {
+        observe { try ChatFolder.order(sql: "name COLLATE NOCASE").fetchAll($0) }
+    }
+
+    @discardableResult
+    public func createFolder(name: String) async throws -> ChatFolder {
+        let folder = ChatFolder(id: UUID(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), createdAt: Date())
+        try await database.write { try folder.insert($0) }
+        return folder
+    }
+
+    public func renameFolder(_ id: UUID, to name: String) async throws {
+        try await database.write { db in
+            try db.execute(sql: "UPDATE folder SET name = ? WHERE id = ?", arguments: [name.trimmingCharacters(in: .whitespacesAndNewlines), id])
+        }
+    }
+
+    /// Deletes the folder only: its chats stay, outside any folder.
+    public func deleteFolder(_ id: UUID) async throws {
+        try await database.write { db in
+            try db.execute(sql: "UPDATE chat SET folderID = NULL WHERE folderID = ?", arguments: [id])
+            _ = try ChatFolder.deleteOne(db, id: id)
+        }
+    }
+
+    public func moveChat(_ chatID: UUID, to folderID: UUID?) async throws {
+        try await database.write { db in
+            try db.execute(sql: "UPDATE chat SET folderID = ? WHERE id = ?", arguments: [folderID, chatID])
+        }
     }
 
     // MARK: - Поиск в интернете
@@ -203,7 +265,11 @@ public final class ChatStore: Sendable {
 
     /// Поток списка диалогов: приходит заново при любом изменении.
     public func observeChats() -> AsyncThrowingStream<[Chat], Error> {
-        let observation = ValueObservation.tracking { try Chat.order(Column("updatedAt").desc).fetchAll($0) }
+        observe { try Chat.order(Column("updatedAt").desc).fetchAll($0) }
+    }
+
+    private func observe<Value: Sendable>(_ fetch: @escaping @Sendable (Database) throws -> Value) -> AsyncThrowingStream<Value, Error> {
+        let observation = ValueObservation.tracking(fetch)
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -239,6 +305,8 @@ public final class ChatStore: Sendable {
     @discardableResult
     public func append(_ role: ChatMessage.Role, _ content: String, to chatID: UUID, modelName: String? = nil) async throws -> StoredMessage {
         try await database.write { db in
+            // Deleted while the model was writing into it: a defined error instead of a foreign-key failure.
+            guard try Chat.exists(db, id: chatID) else { throw ChatStoreError.chatMissing }
             let last = try Int.fetchOne(db, sql: "SELECT MAX(seq) FROM message WHERE chatID = ?", arguments: [chatID]) ?? 0
             let message = StoredMessage(id: UUID(), chatID: chatID, seq: last + 1, role: role,
                                         content: content, createdAt: Date(), interrupted: false, modelName: modelName, search: nil)
@@ -268,9 +336,12 @@ public final class ChatStore: Sendable {
         }
     }
 
-    static func title(from text: String) -> String {
+    /// Room for two lines in the list: the subject of a ✨ summary sits past its first 40 characters.
+    public static let titleLength = 90
+
+    public static func title(from text: String) -> String {
         let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        return trimmed.count > 40 ? String(trimmed.prefix(40)) + "…" : trimmed
+        return trimmed.count > titleLength ? String(trimmed.prefix(titleLength)) + "…" : trimmed
     }
 }

@@ -86,6 +86,16 @@ extension PassageSelector {
         return fused.indices.sorted { fused[$0] > fused[$1] }
     }
 
+    /// The pieces worth embedding: the best `limit` by words, then (when words found fewer) the rest in page order.
+    /// A short list goes whole: by meaning a piece with no words in common with the question may still fit.
+    public static func shortlist(_ passages: [Passage], for query: String, limit: Int) -> [Int] {
+        guard passages.count > limit else { return Array(passages.indices) }
+        let byWords = order(passages, for: query, method: .words)
+        let ranked = Set(byWords)
+        let rest = passages.indices.filter { !ranked.contains($0) }
+        return Array((byWords + rest).prefix(limit))
+    }
+
     /// Набирает куски в заданном порядке с ограничениями по объёму и числу кусков с одного сайта.
     public static func pack(_ passages: [Passage], order: [Int], budget: Int, perSource: Int = 2) -> [Passage] {
         var chosen: [Passage] = []

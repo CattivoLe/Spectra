@@ -14,9 +14,13 @@ public struct PromptCache: Sendable {
     static let fileExtension = "kvstate"
 
     public let directory: URL
+    /// How many different system prompts are kept at once. More than one is needed when an app has several
+    /// (in Spectra each summary action has its own), or they push each other out.
+    public let keep: Int
 
-    public init(directory: URL) {
+    public init(directory: URL, keep: Int = 1) {
         self.directory = directory
+        self.keep = max(1, keep)
     }
 
     /// The folder the app's own cache lives in; the system may empty it when storage runs low, which is fine.
@@ -60,8 +64,9 @@ public struct PromptCache: Sendable {
         directory.appendingPathComponent(key.fileName + ".partial")
     }
 
-    /// Moves a freshly written state into place and deletes every other file here: states of an older prompt,
-    /// another model or another llama.cpp are never read again, and each one is tens of megabytes.
+    /// Moves a freshly written state into place and deletes the rest beyond `keep`: unfinished files and all but
+    /// the `keep` − 1 most recently used other states. States of an older prompt, another model or another llama.cpp
+    /// are never read again, and each one is tens of megabytes.
     @discardableResult
     public func commit(_ key: Key) -> Bool {
         let manager = FileManager.default
@@ -73,15 +78,29 @@ public struct PromptCache: Sendable {
             try? manager.removeItem(at: temporaryURL(for: key))
             return false
         }
+        touch(key)
         prune(keeping: key.fileName)
         return true
     }
 
-    /// Deletes every file in the folder except `name`.
+    /// Marks a state as just used: housekeeping drops the ones unused for longest.
+    public func touch(_ key: Key) {
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url(for: key).path)
+    }
+
+    /// Deletes everything in the folder except `name` and the `keep` − 1 most recently used finished states.
     public func prune(keeping name: String?) {
         let manager = FileManager.default
         guard let files = try? manager.contentsOfDirectory(atPath: directory.path) else { return }
-        for file in files where file != name {
+        func modified(_ file: String) -> Date {
+            ((try? manager.attributesOfItem(atPath: directory.appendingPathComponent(file).path))?[.modificationDate] as? Date) ?? .distantPast
+        }
+        let others = Set(files.filter { $0 != name && $0.hasSuffix(".\(Self.fileExtension)") }
+            .map { ($0, modified($0)) }
+            .sorted { $0.1 > $1.1 }
+            .prefix(keep - 1)
+            .map(\.0))
+        for file in files where file != name && !others.contains(file) {
             try? manager.removeItem(at: directory.appendingPathComponent(file))
         }
     }

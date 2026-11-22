@@ -36,6 +36,8 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
     private var systemPrefix: (messages: [ChatMessage], thinking: Bool, tokens: [llama_token])?
 
     private static let batchSize: Int32 = 512
+    /// What `llama_decode` returns when the abort callback broke the batch off.
+    private static let aborted: Int32 = 2
 
     private static let backend: Void = {
         // По умолчанию llama.cpp пишет в stderr подробный журнал загрузки; оставляем только ошибки.
@@ -47,9 +49,11 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
         llama_backend_init()
     }()
 
-    /// - Parameter promptCacheDirectory: where computed system prompts are kept between chats; `nil` turns that off.
-    public init(promptCacheDirectory: URL? = PromptCache.defaultDirectory) {
-        promptCache = promptCacheDirectory.map(PromptCache.init(directory:))
+    /// - Parameters:
+    ///   - promptCacheDirectory: where computed system prompts are kept between chats; `nil` turns that off.
+    ///   - promptCacheFiles: how many different system prompts are kept there at once (Spectra has one per summary action).
+    public init(promptCacheDirectory: URL? = PromptCache.defaultDirectory, promptCacheFiles: Int = 6) {
+        promptCache = promptCacheDirectory.map { PromptCache(directory: $0, keep: promptCacheFiles) }
     }
 
     /// Initializes llama.cpp once per process; the embedding engine needs it too.
@@ -272,6 +276,15 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
         let contextLength = Int(llama_n_ctx(context))
         let (tokens, dropped) = try preparePrompt(messages, params: params, contextLength: contextLength, vocab: vocab)
 
+        // A stop breaks off even a batch in progress: llama.cpp asks between the nodes of the graph, so a 512-token
+        // batch of the prompt ends within a fraction of a second instead of finishing first. Per generation, so a
+        // late stop of an earlier one never reaches the next.
+        llama_set_abort_callback(context, { data in
+            guard let data else { return false }
+            return Unmanaged<CancelFlag>.fromOpaque(data).takeUnretainedValue().isSet
+        }, Unmanaged.passUnretained(cancelled).toOpaque())
+        defer { llama_set_abort_callback(context, nil, nil) }
+
         let sampler = makeSampler(params)
         defer { llama_sampler_free(sampler) }
 
@@ -323,6 +336,13 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
             let count = min(Int(Self.batchSize), stop - offset)
             let code = tokens.withUnsafeBufferPointer { buffer in
                 llama_decode(context, llama_batch_get_one(UnsafeMutablePointer(mutating: buffer.baseAddress! + offset), Int32(count)))
+            }
+            if code == Self.aborted {
+                // llama.cpp dropped the unfinished batch; what was computed before it stays for the next request.
+                if !llama_memory_seq_rm(memory, 0, Int32(offset), -1) { resetCache() }
+                return GenerationStats(promptTokens: tokens.count, reusedPromptTokens: reused, droppedMessages: dropped,
+                                       generatedTokens: 0, timeToFirstTokenSeconds: (clock.now - start).seconds,
+                                       generationSeconds: 0, stopReason: .cancelled)
             }
             guard code == 0 else {
                 resetCache()
@@ -380,6 +400,11 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
             }
 
             let code = llama_decode(context, llama_batch_get_one(&token, 1))
+            if code == Self.aborted {
+                if !llama_memory_seq_rm(memory, 0, Int32(cachedTokens.count), -1) { resetCache() }
+                stopReason = .cancelled
+                break
+            }
             guard code == 0 else {
                 resetCache()
                 throw EngineError.decodeFailed(code: code)
@@ -544,6 +569,7 @@ public final class LlamaEngine: InferenceEngine, @unchecked Sendable {
             promptCache.discard(key)
             return .failed
         }
+        promptCache.touch(key)
         return .loaded
     }
 

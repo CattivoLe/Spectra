@@ -5,12 +5,35 @@ public struct SearchResult: Codable, Hashable, Sendable {
     public var title: String
     public var url: URL
     public var snippet: String
+    /// The page's text when the service already read it (Tavily, Exa, Firecrawl, You.com): then it is not fetched
+    /// again. Not stored: the passages picked from it are.
+    public var content: String?
 
-    public init(title: String, url: URL, snippet: String) {
+    public init(title: String, url: URL, snippet: String, content: String? = nil) {
         self.title = title
         self.url = url
         self.snippet = snippet
+        self.content = content
     }
+
+    private enum CodingKeys: String, CodingKey { case title, url, snippet }
+}
+
+/// One picture found by an image search: a small preview to show, the full image and the page it is on.
+public struct ImageResult: Codable, Hashable, Sendable {
+    public var title: String
+    public var thumbnail: URL
+    public var image: URL
+    public var page: URL
+
+    public init(title: String, thumbnail: URL, image: URL, page: URL) {
+        self.title = title
+        self.thumbnail = thumbnail
+        self.image = image
+        self.page = page
+    }
+
+    public var host: String { page.host() ?? "" }
 }
 
 /// Что нашлось по запросу. Хранится вместе с вопросом пользователя, чтобы «Ещё раз» не ходил в сеть повторно.
@@ -23,11 +46,13 @@ public struct SearchPayload: Codable, Hashable, Sendable {
     public var evidence: [Passage]?
     /// How many pages were read in full.
     public var pagesRead: Int?
-    /// Queries of the second pass, when the first one did not find the answer.
+    /// Queries of the second pass of chats of earlier versions; kept so their records still read.
     public var extraQueries: [String]?
+    /// Pictures of the device a summary is about. `nil` when none were looked for.
+    public var images: [ImageResult]?
 
     public init(query: String, provider: String, date: Date = Date(), results: [SearchResult], evidence: [Passage]? = nil, pagesRead: Int? = nil,
-                extraQueries: [String]? = nil) {
+                extraQueries: [String]? = nil, images: [ImageResult]? = nil) {
         self.query = query
         self.provider = provider
         self.date = date
@@ -35,6 +60,7 @@ public struct SearchPayload: Codable, Hashable, Sendable {
         self.evidence = evidence
         self.pagesRead = pagesRead
         self.extraQueries = extraQueries
+        self.images = images
     }
 
     /// Every query of this search, in order.
@@ -96,18 +122,26 @@ public enum WebSearchError: LocalizedError, Equatable {
 public protocol SearchProvider: Sendable {
     var name: String { get }
     func search(_ query: String, limit: Int) async throws -> [SearchResult]
+    /// Pictures for `query`. Only the query goes out, as with `search`.
+    func searchImages(_ query: String, limit: Int) async throws -> [ImageResult]
+}
+
+extension SearchProvider {
+    public func searchImages(_ query: String, limit: Int) async throws -> [ImageResult] { [] }
 }
 
 /// Сетевой клиент для поиска: без cookie и кэша, с короткими тайм-аутами и нейтральным User-Agent.
 public enum WebClient {
-    public static func makeSession() -> URLSession {
+    /// `requestTimeout`/`resourceTimeout` are longer for the services that read the pages themselves: they answer
+    /// slower than a plain search.
+    public static func makeSession(requestTimeout: TimeInterval = 10, resourceTimeout: TimeInterval = 20) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        configuration.timeoutIntervalForRequest = 10
-        configuration.timeoutIntervalForResource = 20
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout
         configuration.waitsForConnectivity = false
         configuration.httpAdditionalHeaders = ["User-Agent": "Spectra", "Accept": "application/json"]
         return URLSession(configuration: configuration)
@@ -116,6 +150,20 @@ public enum WebClient {
     static func get(_ url: URL, headers: [String: String] = [:], session: URLSession) async throws -> Data {
         var request = URLRequest(url: url)
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        return try await send(request, session: session)
+    }
+
+    /// A JSON POST, for the search APIs that take their query as a body.
+    static func post(_ url: URL, body: [String: Any], headers: [String: String] = [:], session: URLSession) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return try await send(request, session: session)
+    }
+
+    private static func send(_ request: URLRequest, session: URLSession) async throws -> Data {
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw WebSearchError.badResponse }
@@ -133,6 +181,13 @@ public enum WebClient {
             text = text.replacingOccurrences(of: entity, with: character)
         }
         return text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// An http(s) address as SearXNG gives it: absolute, protocol-relative («//host/…») or relative to the server.
+    static func absolute(_ link: String?, base: URL) -> URL? {
+        guard let link = link?.trimmingCharacters(in: .whitespaces), !link.isEmpty, !link.hasPrefix("data:") else { return nil }
+        guard let resolved = URL(string: link, relativeTo: base)?.absoluteURL, ["http", "https"].contains(resolved.scheme ?? "") else { return nil }
+        return resolved
     }
 }
 
@@ -172,6 +227,29 @@ public struct SearXNGProvider: SearchProvider {
             SearchResult(title: WebClient.plainText($0.title ?? $0.url.host() ?? ""), url: $0.url, snippet: WebClient.plainText($0.content ?? ""))
         }
     }
+
+    public func searchImages(_ query: String, limit: Int) async throws -> [ImageResult] {
+        guard var components = URLComponents(url: base.appending(path: "search"), resolvingAgainstBaseURL: false) else {
+            throw WebSearchError.invalidAddress
+        }
+        components.queryItems = [.init(name: "q", value: query), .init(name: "format", value: "json"), .init(name: "categories", value: "images"),
+                                 .init(name: "safesearch", value: "1"), .init(name: "language", value: language)]
+        guard let url = components.url else { throw WebSearchError.invalidAddress }
+        let data = try await WebClient.get(url, session: session)
+
+        struct Response: Decodable {
+            struct Item: Decodable { var title: String?; var url: String?; var img_src: String?; var thumbnail_src: String? }
+            var results: [Item]
+        }
+        guard let decoded = try? JSONDecoder().decode(Response.self, from: data) else { throw WebSearchError.badResponse }
+        var seen: Set<URL> = []
+        return decoded.results.compactMap { item -> ImageResult? in
+            guard let image = WebClient.absolute(item.img_src, base: base), seen.insert(image).inserted else { return nil }
+            let thumbnail = WebClient.absolute(item.thumbnail_src, base: base) ?? image
+            let page = item.url.flatMap(URL.init(string:)) ?? image
+            return ImageResult(title: WebClient.plainText(item.title ?? ""), thumbnail: thumbnail, image: image, page: page)
+        }.prefix(limit).map { $0 }
+    }
 }
 
 // MARK: - Brave
@@ -205,5 +283,30 @@ public struct BraveProvider: SearchProvider {
         return (decoded.web?.results ?? []).prefix(limit).map {
             SearchResult(title: WebClient.plainText($0.title), url: $0.url, snippet: WebClient.plainText($0.description ?? ""))
         }
+    }
+
+    public func searchImages(_ query: String, limit: Int) async throws -> [ImageResult] {
+        guard !apiKey.isEmpty else { throw WebSearchError.notConfigured(String(localized: "no Brave key")) }
+        var components = URLComponents(string: "https://api.search.brave.com/res/v1/images/search")!
+        components.queryItems = [.init(name: "q", value: query), .init(name: "count", value: String(limit * 2)), .init(name: "safesearch", value: "strict")]
+        guard let url = components.url else { throw WebSearchError.invalidAddress }
+        let data = try await WebClient.get(url, headers: ["X-Subscription-Token": apiKey], session: session)
+
+        struct Response: Decodable {
+            struct Item: Decodable {
+                struct Thumbnail: Decodable { var src: String? }
+                struct Properties: Decodable { var url: String? }
+                var title: String?; var url: String?; var thumbnail: Thumbnail?; var properties: Properties?
+            }
+            var results: [Item]
+        }
+        guard let decoded = try? JSONDecoder().decode(Response.self, from: data) else { throw WebSearchError.badResponse }
+        return decoded.results.compactMap { item -> ImageResult? in
+            // Brave serves the preview from its own proxy: the picture's site sees nothing until it is opened.
+            guard let thumbnail = item.thumbnail?.src.flatMap(URL.init(string:)) else { return nil }
+            let image = item.properties?.url.flatMap(URL.init(string:)) ?? thumbnail
+            let page = item.url.flatMap(URL.init(string:)) ?? image
+            return ImageResult(title: WebClient.plainText(item.title ?? ""), thumbnail: thumbnail, image: image, page: page)
+        }.prefix(limit).map { $0 }
     }
 }

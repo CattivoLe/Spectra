@@ -51,8 +51,33 @@ public struct WebResearch: Sendable {
         public var pagesRead: Int
     }
 
-    public func run(query: String, question: String, progress: @escaping @Sendable (ResearchStage) async -> Void = { _ in }) async throws -> SearchPayload {
-        let gathered = try await gather(query: query, progress: progress)
+    /// How many pieces go through the embedding model: three read pages give 200+ of them, and embedding them all
+    /// took minutes on a phone; the best 40 by words are re-ranked by meaning, only a few reach the prompt anyway.
+    public static let maxEmbedded = 40
+    /// Shorter page text from a service is only a snippet: the page itself is read instead.
+    public static let minGivenText = 400
+
+    /// One query: search, read the pages, pick the pieces for the question. No second pass.
+    /// - Parameters:
+    ///   - sent: told about the query that went online, for the log.
+    ///   - initial: the query's results from `SearchCache`: then it does not go online again.
+    ///   - fetched: what the query brought back when it did go online, for `SearchCache`.
+    public func run(
+        query: String,
+        question: String,
+        initial: Gathered? = nil,
+        sent: @escaping @Sendable (String) async -> Void = { _ in },
+        fetched: @escaping @Sendable (String, Gathered) async -> Void = { _, _ in },
+        progress: @escaping @Sendable (ResearchStage) async -> Void = { _ in }
+    ) async throws -> SearchPayload {
+        let gathered: Gathered
+        if let initial {
+            gathered = initial
+        } else {
+            gathered = try await gather(query: query, progress: progress)
+            await sent(query)
+            await fetched(query, gathered)
+        }
         guard !gathered.results.isEmpty else {
             return SearchPayload(query: query, provider: provider.name, results: [], evidence: [], pagesRead: 0)
         }
@@ -70,14 +95,15 @@ public struct WebResearch: Sendable {
     public func select(from passages: [Passage], question: String, query: String, method: RankingMethod? = nil) async -> [Passage] {
         let text = question + " " + query
         let method = method ?? (embedder == nil ? .words : .hybrid)
-        var queryVector: [Float]?
-        var passageVectors: [[Float]]?
-        if method != .words, let embedder {
-            queryVector = try? await embedder.embed(queries: [question]).first
-            passageVectors = try? await embedder.embed(passages: passages.map { (($0.heading.map { $0 + ". " }) ?? "") + $0.text })
+        guard method != .words, let embedder else {
+            return PassageSelector.pack(passages, order: PassageSelector.order(passages, for: text, method: .words), budget: budget)
         }
-        let order = PassageSelector.order(passages, for: text, method: method, queryVector: queryVector, passageVectors: passageVectors)
-        return PassageSelector.pack(passages, order: order, budget: budget)
+        // Only the best pieces by words are re-ranked by meaning (see `maxEmbedded`).
+        let pool = PassageSelector.shortlist(passages, for: text, limit: Self.maxEmbedded).map { passages[$0] }
+        let queryVector = try? await embedder.embed(queries: [question]).first
+        let passageVectors = try? await embedder.embed(passages: pool.map { (($0.heading.map { $0 + ". " }) ?? "") + $0.text })
+        let order = PassageSelector.order(pool, for: text, method: method, queryVector: queryVector, passageVectors: passageVectors)
+        return PassageSelector.pack(pool, order: order, budget: budget)
     }
 
     /// Поиск с одним повторным заходом.
@@ -183,6 +209,10 @@ public struct WebResearch: Sendable {
             let pages = await withTaskGroup(of: [Passage]?.self) { group in
                 for (index, result) in toRead {
                     group.addTask {
+                        // The service read the page already: its text is used as it is, the site is not asked again.
+                        if let given = result.content, given.count >= Self.minGivenText {
+                            return Chunker.chunk(ContentExtractor.fromText(title: result.title, text: given), sourceIndex: index)
+                        }
                         guard let page = try? await fetcher.fetch(result.url) else { return nil }
                         let extracted = ContentExtractor.extract(html: page.html, url: page.url)
                         return Chunker.chunk(extracted, sourceIndex: index)

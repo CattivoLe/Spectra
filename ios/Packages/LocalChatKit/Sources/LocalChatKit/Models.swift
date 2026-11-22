@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 import LocalChatEngine
 
-/// A conversation with the assistant.
+/// A saved summary (or a chat of an earlier version). Spectra keeps what the summary is about in `subject`.
 public struct Chat: Codable, Identifiable, Hashable, Sendable, FetchableRecord, PersistableRecord {
     public static let databaseTableName = "chat"
 
@@ -12,6 +12,35 @@ public struct Chat: Codable, Identifiable, Hashable, Sendable, FetchableRecord, 
     public var updatedAt: Date
     /// The model the chat was last held with.
     public var modelName: String?
+    /// What a summary card is about, encoded by the app (`spectra-card:…`); `nil` for chats of earlier versions.
+    public var subject: String?
+    /// The folder the chat was put in; `nil` — not in any.
+    public var folderID: UUID?
+
+    public init(id: UUID, title: String, createdAt: Date, updatedAt: Date, modelName: String? = nil, subject: String? = nil, folderID: UUID? = nil) {
+        self.id = id
+        self.title = title
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.modelName = modelName
+        self.subject = subject
+        self.folderID = folderID
+    }
+}
+
+/// A folder of summaries, made by the user.
+public struct ChatFolder: Codable, Identifiable, Hashable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "folder"
+
+    public var id: UUID
+    public var name: String
+    public var createdAt: Date
+
+    public init(id: UUID, name: String, createdAt: Date) {
+        self.id = id
+        self.name = name
+        self.createdAt = createdAt
+    }
 }
 
 /// One message of a conversation.
