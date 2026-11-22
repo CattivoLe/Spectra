@@ -109,6 +109,9 @@ final class AssistantCardRunner {
 
     func continueOnOpen(_ id: UUID) { resumeOnOpen.insert(id) }
 
+    /// Whether "More detail" on this subject would search the web: only a known product or a link's domain goes out.
+    func searchesWeb(_ subject: CardSubject) -> Bool { CardWeb.lookup(subject, action: .details, sources: sources) != nil }
+
     func takeContinue(_ id: UUID) -> Bool { resumeOnOpen.remove(id) != nil }
 
     /// A card in memory whose last text was stopped: the Assistant tab offers to continue it.
