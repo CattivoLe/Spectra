@@ -26,6 +26,10 @@ class MainActivity : ComponentActivity() {
                 model.onBackground()
             }
         })
+        // `--ez demo true` on a debuggable build: made-up data for screenshots, see DemoMode.
+        if (intent.getBooleanExtra("demo", false) && applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            model.startDemo()
+        }
         setContent {
             SpectraTheme {
                 SpectraApp(model)

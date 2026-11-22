@@ -47,6 +47,13 @@ class PhoneWifiScanner(
         if (status == Status.SCANNING) publishResults(finished = true)
     }
 
+    /** Screenshot demo ([cattivole.spectra.DemoMode]): the phone's own scans stay off, only made-up networks are listed. */
+    var demo: Boolean = false
+        set(value) {
+            field = value
+            if (value) stop()
+        }
+
     fun observe(listener: () -> Unit): () -> Unit {
         listeners.add(listener)
         return { listeners.remove(listener) }
@@ -104,6 +111,7 @@ class PhoneWifiScanner(
 
     @SuppressLint("MissingPermission")
     fun refresh() {
+        if (demo) return
         if (!Permissions.canScanWifi(app)) {
             status = Status.PERMISSION
             publish()
