@@ -90,7 +90,7 @@ struct AssistantCatalogTests {
     @Test func bundledCatalogDecodesWithShortUniqueNames() throws {
         let url = try #require(Bundle.main.url(forResource: "AssistantModels", withExtension: "json"))
         let catalog = try ModelCatalog.decode(Data(contentsOf: url))
-        // One model for the assistant (chosen by tools/assistant-eval), plus the optional one for search by meaning.
+        // One model for the assistant (chosen by comparing small models on Spectra's own tasks), plus the optional one for search by meaning.
         #expect(catalog.filter { !$0.isEmbedding }.map(\.id) == ["ministral-3-3b"])
         #expect(catalog.first { !$0.isEmbedding }?.recommended == true)
         #expect(Set(catalog.map(\.id)).count == catalog.count)

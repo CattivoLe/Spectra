@@ -68,13 +68,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Face ID locks Spectra and your assistant chats from other people. The check stays in iOS; the app never receives it."
+            "value" : "Face ID locks Spectra and your assistant summaries from other people. The check stays in iOS; the app never receives it."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Face ID закрывает Spectra и диалоги с ассистентом от посторонних. Проверка остаётся в iOS, приложение её не получает."
+            "value" : "Face ID закрывает Spectra и сводки ассистента от посторонних. Проверка остаётся в iOS, приложение её не получает."
           }
         }
       }

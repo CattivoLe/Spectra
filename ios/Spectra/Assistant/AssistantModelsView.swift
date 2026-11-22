@@ -2,7 +2,7 @@ import SwiftUI
 import LocalChatEngine
 import LocalChatKit
 
-/// The assistant's model: one, chosen with tools/assistant-eval. Download it (or delete it), optionally add the small
+/// The assistant's model: one, chosen by comparing small models on Spectra's own tasks. Download it (or delete it), optionally add the small
 /// model that helps web search rank pages by meaning, and clear out models left from before there was only one.
 struct AssistantModelsView: View {
     @Environment(AssistantModel.self) private var model
