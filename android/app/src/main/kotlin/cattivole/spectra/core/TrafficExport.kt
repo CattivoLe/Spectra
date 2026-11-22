@@ -12,6 +12,9 @@ import java.util.TimeZone
 /** Reads a stored body: the flow, the exchange's index, and whether it is the request's. */
 fun interface BodySource {
     fun body(flow: TrafficFlow, index: Int, request: Boolean): ByteArray?
+
+    /** The payload of WebSocket message [number] of exchange [index]. */
+    fun message(flow: TrafficFlow, index: Int, number: Int): ByteArray? = null
 }
 
 /** The URL an exchange went to, rebuilt from the connection and its Host header. */
@@ -21,8 +24,9 @@ fun requestUrl(flow: TrafficFlow, exchange: HttpExchange): String {
         if (query.isEmpty()) exchange.path else "${exchange.path}?$query"
     }
     if (target.startsWith("http://") || target.startsWith("https://")) return target
-    val scheme = if (flow.tls) "https" else "http"
-    val hostHeader = exchange.header("Host", response = false)?.trim()?.takeIf { it.isNotEmpty() }
+    val scheme = exchange.header(":scheme", response = false) ?: if (flow.tls) "https" else "http"
+    val hostHeader = (exchange.header(":authority", response = false) ?: exchange.header("Host", response = false))
+        ?.trim()?.takeIf { it.isNotEmpty() }
     val authority = hostHeader ?: run {
         val name = flow.host?.takeIf { it.isNotEmpty() } ?: flow.destination.let { if (':' in it) "[$it]" else it }
         val usual = if (flow.tls) 443 else 80
@@ -72,6 +76,28 @@ object Har {
             )
             .put("serverIPAddress", flow.destination)
             .put("connection", flow.sourcePort.toString())
+            .apply { if (exchange.messages.isNotEmpty()) put("_webSocketMessages", messages(flow, index, exchange, bodies)) }
+    }
+
+    /** WebSocket messages the way Chrome writes them into a HAR. */
+    private fun messages(flow: TrafficFlow, index: Int, exchange: HttpExchange, bodies: BodySource): JSONArray {
+        val list = JSONArray()
+        exchange.messages.forEachIndexed { number, message ->
+            val payload = if (message.stored) bodies.message(flow, index, number) else null
+            val data = when {
+                payload == null -> message.preview.orEmpty()
+                message.opcode == WsMessage.BINARY -> Base64.getEncoder().encodeToString(payload)
+                else -> String(payload, Charsets.UTF_8)
+            }
+            list.put(
+                JSONObject()
+                    .put("type", if (message.fromClient) "send" else "receive")
+                    .put("time", message.at / 1000.0)
+                    .put("opcode", message.opcode)
+                    .put("data", data),
+            )
+        }
+        return list
     }
 
     private fun request(flow: TrafficFlow, index: Int, exchange: HttpExchange, bodies: BodySource): JSONObject {
@@ -152,11 +178,13 @@ object Curl {
         val parts = mutableListOf("curl")
         val hasBody = body != null && body.isNotEmpty()
         val usual = (exchange.method == "GET" && !hasBody) || (exchange.method == "POST" && hasBody)
+        if (exchange.httpVersion == Http2Assembler.VERSION) parts += "--http2"
         if (!usual) parts += "-X ${exchange.method}"
         parts += quote(requestUrl(flow, exchange))
         var compressed = false
         for (field in exchange.requestHeaders) {
             when {
+                field.name.startsWith(":") -> continue
                 field.name.equals("Host", true) || field.name.equals("Content-Length", true) -> continue
                 field.name.equals("Accept-Encoding", true) -> compressed = true
                 field.name.equals("Content-Encoding", true) && hasBody -> continue

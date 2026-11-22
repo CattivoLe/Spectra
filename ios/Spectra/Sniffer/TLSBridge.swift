@@ -15,9 +15,16 @@ let snifferLog = Logger(subsystem: "cattivole.Spectra", category: "sniffer")
 /// `fromClient`/`fromServer` take ciphertext; `toClient`/`toServer` emit
 /// ciphertext; `onClientPlain`/`onServerPlain` observe the cleartext.
 nonisolated final class TLSBridge {
+    static let h2 = "h2"
+    static let http1 = "http/1.1"
+
     private let loop = EmbeddedEventLoop()
-    private let phoneSide: EmbeddedChannel   // TLS server, faces the phone (presents our leaf)
+    /// TLS server, faces the phone (presents our leaf). Made once the origin has chosen its protocol.
+    private var phoneSide: EmbeddedChannel?
     private let originSide: EmbeddedChannel  // TLS client, faces the origin (validates it)
+    private let phoneContext: (String) throws -> NIOSSLContext
+    /// What the phone sent before its side existed: its ClientHello, held until the origin has answered.
+    private var heldFromPhone: [UInt8] = []
 
     private let onClientPlain: ([UInt8]) -> Void
     private let onServerPlain: ([UInt8]) -> Void
@@ -26,12 +33,71 @@ nonisolated final class TLSBridge {
     private let toServer: ([UInt8]) -> Void
     /// Whether the phone accepted our certificate: once, on its handshake completing or failing.
     private let onPhoneVerdict: (Bool) -> Void
+    private let onProtocol: (String) -> Void
+    private let onOriginFailed: () -> Void
     private var verdictGiven = false
     private var dead = false
     /// A write failed inside a callback; `drain` fails the bridge once it is safely outside the pipeline.
     private var writeFailed = false
+    /// The protocol the origin chose (ALPN); the phone is offered exactly this one.
+    private(set) var protocolName: String?
+    private var originChose: String??
+    /// The origin's TLS failed before the phone was answered: not the phone refusing our certificate.
+    private(set) var originFailed = false
 
+    /// The origin's handshake runs first: the phone is answered only once the origin has chosen its protocol,
+    /// and is offered exactly that one, so both legs speak the same HTTP version. `phoneContext` makes the
+    /// phone-facing context for that protocol; `onProtocol` says what was chosen, before any cleartext flows.
     init(
+        host: String,
+        phoneContext: @escaping (String) throws -> NIOSSLContext,
+        clientContext: NIOSSLContext,
+        onClientPlain: @escaping ([UInt8]) -> Void,
+        onServerPlain: @escaping ([UInt8]) -> Void,
+        onServerClosed: @escaping () -> Void,
+        toClient: @escaping ([UInt8]) -> Void,
+        toServer: @escaping ([UInt8]) -> Void,
+        onPhoneVerdict: @escaping (Bool) -> Void = { _ in },
+        onProtocol: @escaping (String) -> Void = { _ in },
+        onOriginFailed: @escaping () -> Void = {}
+    ) throws {
+        self.phoneContext = phoneContext
+        self.onClientPlain = onClientPlain
+        self.onServerPlain = onServerPlain
+        self.onServerClosed = onServerClosed
+        self.toClient = toClient
+        self.toServer = toServer
+        self.onPhoneVerdict = onPhoneVerdict
+        self.onProtocol = onProtocol
+        self.onOriginFailed = onOriginFailed
+
+        originSide = EmbeddedChannel(loop: loop)
+
+        // Origin side: open our own TLS to the origin, surface its response.
+        let hostname = host.isEmpty || isIPLiteral(host) ? nil : host
+        try originSide.pipeline.syncOperations.addHandler(
+            try NIOSSLClientHandler(context: clientContext, serverHostname: hostname)
+        )
+        try originSide.pipeline.syncOperations.addHandler(PlainTap(
+            label: "origin", onData: { [weak self] in self?.serverPlain($0) },
+            onClosed: { [weak self] in self?.onServerClosed() },
+            onHandshake: { [weak self] accepted, chosen in
+                guard let self, self.phoneSide == nil else { return }
+                if accepted { self.originChose = .some(chosen) } else { self.originFailed = true }
+            }
+        ))
+
+        snifferLog.debug("TLSBridge start host=\(host, privacy: .public) sni=\(hostname ?? "-", privacy: .public)")
+
+        // The channel must be active for the handshake to run; the client side starts its ClientHello toward
+        // the origin as soon as it is active.
+        let fake = try SocketAddress(ipAddress: "10.111.222.2", port: 443)
+        originSide.connect(to: fake, promise: nil)
+        drain()
+    }
+
+    /// Convenience for a fixed phone-facing context (tests, HTTP/1.1 only).
+    convenience init(
         host: String,
         serverContext: NIOSSLContext,
         clientContext: NIOSSLContext,
@@ -42,47 +108,19 @@ nonisolated final class TLSBridge {
         toServer: @escaping ([UInt8]) -> Void,
         onPhoneVerdict: @escaping (Bool) -> Void = { _ in }
     ) throws {
-        self.onClientPlain = onClientPlain
-        self.onServerPlain = onServerPlain
-        self.onServerClosed = onServerClosed
-        self.toClient = toClient
-        self.toServer = toServer
-        self.onPhoneVerdict = onPhoneVerdict
-
-        phoneSide = EmbeddedChannel(loop: loop)
-        originSide = EmbeddedChannel(loop: loop)
-
-        // Phone side: terminate the phone's TLS, surface its request cleartext.
-        try phoneSide.pipeline.syncOperations.addHandler(NIOSSLServerHandler(context: serverContext))
-        try phoneSide.pipeline.syncOperations.addHandler(PlainTap(
-            label: "phone", onData: { [weak self] in self?.clientPlain($0) }, onClosed: { },
-            onHandshake: { [weak self] accepted in self?.verdict(accepted) }
-        ))
-
-        // Origin side: open our own TLS to the origin, surface its response.
-        let hostname = host.isEmpty || isIPLiteral(host) ? nil : host
-        try originSide.pipeline.syncOperations.addHandler(
-            try NIOSSLClientHandler(context: clientContext, serverHostname: hostname)
-        )
-        try originSide.pipeline.syncOperations.addHandler(PlainTap(
-            label: "origin", onData: { [weak self] in self?.serverPlain($0) },
-            onClosed: { [weak self] in self?.onServerClosed() }
-        ))
-
-        snifferLog.debug("TLSBridge start host=\(host, privacy: .public) sni=\(hostname ?? "-", privacy: .public)")
-
-        // Both channels must be active for the handshakes to run; the client side
-        // starts its ClientHello toward the origin as soon as it is active.
-        let fake = try SocketAddress(ipAddress: "10.111.222.2", port: 443)
-        phoneSide.connect(to: fake, promise: nil)
-        originSide.connect(to: fake, promise: nil)
-        drain()
+        try self.init(host: host, phoneContext: { _ in serverContext }, clientContext: clientContext,
+                      onClientPlain: onClientPlain, onServerPlain: onServerPlain, onServerClosed: onServerClosed,
+                      toClient: toClient, toServer: toServer, onPhoneVerdict: onPhoneVerdict)
     }
 
     /// Ciphertext the phone sent. Decrypted to the request, re-encrypted to the origin.
     func fromClient(_ data: [UInt8]) {
         guard !dead, !data.isEmpty else { return }
         snifferLog.debug("bridge fromClient \(data.count) B")
+        guard let phoneSide else {
+            heldFromPhone += data
+            return
+        }
         feed(phoneSide, data)
     }
 
@@ -103,8 +141,34 @@ nonisolated final class TLSBridge {
     /// The origin closed; tell the phone.
     func serverClosed() {
         guard !dead else { return }
-        phoneSide.close(mode: .output, promise: nil)
+        phoneSide?.close(mode: .output, promise: nil)
         drain()
+    }
+
+    /// The origin has chosen: build the phone's side for that protocol and hand it what the phone sent so far.
+    private func openPhoneSide(_ chosen: String) {
+        let channel = EmbeddedChannel(loop: loop)
+        do {
+            try channel.pipeline.syncOperations.addHandler(NIOSSLServerHandler(context: phoneContext(chosen)))
+            try channel.pipeline.syncOperations.addHandler(PlainTap(
+                label: "phone", onData: { [weak self] in self?.clientPlain($0) }, onClosed: { },
+                onHandshake: { [weak self] accepted, _ in self?.verdict(accepted) }
+            ))
+            channel.connect(to: try SocketAddress(ipAddress: "10.111.222.2", port: 443), promise: nil)
+        } catch {
+            fail()
+            return
+        }
+        phoneSide = channel
+        protocolName = chosen
+        onProtocol(chosen)
+        let held = heldFromPhone
+        heldFromPhone = []
+        if !held.isEmpty {
+            var buffer = channel.allocator.buffer(capacity: held.count)
+            buffer.writeBytes(held)
+            if (try? channel.writeInbound(buffer)) == nil { fail() }
+        }
     }
 
     // MARK: Internals
@@ -126,7 +190,7 @@ nonisolated final class TLSBridge {
     private func serverPlain(_ bytes: [UInt8]) {
         snifferLog.debug("TLSBridge response plaintext \(bytes.count) B → phone")
         onServerPlain(bytes)
-        writeApp(phoneSide, bytes)
+        if let phoneSide { writeApp(phoneSide, bytes) }
     }
 
     private func feed(_ channel: EmbeddedChannel, _ data: [UInt8]) {
@@ -167,7 +231,18 @@ nonisolated final class TLSBridge {
             moved = false
             loop.run()   // fire NIOSSL's deferred handshake/promise work
             if writeFailed { fail(); return }
-            while let out = try? phoneSide.readOutbound(as: ByteBuffer.self) {
+            if originFailed && phoneSide == nil {
+                fail()
+                onOriginFailed()
+                return
+            }
+            if phoneSide == nil, let chosen = originChose {
+                openPhoneSide((chosen?.isEmpty == false ? chosen : nil) ?? Self.http1)
+                if dead { return }
+                moved = true
+                continue
+            }
+            while let phoneSide, let out = try? phoneSide.readOutbound(as: ByteBuffer.self) {
                 let bytes = Array(buffer: out)
                 snifferLog.debug("bridge toClient \(bytes.count) B")
                 toClient(bytes); moved = true
@@ -183,24 +258,24 @@ nonisolated final class TLSBridge {
     private func fail() {
         if dead { return }
         dead = true
-        _ = try? phoneSide.finish()
+        _ = try? phoneSide?.finish()
         _ = try? originSide.finish()
     }
 }
 
 /// Captures the cleartext a TLS channel unwraps, notes close, and logs TLS
 /// handshake completion / errors (the key signal for diagnosing a stalled MITM).
-private nonisolated final class PlainTap: ChannelInboundHandler {
+nonisolated final class PlainTap: ChannelInboundHandler {
     typealias InboundIn = ByteBuffer
     private let label: String
     private let onData: ([UInt8]) -> Void
     private let onClosed: () -> Void
-    /// true when the TLS handshake completed, false when it failed first.
-    private let onHandshake: (Bool) -> Void
+    /// true (and the negotiated ALPN protocol) when the TLS handshake completed, false when it failed first.
+    private let onHandshake: (Bool, String?) -> Void
     private var handshook = false
 
     init(label: String, onData: @escaping ([UInt8]) -> Void, onClosed: @escaping () -> Void,
-         onHandshake: @escaping (Bool) -> Void = { _ in }) {
+         onHandshake: @escaping (Bool, String?) -> Void = { _, _ in }) {
         self.label = label
         self.onData = onData
         self.onClosed = onClosed
@@ -221,16 +296,25 @@ private nonisolated final class PlainTap: ChannelInboundHandler {
         snifferLog.debug("TLSBridge \(self.label, privacy: .public) event: \(text, privacy: .public)")
         if !handshook, text.contains("handshakeCompleted") {
             handshook = true
-            onHandshake(true)
+            onHandshake(true, Self.negotiated(text))
         }
         context.fireUserInboundEventTriggered(event)
+    }
+
+    /// The ALPN protocol in `handshakeCompleted(negotiatedProtocol: Optional("h2"))`; nil when none was agreed.
+    /// Read from the description, which saves the tunnel a link to NIOTLS for one enum.
+    static func negotiated(_ text: String) -> String? {
+        guard let open = text.range(of: "Optional(\""),
+              let close = text.range(of: "\")", range: open.upperBound..<text.endIndex) else { return nil }
+        let value = String(text[open.upperBound..<close.lowerBound])
+        return value.isEmpty ? nil : value
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
         snifferLog.error("TLSBridge \(self.label, privacy: .public) TLS error: \(String(describing: error), privacy: .public)")
         if !handshook {
             handshook = true
-            onHandshake(false)
+            onHandshake(false, nil)
         }
         context.fireErrorCaught(error)
     }

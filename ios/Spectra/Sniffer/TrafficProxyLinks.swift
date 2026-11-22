@@ -30,10 +30,18 @@ final class TCPLink {
     private var inbound: [[UInt8]] = []     // bytes waiting to be sent to the phone
     private var unackedBytes = 0
     private var prelude: [UInt8] = []
-    private lazy var http = HttpAssembler(sink: { [weak self] index, request, body in
+    /// HTTP/1.1 until a decrypted connection turns out to speak HTTP/2.
+    private lazy var http: HttpStream = HttpAssembler(sink: bodySink(), messageSink: { [weak self] index, number, body in
         guard let self else { return false }
-        return self.proxy.keepBody(flowID: self.flow.id, index: index, request: request, body: body)
+        return self.proxy.keepMessage(flowID: self.flow.id, index: index, number: number, body: body)
     })
+
+    private func bodySink() -> HttpAssembler.Sink {
+        { [weak self] index, request, body in
+            guard let self else { return false }
+            return self.proxy.keepBody(flowID: self.flow.id, index: index, request: request, body: body)
+        }
+    }
     private var held: [UInt8]?
     private var mitm: TLSBridge?
     private enum Inspect { case unknown, tls, http, other }
@@ -224,10 +232,12 @@ final class TCPLink {
         proxy.phase("mitm \(host)")
         defer { proxy.phase("packet") }
         do {
+            // HTTP/2 is offered to the origin only when the phone asked for it; the phone then gets what the origin chose.
+            let offer = TrafficHints.tlsAlpn(hello).contains(TLSBridge.h2) ? [TLSBridge.h2, TLSBridge.http1] : [TLSBridge.http1]
             let bridge = try TLSBridge(
                 host: host,
-                serverContext: try ca.makeServerContext(for: host),
-                clientContext: try LocalCertificateAuthority.makeSystemClientContext(),
+                phoneContext: { chosen in try ca.makeServerContext(for: host, protocols: [chosen]) },
+                clientContext: try LocalCertificateAuthority.makeSystemClientContext(protocols: offer),
                 onClientPlain: { [weak self] in self?.http.client($0); self?.applyHTTP() },
                 onServerPlain: { [weak self] in self?.http.server($0); self?.applyHTTP() },
                 onServerClosed: { [weak self] in self?.http.serverClosed(); self?.applyHTTP() },
@@ -237,6 +247,15 @@ final class TCPLink {
                     guard let self else { return }
                     if !accepted { self.flow.refused = true }
                     self.proxy.mitmVerdict(host: host, accepted: accepted)
+                },
+                onProtocol: { [weak self] chosen in
+                    guard let self, chosen == TLSBridge.h2 else { return }
+                    self.http = Http2Assembler(sink: self.bodySink())
+                },
+                onOriginFailed: { [weak self] in
+                    // The origin's TLS failed before the phone was answered: nothing to read, the phone gets a reset.
+                    guard let self else { return }
+                    self.proxy.loop.execute { self.fail() }
                 }
             )
             mitm = bridge

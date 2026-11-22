@@ -38,6 +38,13 @@ class AcceptEncodingStrip {
             when (mode) {
                 Mode.HEADERS -> {
                     val end = indexOf(buf, offset, HEADER_END)
+                    if (end < 0 && !couldBeRequest(buf, offset)) {
+                        // Not HTTP/1.1 any more (a WebSocket, another protocol): let it all through at once.
+                        passthrough = true
+                        out += buf.copyOfRange(offset, buf.size)
+                        offset = buf.size
+                        break
+                    }
                     if (end < 0) {
                         if (finish || buf.size - offset > HEADER_CAP) {
                             passthrough = true
@@ -57,7 +64,7 @@ class AcceptEncodingStrip {
                     }
                     out += (rewrite(text) + "\r\n\r\n").toByteArray(Charsets.ISO_8859_1)
                     offset = end + HEADER_END.size
-                    if (method == "CONNECT") {
+                    if (method == "CONNECT" || text.contains("\r\nUpgrade:", ignoreCase = true)) {
                         passthrough = true
                         if (offset < buf.size) out += buf.copyOfRange(offset, buf.size)
                         offset = buf.size
@@ -166,5 +173,11 @@ class AcceptEncodingStrip {
         val LINE_END = byteArrayOf(13, 10)
         const val HEADER_CAP = 32 * 1024
         val METHODS = setOf("GET", "POST", "HEAD", "PUT", "DELETE", "PATCH", "OPTIONS", "CONNECT", "TRACE")
+    }
+
+    /** True while the bytes from [offset] could still be the start of a request line. */
+    private fun couldBeRequest(buf: ByteArray, offset: Int): Boolean {
+        val head = String(buf, offset, minOf(8, buf.size - offset), Charsets.ISO_8859_1)
+        return METHODS.any { method -> "$method ".startsWith(head) || head.startsWith("$method ") }
     }
 }

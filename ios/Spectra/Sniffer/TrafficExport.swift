@@ -2,6 +2,8 @@ import Foundation
 
 /// Reads a stored body: the flow, the exchange's index, and whether it is the request's.
 typealias BodySource = (_ flow: TrafficFlow, _ index: Int, _ request: Bool) -> Data?
+/// Reads a stored WebSocket message: the flow, the exchange's index, the message's number.
+typealias MessageSource = (_ flow: TrafficFlow, _ index: Int, _ number: Int) -> Data?
 
 /// The URL an exchange went to, rebuilt from the connection and its Host header.
 nonisolated func requestURL(_ flow: TrafficFlow, _ exchange: HttpExchange) -> String {
@@ -10,9 +12,10 @@ nonisolated func requestURL(_ flow: TrafficFlow, _ exchange: HttpExchange) -> St
         return query.isEmpty ? exchange.path : "\(exchange.path)?\(query)"
     }()
     if target.hasPrefix("http://") || target.hasPrefix("https://") { return target }
-    let scheme = flow.tls ? "https" : "http"
+    let scheme = exchange.header(":scheme", response: false) ?? (flow.tls ? "https" : "http")
     let authority: String
-    if let host = exchange.header("Host", response: false)?.trimmingCharacters(in: .whitespaces), !host.isEmpty {
+    if let host = (exchange.header(":authority", response: false) ?? exchange.header("Host", response: false))?
+        .trimmingCharacters(in: .whitespaces), !host.isEmpty {
         authority = host
     } else {
         let name = (flow.host?.isEmpty == false ? flow.host! : nil)
@@ -31,25 +34,26 @@ private nonisolated func percent(_ text: String) -> String {
 
 /// HTTP Archive 1.2, the format Charles, browsers and proxies exchange recordings in. Port of Android `Har`.
 nonisolated enum Har {
-    static func build(_ flows: [TrafficFlow], bodies: BodySource, version: String) -> String {
+    static func build(_ flows: [TrafficFlow], bodies: BodySource, messages: MessageSource = { _, _, _ in nil },
+                      version: String) -> String {
         let ordered = flows.flatMap { flow in flow.exchanges.indices.map { (flow, $0) } }
             .sorted { ($0.0.exchanges[$0.1].startedAt ?? $0.0.startedAt) < ($1.0.exchanges[$1.1].startedAt ?? $1.0.startedAt) }
         let log: [String: Any] = [
             "version": "1.2",
             "creator": ["name": "Spectra", "version": version],
-            "entries": ordered.map { entry($0.0, $0.1, bodies) },
+            "entries": ordered.map { entry($0.0, $0.1, bodies, messages) },
         ]
         let data = (try? JSONSerialization.data(withJSONObject: ["log": log], options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data()
         return String(decoding: data, as: UTF8.self)
     }
 
-    private static func entry(_ flow: TrafficFlow, _ index: Int, _ bodies: BodySource) -> [String: Any] {
+    private static func entry(_ flow: TrafficFlow, _ index: Int, _ bodies: BodySource, _ messages: MessageSource) -> [String: Any] {
         let exchange = flow.exchanges[index]
         let start = exchange.startedAt ?? flow.startedAt
         let send = span(exchange.startedAt, exchange.requestEndAt)
         let wait = span(exchange.requestEndAt, exchange.responseStartAt)
         let receive = span(exchange.responseStartAt, exchange.endedAt)
-        return [
+        var entry: [String: Any] = [
             "startedDateTime": isoTime(start),
             "time": exchange.durationMs ?? (send + wait + receive),
             "request": request(flow, index, exchange, bodies),
@@ -59,6 +63,21 @@ nonisolated enum Har {
             "serverIPAddress": flow.destination,
             "connection": String(flow.sourcePort),
         ]
+        if !exchange.messages.isEmpty {
+            // WebSocket messages the way Chrome writes them into a HAR.
+            entry["_webSocketMessages"] = exchange.messages.enumerated().map { number, message -> [String: Any] in
+                let payload = message.stored ? messages(flow, index, number) : nil
+                let data: String
+                if let payload {
+                    data = message.opcode == WsMessage.binary ? payload.base64EncodedString() : String(decoding: payload, as: UTF8.self)
+                } else {
+                    data = message.preview ?? ""
+                }
+                return ["type": message.fromClient ? "send" : "receive", "time": Double(message.at) / 1000,
+                        "opcode": message.opcode, "data": data]
+            }
+        }
+        return entry
     }
 
     private static func request(_ flow: TrafficFlow, _ index: Int, _ exchange: HttpExchange, _ bodies: BodySource) -> [String: Any] {
@@ -143,12 +162,13 @@ nonisolated enum Curl {
         var parts = ["curl"]
         let hasBody = !(body?.isEmpty ?? true)
         let usual = (exchange.method == "GET" && !hasBody) || (exchange.method == "POST" && hasBody)
+        if exchange.httpVersion == Http2Assembler.version { parts.append("--http2") }
         if !usual { parts.append("-X \(exchange.method)") }
         parts.append(quote(requestURL(flow, exchange)))
         var compressed = false
         for field in exchange.requestHeaders {
             let name = field.name.lowercased()
-            if name == "host" || name == "content-length" { continue }
+            if name.hasPrefix(":") || name == "host" || name == "content-length" { continue }
             if name == "accept-encoding" { compressed = true; continue }
             if name == "content-encoding" && hasBody { continue }
             parts.append("-H \(quote("\(field.name): \(field.value)"))")

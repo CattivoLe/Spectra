@@ -220,6 +220,12 @@ class TrafficSniffer(context: Context) {
         return store.read(flowId, index, request)
     }
 
+    /** The payload of a WebSocket message, live or saved. Reads the disk. */
+    fun message(sessionId: String?, flowId: Long, index: Int, number: Int): ByteArray? {
+        val store = if (sessionId == null) liveBodies else TrafficBodies(bodiesDir(sessionId))
+        return store.readMessage(flowId, index, number)
+    }
+
     private fun bodiesDir(sessionId: String) = File(dir, "$sessionId.bodies")
 
     fun certificateFingerprint(): String? = CaptureBus.authority?.fingerprint()

@@ -1665,3 +1665,18 @@ Only these	Только эти
 All except these	Все, кроме этих
 Only listed hosts (%d)	Только из списка (%d)
 All except listed hosts (%d)	Все, кроме списка (%d)
+HTTP version	Версия HTTP
+WebSocket messages (%d)	Сообщения WebSocket (%d)
+%d later messages were counted but not listed.	Ещё %d сообщений учтено, но не показано.
+↑ sent	↑ отправлено
+↓ received	↓ получено
+Text	Текст
+Binary	Двоичное
+Close frame	Закрытие
+Message	Сообщение
+Direction	Направление
+Type	Тип
+Time	Время
+Compression	Сжатие
+Only the start of this message was kept.	Сохранено только начало сообщения.
+This message is empty.	Сообщение пустое.

@@ -173,6 +173,12 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
 
     fun trafficHosts() = nav.navigate("traffic/hosts")
 
+    fun trafficMessage(id: Long, exchange: Int, number: Int, session: String? = null) =
+        nav.navigate(
+            if (session == null) "traffic/flow/$id/e/$exchange/ws/$number"
+            else "traffic/saved/${Uri.encode(session)}/flow/$id/e/$exchange/ws/$number",
+        )
+
     fun savedConnection(entry: String, checkedAt: Long) =
         nav.navigate("saved/connection/${Uri.encode(entry)}/$checkedAt")
 
@@ -339,6 +345,24 @@ fun SpectraApp(model: SpectraModel) {
                     composable("traffic/sessions") { SavedTrafficScreen(model, navigator) }
                     composable("traffic/saved/{id}") { SnifferScreen(model, navigator, sessionId = it.text("id")) }
                     composable("traffic/hosts") { TrafficHostsScreen(model, navigator) }
+                    composable("traffic/flow/{id}/e/{exchange}/ws/{number}") {
+                        TrafficMessageScreen(
+                            model, navigator,
+                            it.arguments?.getString("id")?.toLongOrNull() ?: -1L,
+                            it.arguments?.getString("exchange")?.toIntOrNull() ?: 0,
+                            it.arguments?.getString("number")?.toIntOrNull() ?: 0,
+                            sessionId = null,
+                        )
+                    }
+                    composable("traffic/saved/{id}/flow/{flow}/e/{exchange}/ws/{number}") {
+                        TrafficMessageScreen(
+                            model, navigator,
+                            it.arguments?.getString("flow")?.toLongOrNull() ?: -1L,
+                            it.arguments?.getString("exchange")?.toIntOrNull() ?: 0,
+                            it.arguments?.getString("number")?.toIntOrNull() ?: 0,
+                            sessionId = it.text("id"),
+                        )
+                    }
                     composable("traffic/flow/{id}/e/{exchange}/body/{side}") {
                         TrafficBodyScreen(
                             model, navigator,

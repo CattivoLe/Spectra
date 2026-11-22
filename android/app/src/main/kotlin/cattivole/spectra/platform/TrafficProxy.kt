@@ -2,7 +2,10 @@ package cattivole.spectra.platform
 
 import android.net.Network
 import android.net.VpnService
+import cattivole.spectra.core.BodySink
+import cattivole.spectra.core.Http2Assembler
 import cattivole.spectra.core.HttpAssembler
+import cattivole.spectra.core.HttpStream
 import cattivole.spectra.core.HttpExchange
 import cattivole.spectra.core.IpCodec
 import cattivole.spectra.core.LocalCa
@@ -96,6 +99,19 @@ class TrafficProxy(
         if (!store.reserve(body.size)) return false
         bodyWriter.execute { store.write(flowId, index, request, body) }
         return true
+    }
+
+    private fun keepMessage(flowId: Long, index: Int, number: Int, body: ByteArray): Boolean {
+        val store = bodies ?: return false
+        if (!store.reserve(body.size)) return false
+        bodyWriter.execute { store.writeMessage(flowId, index, number, body) }
+        return true
+    }
+
+    /** Where one connection's bodies and WebSocket messages go. */
+    private fun sinkFor(flowId: Long) = object : BodySink {
+        override fun keep(index: Int, request: Boolean, body: ByteArray) = keepBody(flowId, index, request, body)
+        override fun keepMessage(index: Int, number: Int, body: ByteArray) = keepMessage(flowId, index, number, body)
     }
 
     fun start() {
@@ -463,7 +479,8 @@ class TrafficProxy(
         private val inbound = ArrayDeque<ByteArray>()
         private var inboundBytes = 0
         private val prelude = java.io.ByteArrayOutputStream()
-        private val http = HttpAssembler(sink = { index, request, body -> keepBody(flow.id, index, request, body) })
+        /** HTTP/1.1 until a decrypted connection turns out to speak HTTP/2. */
+        private var http: HttpStream = HttpAssembler(sink = sinkFor(flow.id))
         private var held: ByteArray? = null
         private var mitm: TlsBridge? = null
         private var inspect = Inspect.UNKNOWN
@@ -675,7 +692,7 @@ class TrafficProxy(
                 try {
                     bridge.fromClient(data)
                 } catch (_: Exception) {
-                    if (flow.exchanges.isEmpty() && !clientTrusted) refused()
+                    if (flow.exchanges.isEmpty() && !clientTrusted && !bridge.serverFailed) refused()
                     fail()
                 }
                 return true
@@ -724,6 +741,7 @@ class TrafficProxy(
             inspect = Inspect.TLS
             val ca = certificate() ?: return false
             val host = sni?.takeIf { it.isNotEmpty() } ?: IpCodec.text(dst)
+            val offerHttp2 = TrafficHints.tlsAlpn(hello).contains(TlsBridge.H2)
             val bridge = try {
                 TlsBridge(
                     host = host,
@@ -748,6 +766,8 @@ class TrafficProxy(
                     },
                     toClient = ::toClient,
                     toServer = ::toServer,
+                    offerHttp2 = offerHttp2,
+                    onProtocol = { chosen -> if (chosen == TlsBridge.H2) http = Http2Assembler(sink = sinkFor(flow.id)) },
                 )
             } catch (_: Exception) {
                 return false
@@ -758,7 +778,7 @@ class TrafficProxy(
                 bridge.fromClient(hello)
             } catch (_: Exception) {
                 mitm = null
-                refused()
+                if (!bridge.serverFailed) refused()
                 fail()
             }
             return true

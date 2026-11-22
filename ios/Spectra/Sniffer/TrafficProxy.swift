@@ -278,6 +278,14 @@ nonisolated final class TrafficProxy {
         !refusedHosts.contains(host) && hostFilter().allows(sni?.isEmpty == false ? sni : nil)
     }
 
+    /// Hands a WebSocket message's payload to the store, within the recording's budget.
+    func keepMessage(flowID: Int64, index: Int, number: Int, body: [UInt8]) -> Bool {
+        guard let bodies, bodies.reserve(body.count) else { return false }
+        let data = Data(body)
+        bodyQueue.async { bodies.writeMessage(flowID: flowID, index: index, number: number, body: data) }
+        return true
+    }
+
     /// Hands a finished body to the store, within the recording's budget. True when it will be written.
     func keepBody(flowID: Int64, index: Int, request: Bool, body: [UInt8]) -> Bool {
         guard let bodies, bodies.reserve(body.count) else { return false }

@@ -5,11 +5,18 @@ import Compression
 /// cap so the next message still lines up, and the exchange says it was cut. Finished bodies go to `sink` once
 /// Content-Encoding is undone (gzip, deflate and Brotli through the `Compression` framework); the exchanges keep
 /// their times and sizes. Port of the Android `core/HttpExchange.kt` `HttpAssembler`.
-nonisolated final class HttpAssembler {
+nonisolated final class HttpAssembler: HttpStream {
     /// Takes a finished body: the exchange's index, whether it is the request's, the decoded bytes. True when kept.
     typealias Sink = (_ index: Int, _ request: Bool, _ body: [UInt8]) -> Bool
+    /// Takes the payload of WebSocket message `number` of exchange `index`. True when kept.
+    typealias MessageSink = (_ index: Int, _ number: Int, _ body: [UInt8]) -> Bool
 
     private let sink: Sink
+    private let messageSink: MessageSink
+    /// Reads the frames once the connection became a WebSocket.
+    private var socket: WsReader?
+    /// WebSocket messages listed for one connection; later ones are only counted.
+    static let maxMessages = 1000
     private let clock: () -> Int64
     private let client = ByteCursor()
     private let server = ByteCursor()
@@ -39,14 +46,18 @@ nonisolated final class HttpAssembler {
     private var requestEndAt: Int64?
     private var responseStartAt: Int64?
 
-    init(sink: @escaping Sink = { _, _, _ in false }, clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
+    init(sink: @escaping Sink = { _, _, _ in false },
+         messageSink: @escaping MessageSink = { _, _, _ in false },
+         clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
         self.sink = sink
+        self.messageSink = messageSink
         self.clock = clock
     }
 
     func exchanges() -> [HttpExchange] { ready }
 
     func client(_ data: [UInt8]) {
+        if let socket { socket.client(data); return }
         if stopped || data.isEmpty { return }
         if client.available() == 0 { clientMark = clock() }
         client.append(data)
@@ -54,6 +65,7 @@ nonisolated final class HttpAssembler {
     }
 
     func server(_ data: [UInt8]) {
+        if let socket { socket.server(data); return }
         if stopped || data.isEmpty { return }
         if server.available() == 0 { serverMark = clock() }
         server.append(data)
@@ -129,6 +141,8 @@ nonisolated final class HttpAssembler {
                 if status == 101 || method == "CONNECT" {
                     publish(response: true, body: BodyResult(), endedAt: clock())
                     stopped = true
+                    let upgrade = responseHeaders.first { $0.name.lowercased() == "upgrade" }?.value.lowercased() ?? ""
+                    if status == 101 && upgrade.contains("websocket") { openSocket() }
                     return
                 }
                 responseBody = BodyReader(plan: Self.plan(responseHeaders, request: false, method: method, status: status), limit: Self.responseCap)
@@ -145,6 +159,26 @@ nonisolated final class HttpAssembler {
                 step = .requestHeaders
             }
         }
+    }
+
+    /// Hands what is left in both cursors, and everything after, to a WebSocket reader.
+    private func openSocket() {
+        let index = ready.count - 1
+        let extensions = responseHeaders.first { $0.name.lowercased() == "sec-websocket-extensions" }?.value
+        let reader = WsReader(extensions: extensions, clock: clock) { [unowned self] message, payload in
+            var exchange = self.ready[index]
+            if exchange.messages.count >= Self.maxMessages {
+                exchange.messagesDropped += 1
+            } else {
+                var kept = message
+                kept.stored = !payload.isEmpty && self.messageSink(index, exchange.messages.count, payload)
+                exchange.messages.append(kept)
+            }
+            self.ready[index] = exchange
+        }
+        socket = reader
+        if client.available() > 0 { reader.client(client.read(client.available())) }
+        if server.available() > 0 { reader.server(server.read(server.available())) }
     }
 
     private func publish(response: Bool, body: BodyResult?, endedAt: Int64? = nil) {
@@ -372,7 +406,7 @@ private nonisolated func headerFields(_ lines: [String]) -> [HttpField] {
     }
 }
 
-private nonisolated func queryFields(_ target: String) -> [HttpField] {
+nonisolated func queryFields(_ target: String) -> [HttpField] {
     guard let q = target.range(of: "?") else { return [] }
     let query = String(target[target.index(after: q.lowerBound)...])
     if query.isEmpty { return [] }
@@ -384,7 +418,7 @@ private nonisolated func queryFields(_ target: String) -> [HttpField] {
     }
 }
 
-private nonisolated func formFields(_ body: [UInt8]) -> [HttpField] {
+nonisolated func formFields(_ body: [UInt8]) -> [HttpField] {
     if body.isEmpty { return [] }
     return String(decoding: body, as: UTF8.self).components(separatedBy: "&").prefix(40).compactMap { pair in
         if pair.isEmpty { return nil }
@@ -394,7 +428,7 @@ private nonisolated func formFields(_ body: [UInt8]) -> [HttpField] {
     }
 }
 
-private nonisolated func jsonFields(_ body: [UInt8]) -> [HttpField] {
+nonisolated func jsonFields(_ body: [UInt8]) -> [HttpField] {
     let text = String(decoding: body, as: UTF8.self).trimmingCharacters(in: .whitespaces)
     guard text.hasPrefix("{"), let data = text.data(using: .utf8),
           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
@@ -406,11 +440,11 @@ private nonisolated func jsonFields(_ body: [UInt8]) -> [HttpField] {
     }
 }
 
-private nonisolated func isForm(_ headers: [HttpField]) -> Bool {
+nonisolated func isForm(_ headers: [HttpField]) -> Bool {
     headers.contains { $0.name.lowercased() == "content-type" && $0.value.lowercased().contains("application/x-www-form-urlencoded") }
 }
 
-private nonisolated func isJSONType(_ headers: [HttpField]) -> Bool {
+nonisolated func isJSONType(_ headers: [HttpField]) -> Bool {
     headers.contains { $0.name.lowercased() == "content-type" && $0.value.lowercased().contains("json") }
 }
 

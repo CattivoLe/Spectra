@@ -5,6 +5,11 @@ import cattivole.spectra.core.BodyPreview
 import cattivole.spectra.core.BodyView
 import cattivole.spectra.core.Curl
 import cattivole.spectra.core.Har
+import cattivole.spectra.core.HpackDecoder
+import cattivole.spectra.core.Http2Assembler
+import cattivole.spectra.core.Huffman
+import cattivole.spectra.core.WsMessage
+import cattivole.spectra.core.BodySink
 import cattivole.spectra.core.TlsHostFilter
 import cattivole.spectra.core.TrafficBodies
 import org.json.JSONObject
@@ -682,6 +687,270 @@ class TrafficTest {
         assertNull(store.read(3, 0, false))
         assertEquals("hello", String(TrafficBodies(saved).read(3, 0, false)!!))
         assertTrue(store.reserve(10))
+    }
+
+    private fun hex(text: String): ByteArray = text.replace(" ", "").chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+    @Test
+    fun hpackDecodesTheRfcExamples() {
+        val plain = HpackDecoder()
+        assertEquals(
+            listOf(":method" to "GET", ":scheme" to "http", ":path" to "/", ":authority" to "www.example.com"),
+            plain.decode(hex("8286 8441 0f77 7777 2e65 7861 6d70 6c65 2e63 6f6d")).map { it.name to it.value },
+        )
+        assertEquals("no-cache", plain.decode(hex("8286 84be 5808 6e6f 2d63 6163 6865")).last().value)
+        val third = plain.decode(hex("8287 85bf 400a 6375 7374 6f6d 2d6b 6579 0c63 7573 746f 6d2d 7661 6c75 65"))
+        assertEquals("/index.html", third.first { it.name == ":path" }.value)
+        assertEquals("custom-value", third.first { it.name == "custom-key" }.value)
+        val huffman = HpackDecoder()
+        assertEquals("www.example.com", huffman.decode(hex("8286 8441 8cf1 e3c2 e5f2 3a6b a0ab 90f4 ff")).last().value)
+        assertEquals("no-cache", huffman.decode(hex("8286 84be 5886 a8eb 1064 9cbf")).last().value)
+        assertEquals("custom-value", huffman.decode(hex("8287 85bf 4088 25a8 49e9 5ba9 7d7f 8925 a849 e95b b8e8 b4bf")).last().value)
+        val response = HpackDecoder(256).decode(hex("4882 6402 5885 aec3 771a 4b61 96d0 7abe 9410 54d4 44a8 2005 9504 0b81 66e0 82a6 2d1b ff6e 919d 29ad 1718 63c7 8f0b 97c8 e9ae 82ae 43d3"))
+        assertEquals(listOf(":status" to "302", "cache-control" to "private", "date" to "Mon, 21 Oct 2013 20:13:21 GMT", "location" to "https://www.example.com"), response.map { it.name to it.value })
+        assertEquals("302", String(Huffman.decode(hex("6402"))))
+    }
+
+    /** One HTTP/2 frame. */
+    private fun frame(type: Int, flags: Int, stream: Int, payload: ByteArray): ByteArray =
+        byteArrayOf((payload.size shr 16).toByte(), (payload.size shr 8).toByte(), payload.size.toByte(), type.toByte(), flags.toByte(),
+            (stream shr 24).toByte(), (stream shr 16).toByte(), (stream shr 8).toByte(), stream.toByte()) + payload
+
+    /** A header block of literal fields without indexing: what any HPACK decoder reads. */
+    private fun literals(vararg fields: Pair<String, String>): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        for ((name, value) in fields) {
+            out.write(0)
+            out.write(name.length)
+            out.write(name.toByteArray())
+            out.write(value.length)
+            out.write(value.toByteArray())
+        }
+        return out.toByteArray()
+    }
+
+    @Test
+    fun http2StreamsBecomeExchanges() {
+        var now = 100L
+        val bodies = HashMap<String, ByteArray>()
+        val h2 = Http2Assembler(sink = { index, request, body -> bodies["$index-$request"] = body; true }, clock = { now })
+        val settings = frame(4, 0, 0, ByteArray(0))
+        val request = frame(1, 0x4, 1, hex("8287 85bf".substring(0, 4)) + literals(":path" to "/api?x=1", ":authority" to "example.com", "content-type" to "application/json"))
+        val requestBody = """{"a":1}""".toByteArray()
+        h2.client(Http2Assembler.PREFACE + settings + request)
+        now = 110
+        h2.client(frame(0, 0x1, 1, requestBody))
+        val second = frame(1, 0x5, 3, literals(":method" to "GET", ":path" to "/b", ":authority" to "example.com"))
+        h2.client(second)
+        now = 150
+        // A response split across two reads, with a padded DATA frame and trailers.
+        val response = settings + frame(1, 0x4, 1, literals(":status" to "200", "content-type" to "application/json"))
+        h2.server(response.copyOf(15))
+        h2.server(response.copyOfRange(15, response.size))
+        now = 170
+        val padded = byteArrayOf(2) + """{"ok":true}""".toByteArray() + byteArrayOf(0, 0)
+        h2.server(frame(0, 0x8, 1, padded) + frame(1, 0x5, 1, literals("grpc-status" to "0")))
+        h2.server(frame(1, 0x5, 3, literals(":status" to "404")))
+        val list = h2.exchanges()
+        assertEquals(2, list.size)
+        val first = list[0]
+        assertEquals("GET", first.method)
+        assertEquals("/api", first.path)
+        assertEquals("/api?x=1", first.target)
+        assertEquals("1", first.query.single().value)
+        assertEquals("HTTP/2", first.httpVersion)
+        assertEquals(200, first.status)
+        assertEquals("0", first.header("grpc-status", response = true))
+        assertEquals(100L, first.startedAt)
+        assertEquals(110L, first.requestEndAt)
+        assertEquals(150L, first.responseStartAt)
+        assertEquals(170L, first.endedAt)
+        assertEquals(requestBody.size.toLong(), first.requestBodyBytes)
+        assertEquals(11L, first.responseBodyBytes)
+        assertTrue(first.requestBodyStored && first.responseBodyStored)
+        assertEquals("1", first.parameters.single { it.name == "a" }.value)
+        assertEquals("""{"ok":true}""", String(bodies["0-false"]!!))
+        assertEquals(404, list[1].status)
+        assertEquals("/b", list[1].path)
+        assertEquals("""{"a":1}""", String(bodies["0-true"]!!))
+        val flow = TrafficFlow(1, "TCP", "10.0.0.1", 1, "1.2.3.4", 443, "example.com", null, null, true, 0, 0, 0, 0, false, list)
+        val curl = Curl.command(flow, first, requestBody)
+        assertTrue(curl.contains("--http2"))
+        assertTrue(curl.contains("'https://example.com/api?x=1'"))
+        assertFalse(curl.contains("':"))
+        val broken = Http2Assembler()
+        broken.client("GET / HTTP/1.1\r\n\r\n".toByteArray() + ByteArray(20))
+        assertTrue(broken.exchanges().isEmpty())
+    }
+
+    /** A WebSocket frame; client frames are masked. */
+    private fun wsFrame(opcode: Int, payload: ByteArray, fin: Boolean = true, mask: Boolean = false, rsv1: Boolean = false): ByteArray {
+        val head = java.io.ByteArrayOutputStream()
+        head.write((if (fin) 0x80 else 0) or (if (rsv1) 0x40 else 0) or opcode)
+        val maskBit = if (mask) 0x80 else 0
+        when {
+            payload.size < 126 -> head.write(maskBit or payload.size)
+            else -> {
+                head.write(maskBit or 126)
+                head.write(payload.size shr 8)
+                head.write(payload.size and 0xFF)
+            }
+        }
+        if (!mask) return head.toByteArray() + payload
+        val key = byteArrayOf(1, 2, 3, 4)
+        return head.toByteArray() + key + ByteArray(payload.size) { (payload[it].toInt() xor key[it and 3].toInt()).toByte() }
+    }
+
+    private fun deflateMessage(deflater: java.util.zip.Deflater, text: String): ByteArray {
+        deflater.setInput(text.toByteArray())
+        val out = ByteArray(1024)
+        val count = deflater.deflate(out, 0, out.size, java.util.zip.Deflater.SYNC_FLUSH)
+        return out.copyOf(count - 4)
+    }
+
+    @Test
+    fun webSocketMessagesFollowTheUpgrade() {
+        val messages = HashMap<String, ByteArray>()
+        var now = 0L
+        val sink = object : BodySink {
+            override fun keep(index: Int, request: Boolean, body: ByteArray) = true
+            override fun keepMessage(index: Int, number: Int, body: ByteArray): Boolean {
+                messages["$index-$number"] = body
+                return true
+            }
+        }
+        val assembler = HttpAssembler(sink = sink, clock = { now })
+        assembler.client("GET /chat HTTP/1.1\r\nHost: h\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n".toByteArray())
+        val hello = wsFrame(1, "hello".toByteArray(), mask = true)
+        now = 5
+        assembler.server("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n".toByteArray() + wsFrame(9, "p".toByteArray()))
+        now = 10
+        // A fragmented client message with a ping in between, sent in two pieces.
+        val parts = hello + wsFrame(1, "par".toByteArray(), fin = false, mask = true) + wsFrame(10, ByteArray(0), mask = true) +
+            wsFrame(0, "ts".toByteArray(), mask = true)
+        assembler.client(parts.copyOf(9))
+        assembler.client(parts.copyOfRange(9, parts.size))
+        val deflater = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION, true)
+        assembler.server(wsFrame(1, deflateMessage(deflater, "first compressed"), rsv1 = true))
+        assembler.server(wsFrame(1, deflateMessage(deflater, "first compressed again"), rsv1 = true))
+        assembler.server(wsFrame(2, byteArrayOf(0, 1, 2)) + wsFrame(8, byteArrayOf(0x03, 0xE8.toByte()) + "bye".toByteArray()))
+        val exchange = assembler.exchanges().single()
+        assertEquals(101, exchange.status)
+        val list = exchange.messages
+        assertEquals(listOf("ping", "text", "pong", "text", "text", "text", "binary", "close"), list.map { it.kind })
+        assertEquals(false, list[0].fromClient)
+        assertEquals("hello", list[1].preview)
+        assertTrue(list[1].fromClient)
+        assertEquals("parts", list[3].preview)
+        assertEquals(10L, list[3].at)
+        assertEquals("first compressed", list[4].preview)
+        assertTrue(list[4].compressed)
+        assertEquals("first compressed again", list[5].preview)
+        assertEquals("1000 bye", list[7].preview)
+        assertTrue(messages["0-6"]!!.contentEquals(byteArrayOf(0, 1, 2)))
+        assertEquals("parts", String(messages["0-3"]!!))
+        val again = HttpExchange.fromJson(exchange.toJson())!!
+        assertEquals(list, again.messages)
+        val flow = TrafficFlow(1, "TCP", "10.0.0.1", 1, "1.2.3.4", 80, "h", null, null, false, 0, 0, 0, 0, false, listOf(exchange))
+        val har = JSONObject(Har.build(listOf(flow), object : cattivole.spectra.core.BodySource {
+            override fun body(flow: TrafficFlow, index: Int, request: Boolean): ByteArray? = null
+            override fun message(flow: TrafficFlow, index: Int, number: Int) = messages["$index-$number"]
+        }, "1"))
+        val socket = har.getJSONObject("log").getJSONArray("entries").getJSONObject(0).getJSONArray("_webSocketMessages")
+        assertEquals(8, socket.length())
+        assertEquals("send", socket.getJSONObject(1).getString("type"))
+        assertEquals("hello", socket.getJSONObject(1).getString("data"))
+        assertEquals("AAEC", socket.getJSONObject(6).getString("data"))
+    }
+
+    @Test
+    fun acceptEncodingStripStepsAsideAfterAnUpgrade() {
+        val strip = AcceptEncodingStrip()
+        val upgrade = "GET /chat HTTP/1.1\r\nHost: h\r\nUpgrade: websocket\r\nAccept-Encoding: gzip\r\n\r\n"
+        val frame = wsFrame(1, "hi".toByteArray(), mask = true)
+        val out = strip.feed(upgrade.toByteArray() + frame).fold(ByteArray(0)) { a, b -> a + b }
+        assertTrue(String(out, Charsets.ISO_8859_1).contains("Accept-Encoding: identity"))
+        assertTrue(out.copyOfRange(out.size - frame.size, out.size).contentEquals(frame))
+        val later = wsFrame(1, "more".toByteArray(), mask = true)
+        assertTrue(strip.feed(later).single().contentEquals(later))
+        val other = AcceptEncodingStrip()
+        val binary = byteArrayOf(0x16, 3, 3, 0, 5)
+        assertTrue(other.feed(binary).single().contentEquals(binary))
+    }
+
+    @Test
+    fun clientHelloAlpnIsRead() {
+        val name = "example.com".toByteArray()
+        val sni = byteArrayOf(0, 0, 0, (5 + name.size).toByte(), 0, (3 + name.size).toByte(), 0, 0, name.size.toByte()) + name
+        val protocols = byteArrayOf(2) + "h2".toByteArray() + byteArrayOf(8) + "http/1.1".toByteArray()
+        val alpn = byteArrayOf(0, 16, 0, (protocols.size + 2).toByte(), 0, protocols.size.toByte()) + protocols
+        val extensions = sni + alpn
+        val head = ByteArray(43)
+        head[0] = 3
+        head[1] = 3
+        head[36] = 2
+        head[38] = 0x2f
+        head[39] = 1
+        head[41] = (extensions.size shr 8).toByte()
+        head[42] = extensions.size.toByte()
+        val body = head + extensions
+        val handshake = byteArrayOf(1, 0, 0, body.size.toByte()) + body
+        val hello = byteArrayOf(22, 3, 3, (handshake.size shr 8).toByte(), handshake.size.toByte()) + handshake
+        assertEquals(listOf("h2", "http/1.1"), TrafficHints.tlsAlpn(hello))
+        assertEquals("example.com", TrafficHints.tlsServerName(hello))
+        assertTrue(TrafficHints.tlsAlpn(clientHello("example.com")).isEmpty())
+    }
+
+    @Test
+    fun bridgeGivesThePhoneTheProtocolTheServerChose() {
+        assertEquals("h2" to "h2", bridgeProtocols(phone = arrayOf("h2", "http/1.1"), origin = arrayOf("h2", "http/1.1"), offer = true))
+        assertEquals("http/1.1" to "http/1.1", bridgeProtocols(phone = arrayOf("h2", "http/1.1"), origin = arrayOf("http/1.1"), offer = true))
+        assertEquals("http/1.1" to "http/1.1", bridgeProtocols(phone = arrayOf("h2", "http/1.1"), origin = arrayOf("h2", "http/1.1"), offer = false))
+    }
+
+    /** Runs a full handshake through the bridge and passes the HTTP/2 preface both ways; returns what phone and origin agreed. */
+    private fun bridgeProtocols(phone: Array<String>, origin: Array<String>, offer: Boolean): Pair<String, String> {
+        val ca = LocalCa.open(Files.createTempDirectory("spectra-bridge").toFile(), LocalCa.PLAIN)
+        val originCa = LocalCa.open(Files.createTempDirectory("spectra-origin").toFile(), LocalCa.PLAIN)
+        val toOrigin = ArrayDeque<ByteArray>()
+        val toPhone = ArrayDeque<ByteArray>()
+        val fromPhone = java.io.ByteArrayOutputStream()
+        var chosen: String? = null
+        val bridge = TlsBridge(
+            host = "example.com", port = 443,
+            clientContext = ca.contextFor("example.com"),
+            serverContext = LocalCa.trusting(originCa.certificate),
+            onClientPlain = { fromPhone.write(it) }, onServerPlain = {}, onServerClosed = {},
+            toClient = { toPhone.add(it) }, toServer = { toOrigin.add(it) },
+            offerHttp2 = offer, onProtocol = { chosen = it },
+        )
+        val phoneEngine = LocalCa.trusting(ca.certificate).createSSLEngine("example.com", 443)
+        phoneEngine.useClientMode = true
+        phoneEngine.sslParameters = phoneEngine.sslParameters.apply { applicationProtocols = phone }
+        phoneEngine.beginHandshake()
+        val server = originCa.contextFor("example.com").createSSLEngine()
+        server.useClientMode = false
+        server.sslParameters = server.sslParameters.apply { applicationProtocols = origin }
+        server.beginHandshake()
+        val phoneInbox = ArrayDeque<ByteArray>()
+        val serverInbox = ArrayDeque<ByteArray>()
+        val phoneOut = ArrayDeque<ByteArray>()
+        val serverOut = ArrayDeque<ByteArray>()
+        var sent = false
+        for (step in 0 until 48) {
+            val plain = if (!sent && phoneEngine.handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) Http2Assembler.PREFACE else null
+            tick(phoneEngine, phoneInbox, phoneOut, plain)
+            if (plain != null) sent = true
+            while (phoneOut.isNotEmpty()) bridge.fromClient(phoneOut.removeFirst())
+            while (toOrigin.isNotEmpty()) serverInbox.add(toOrigin.removeFirst())
+            tick(server, serverInbox, serverOut, null)
+            while (serverOut.isNotEmpty()) bridge.fromServer(serverOut.removeFirst())
+            while (toPhone.isNotEmpty()) phoneInbox.add(toPhone.removeFirst())
+            if (fromPhone.size() >= Http2Assembler.PREFACE.size) break
+        }
+        assertTrue(fromPhone.toByteArray().contentEquals(Http2Assembler.PREFACE))
+        assertEquals(phoneEngine.applicationProtocol, chosen)
+        return phoneEngine.applicationProtocol to server.applicationProtocol
     }
 }
 

@@ -162,6 +162,8 @@ private struct HarExportButton: View {
                 let url = await Task.detached(priority: .userInitiated) { () -> URL? in
                     let text = Har.build(flows, bodies: { flow, index, request in
                         sniffer.body(sessionID: sessionID, flowID: flow.id, index: index, request: request)
+                    }, messages: { flow, index, number in
+                        sniffer.message(sessionID: sessionID, flowID: flow.id, index: index, number: number)
                     }, version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
                     let stamp = Date().formatted(.iso8601.year().month().day().dateSeparator(.omitted).time(includingFractionalSeconds: false).timeSeparator(.omitted))
                     let url = FileManager.default.temporaryDirectory.appendingPathComponent("spectra-traffic-\(stamp).har")
@@ -224,7 +226,11 @@ struct FlowDetailView: View {
                             ExchangeDetailView(flow: flow, index: index, sessionID: sessionID)
                         } label: {
                             VStack(alignment: .leading) {
-                                Text(exchange.summary).font(.callout).lineLimit(1)
+                                HStack(spacing: 4) {
+                                    if exchange.httpVersion == Http2Assembler.version { Badge(text: "H2") }
+                                    if !exchange.messages.isEmpty { Badge(text: "WS") }
+                                    Text(exchange.summary).font(.callout).lineLimit(1)
+                                }
                                 if let line = exchangeLine(exchange) {
                                     Text(line).font(.caption).foregroundStyle(.secondary)
                                 }
@@ -264,7 +270,8 @@ struct ExchangeDetailView: View {
     var body: some View {
         List {
             Section { InfoRow("Request", value: exchange.summary)
-                if let status = exchange.status { InfoRow("Status", value: "\(status)") } }
+                if let status = exchange.status { InfoRow("Status", value: "\(status)") }
+                if let version = exchange.httpVersion { InfoRow("HTTP version", value: version) } }
             if let started = exchange.startedAt {
                 Section("Timing") {
                     InfoRow("Started", value: preciseTime(started))
@@ -289,6 +296,21 @@ struct ExchangeDetailView: View {
             if !exchange.responseHeaders.isEmpty { fields("Response headers", exchange.responseHeaders) }
             Section("Response") {
                 BodySection(flow: flow, index: index, sessionID: sessionID, request: false, full: false)
+            }
+            if !exchange.messages.isEmpty {
+                Section {
+                    ForEach(Array(exchange.messages.enumerated()), id: \.offset) { number, message in
+                        NavigationLink {
+                            MessageDetailView(flow: flow, index: index, number: number, sessionID: sessionID)
+                        } label: { MessageRow(message: message) }
+                    }
+                } header: {
+                    Text("WebSocket messages (\(exchange.messages.count + exchange.messagesDropped))")
+                } footer: {
+                    if exchange.messagesDropped > 0 {
+                        Text("\(exchange.messagesDropped) later messages were counted but not listed.")
+                    }
+                }
             }
             Section {
                 Button {
@@ -409,6 +431,101 @@ private struct BodySection: View {
             }
         case .empty:
             Text(request ? "This request has no body." : "This response has no body.").foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// A small protocol tag in front of a request.
+private struct Badge: View {
+    let text: String
+    var body: some View {
+        Text(verbatim: text)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+            .foregroundStyle(.tint)
+    }
+}
+
+/// One WebSocket message: who sent it, what kind, when, how big, and the start of its text.
+private struct MessageRow: View {
+    let message: WsMessage
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: message.fromClient ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
+                .foregroundStyle(message.fromClient ? Color.accentColor : Color.green)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(message.preview?.split(separator: "\n").first.map(String.init) ?? messageKind(message))
+                    .font(.callout).lineLimit(1)
+                Text("\(messageKind(message)) · \(preciseTime(message.at)) · \(bytes(message.size))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private func messageKind(_ message: WsMessage) -> String {
+    switch message.opcode {
+    case WsMessage.text: String(localized: "Text")
+    case WsMessage.binary: String(localized: "Binary")
+    case WsMessage.close: String(localized: "Close frame")
+    case WsMessage.ping: "Ping"
+    case WsMessage.pong: "Pong"
+    default: message.kind
+    }
+}
+
+/// One WebSocket message in full.
+private struct MessageDetailView: View {
+    let flow: TrafficFlow
+    let index: Int
+    let number: Int
+    let sessionID: String?
+    @Environment(TrafficSniffer.self) private var sniffer
+    @State private var view: BodyView?
+
+    private var message: WsMessage { flow.exchanges[index].messages[number] }
+
+    var body: some View {
+        List {
+            Section {
+                InfoRow("Direction", value: message.fromClient ? String(localized: "↑ sent") : String(localized: "↓ received"))
+                InfoRow("Type", value: messageKind(message))
+                InfoRow("Time", value: preciseTime(message.at))
+                InfoRow("Size", value: bytes(message.size))
+                if message.compressed { InfoRow("Compression", value: "permessage-deflate") }
+                if message.cut {
+                    Label("Only the start of this message was kept.", systemImage: "exclamationmark.triangle")
+                        .font(.footnote).foregroundStyle(.orange)
+                }
+            }
+            Section {
+                switch view {
+                case nil:
+                    ProgressView()
+                case .json(let text)?, .text(let text)?:
+                    MonoText(text: text, full: true) { EmptyView() }
+                case .binary(_, let hex)?:
+                    Text(hex).font(.caption2.monospaced()).textSelection(.enabled)
+                case .image(let data)?:
+                    if let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFit() }
+                case .empty?:
+                    Text("This message is empty.").foregroundStyle(.secondary)
+                }
+            }
+        }
+        .navigationTitle("Message")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            let message = message, sniffer = sniffer, sessionID = sessionID, flowID = flow.id, index = index, number = number
+            view = await Task.detached(priority: .userInitiated) { () -> BodyView in
+                if message.stored, let data = sniffer.message(sessionID: sessionID, flowID: flowID, index: index, number: number) {
+                    return BodyPreview.of([UInt8](data), contentType: message.opcode == WsMessage.binary ? "application/octet-stream" : "text/plain")
+                }
+                if let preview = message.preview { return .text(preview) }
+                return .empty
+            }.value
         }
     }
 }

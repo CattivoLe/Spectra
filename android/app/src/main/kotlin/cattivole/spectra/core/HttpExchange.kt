@@ -61,6 +61,10 @@ data class HttpExchange(
     val requestBodyBytes: Long? = null,
     val responseHeaderBytes: Long? = null,
     val responseBodyBytes: Long? = null,
+    /** WebSocket messages after a `101 Switching Protocols`, oldest first. */
+    val messages: List<WsMessage> = emptyList(),
+    /** Messages past the cap that were counted but not listed. */
+    val messagesDropped: Int = 0,
 ) {
     val summary: String get() = "$method $path"
 
@@ -102,6 +106,8 @@ data class HttpExchange(
         .putOpt("requestBodyBytes", requestBodyBytes)
         .putOpt("responseHeaderBytes", responseHeaderBytes)
         .putOpt("responseBodyBytes", responseBodyBytes)
+        .apply { if (messages.isNotEmpty()) put("messages", JSONArray().apply { messages.forEach { put(it.toJson()) } }) }
+        .apply { if (messagesDropped > 0) put("messagesDropped", messagesDropped) }
 
     companion object {
         fun fromJson(obj: JSONObject): HttpExchange? = runCatching {
@@ -129,6 +135,10 @@ data class HttpExchange(
                 requestBodyBytes = obj.optLongOrNull("requestBodyBytes"),
                 responseHeaderBytes = obj.optLongOrNull("responseHeaderBytes"),
                 responseBodyBytes = obj.optLongOrNull("responseBodyBytes"),
+                messages = obj.optJSONArray("messages")?.let { array ->
+                    (0 until array.length()).mapNotNull { WsMessage.fromJson(array.getJSONObject(it)) }
+                }.orEmpty(),
+                messagesDropped = obj.optInt("messagesDropped"),
             )
         }.getOrNull()
     }
@@ -155,6 +165,17 @@ fun TrafficFlow.kind(): TrafficKind = when {
  */
 fun interface BodySink {
     fun keep(index: Int, request: Boolean, body: ByteArray): Boolean
+
+    /** The payload of WebSocket message [number] of exchange [index]. True when it will be kept. */
+    fun keepMessage(index: Int, number: Int, body: ByteArray): Boolean = false
+}
+
+/** Reads one connection's cleartext into exchanges: HTTP/1.1 ([HttpAssembler]) or HTTP/2 ([Http2Assembler]). */
+interface HttpStream {
+    fun client(data: ByteArray)
+    fun server(data: ByteArray)
+    fun serverClosed()
+    fun exchanges(): List<HttpExchange>
 }
 
 /**
@@ -166,7 +187,7 @@ fun interface BodySink {
 class HttpAssembler(
     private val sink: BodySink = BodySink { _, _, _ -> false },
     private val clock: () -> Long = System::currentTimeMillis,
-) {
+) : HttpStream {
     private val client = ByteCursor()
     private val server = ByteCursor()
     private val ready = mutableListOf<HttpExchange>()
@@ -196,16 +217,21 @@ class HttpAssembler(
     private var requestEndAt: Long? = null
     private var responseStartAt: Long? = null
 
-    fun exchanges(): List<HttpExchange> = ready.toList()
+    /** Reads the frames once the connection became a WebSocket. */
+    private var socket: WsReader? = null
 
-    fun client(data: ByteArray) {
+    override fun exchanges(): List<HttpExchange> = ready.toList()
+
+    override fun client(data: ByteArray) {
+        socket?.let { it.client(data); return }
         if (stopped || data.isEmpty()) return
         if (client.available() == 0) clientMark = clock()
         client.append(data)
         pump()
     }
 
-    fun server(data: ByteArray) {
+    override fun server(data: ByteArray) {
+        socket?.let { it.server(data); return }
         if (stopped || data.isEmpty()) return
         if (server.available() == 0) serverMark = clock()
         server.append(data)
@@ -213,7 +239,7 @@ class HttpAssembler(
     }
 
     /** The server closed, so a response without a length ends here. */
-    fun serverClosed() {
+    override fun serverClosed() {
         if (stopped) return
         if (step == Step.RESPONSE_BODY) responseBody.finishAtClose()
         pump()
@@ -284,6 +310,8 @@ class HttpAssembler(
                     if (status == 101 || method == "CONNECT") {
                         publish(response = true, body = BodyResult.NONE, endedAt = clock())
                         stopped = true
+                        val upgrade = responseHeaders.firstOrNull { it.name.equals("Upgrade", true) }?.value
+                        if (status == 101 && upgrade?.contains("websocket", true) == true) openSocket()
                         return
                     }
                     responseBody = BodyReader(plan(responseHeaders, request = false, method = method, status = status), RESPONSE_CAP)
@@ -304,6 +332,24 @@ class HttpAssembler(
                 }
             }
         }
+    }
+
+    /** Hands what is left in both cursors, and everything after, to a WebSocket reader. */
+    private fun openSocket() {
+        val index = ready.lastIndex
+        val extensions = responseHeaders.firstOrNull { it.name.equals("Sec-WebSocket-Extensions", true) }?.value
+        val reader = WsReader(extensions, clock, onMessage = { message, payload ->
+            val exchange = ready[index]
+            if (exchange.messages.size >= MAX_MESSAGES) {
+                ready[index] = exchange.copy(messagesDropped = exchange.messagesDropped + 1)
+            } else {
+                val stored = payload.isNotEmpty() && sink.keepMessage(index, exchange.messages.size, payload)
+                ready[index] = exchange.copy(messages = exchange.messages + message.copy(stored = stored))
+            }
+        })
+        socket = reader
+        if (client.available() > 0) reader.client(client.read(client.available()))
+        if (server.available() > 0) reader.server(server.read(server.available()))
     }
 
     private class BodyResult(val stored: Boolean, val cut: Boolean, val wireBytes: Long) {
@@ -345,6 +391,8 @@ class HttpAssembler(
 
     companion object {
         const val MAX_EXCHANGES = 24
+        /** WebSocket messages listed for one connection; later ones are only counted. */
+        const val MAX_MESSAGES = 1000
         /** The most of a request body that is read and kept. */
         const val REQUEST_CAP = 1024 * 1024
         /** The most of a response body that is read and kept, before and after it is decompressed. */
@@ -551,7 +599,7 @@ private fun headerFields(lines: List<String>): List<HttpField> = lines.mapNotNul
     HttpField(line.substring(0, colon).trim(), line.substring(colon + 1).trim())
 }
 
-private fun queryFields(target: String): List<HttpField> {
+internal fun queryFields(target: String): List<HttpField> {
     val query = target.substringAfter('?', "")
     if (query.isEmpty()) return emptyList()
     return query.split('&').mapNotNull { pair ->
@@ -560,7 +608,7 @@ private fun queryFields(target: String): List<HttpField> {
     }.take(40)
 }
 
-private fun formFields(body: ByteArray): List<HttpField> {
+internal fun formFields(body: ByteArray): List<HttpField> {
     if (body.isEmpty()) return emptyList()
     return String(body, Charsets.UTF_8).split('&').mapNotNull { pair ->
         if (pair.isEmpty()) return@mapNotNull null
@@ -568,7 +616,7 @@ private fun formFields(body: ByteArray): List<HttpField> {
     }.take(40)
 }
 
-private fun jsonFields(body: ByteArray): List<HttpField> {
+internal fun jsonFields(body: ByteArray): List<HttpField> {
     val text = body.toString(Charsets.UTF_8).trim()
     if (!text.startsWith("{")) return emptyList()
     val obj = runCatching { JSONObject(text) }.getOrNull() ?: return emptyList()
@@ -578,10 +626,10 @@ private fun jsonFields(body: ByteArray): List<HttpField> {
     }.take(40).toList()
 }
 
-private fun isForm(headers: List<HttpField>): Boolean =
+internal fun isForm(headers: List<HttpField>): Boolean =
     headers.any { it.name.equals("Content-Type", true) && it.value.contains("application/x-www-form-urlencoded", true) }
 
-private fun isJsonType(headers: List<HttpField>): Boolean =
+internal fun isJsonType(headers: List<HttpField>): Boolean =
     headers.any { it.name.equals("Content-Type", true) && it.value.contains("json", true) }
 
 /**

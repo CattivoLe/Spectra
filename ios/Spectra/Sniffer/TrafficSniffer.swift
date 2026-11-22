@@ -255,6 +255,14 @@ final class TrafficSniffer {
         return TrafficBodies(dir: dir).read(flowID: flowID, index: index, request: request)
     }
 
+    /// The payload of a WebSocket message, live or saved. Reads the disk.
+    nonisolated func message(sessionID: String?, flowID: Int64, index: Int, number: Int) -> Data? {
+        guard let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) else { return nil }
+        let dir = sessionID.map { base.appendingPathComponent("traffic/\($0).bodies", isDirectory: true) }
+            ?? base.appendingPathComponent(PacketTunnelBodies.folder, isDirectory: true)
+        return TrafficBodies(dir: dir).readMessage(flowID: flowID, index: index, number: number)
+    }
+
     /// Hosts whose apps refused the certificate in `flows`, so they can be left encrypted.
     static func refusedHosts(_ flows: [TrafficFlow]) -> [String] {
         Array(Set(flows.filter(\.refused).compactMap { $0.host?.isEmpty == false ? $0.host : nil })).sorted()

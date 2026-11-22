@@ -378,6 +378,157 @@ struct TrafficCoreTests {
         #expect(store.reserve(10))
     }
 
+    private func hex(_ text: String) -> [UInt8] {
+        let clean = text.replacingOccurrences(of: " ", with: "")
+        return stride(from: 0, to: clean.count, by: 2).map {
+            let start = clean.index(clean.startIndex, offsetBy: $0)
+            return UInt8(clean[start..<clean.index(start, offsetBy: 2)], radix: 16)!
+        }
+    }
+
+    @Test func hpackDecodesTheRfcExamples() throws {
+        let plain = HpackDecoder()
+        let first = try plain.decode(hex("8286 8441 0f77 7777 2e65 7861 6d70 6c65 2e63 6f6d"))
+        #expect(first.map(\.name) == [":method", ":scheme", ":path", ":authority"])
+        #expect(first.last?.value == "www.example.com")
+        #expect(try plain.decode(hex("8286 84be 5808 6e6f 2d63 6163 6865")).last?.value == "no-cache")
+        let third = try plain.decode(hex("8287 85bf 400a 6375 7374 6f6d 2d6b 6579 0c63 7573 746f 6d2d 7661 6c75 65"))
+        #expect(third.first { $0.name == "custom-key" }?.value == "custom-value")
+        let huffman = HpackDecoder()
+        #expect(try huffman.decode(hex("8286 8441 8cf1 e3c2 e5f2 3a6b a0ab 90f4 ff")).last?.value == "www.example.com")
+        #expect(try huffman.decode(hex("8286 84be 5886 a8eb 1064 9cbf")).last?.value == "no-cache")
+        #expect(try huffman.decode(hex("8287 85bf 4088 25a8 49e9 5ba9 7d7f 8925 a849 e95b b8e8 b4bf")).last?.value == "custom-value")
+        let response = try HpackDecoder(maxSize: 256).decode(hex("4882 6402 5885 aec3 771a 4b61 96d0 7abe 9410 54d4 44a8 2005 9504 0b81 66e0 82a6 2d1b ff6e 919d 29ad 1718 63c7 8f0b 97c8 e9ae 82ae 43d3"))
+        #expect(response.map(\.value) == ["302", "private", "Mon, 21 Oct 2013 20:13:21 GMT", "https://www.example.com"])
+        #expect(throws: (any Error).self) { try HpackDecoder().decode([0xBE]) }
+    }
+
+    private func frame(_ type: UInt8, _ flags: UInt8, _ stream: Int, _ payload: [UInt8]) -> [UInt8] {
+        [UInt8(payload.count >> 16 & 0xFF), UInt8(payload.count >> 8 & 0xFF), UInt8(payload.count & 0xFF), type, flags,
+         UInt8(stream >> 24 & 0xFF), UInt8(stream >> 16 & 0xFF), UInt8(stream >> 8 & 0xFF), UInt8(stream & 0xFF)] + payload
+    }
+
+    /// A header block of literal fields without indexing: what any HPACK decoder reads.
+    private func literals(_ fields: [(String, String)]) -> [UInt8] {
+        fields.flatMap { [0, UInt8($0.0.utf8.count)] + Array($0.0.utf8) + [UInt8($0.1.utf8.count)] + Array($0.1.utf8) }
+    }
+
+    @Test func http2StreamsBecomeExchanges() {
+        var now: Int64 = 100
+        var bodies: [String: [UInt8]] = [:]
+        let h2 = Http2Assembler(sink: { index, request, body in bodies["\(index)-\(request)"] = body; return true }, clock: { now })
+        let settings = frame(4, 0, 0, [])
+        let request = frame(1, 0x4, 1, [0x82, 0x87] + literals([(":path", "/api?x=1"), (":authority", "example.com"), ("content-type", "application/json")]))
+        h2.client(Http2Assembler.preface + settings + request)
+        now = 110
+        h2.client(frame(0, 0x1, 1, bytes(#"{"a":1}"#)))
+        h2.client(frame(1, 0x5, 3, literals([(":method", "GET"), (":path", "/b"), (":authority", "example.com")])))
+        now = 150
+        let response = settings + frame(1, 0x4, 1, literals([(":status", "200"), ("content-type", "application/json")]))
+        h2.server(Array(response[0..<15]))
+        h2.server(Array(response[15...]))
+        now = 170
+        h2.server(frame(0, 0x8, 1, [2] + bytes(#"{"ok":true}"#) + [0, 0]) + frame(1, 0x5, 1, literals([("grpc-status", "0")])))
+        h2.server(frame(1, 0x5, 3, literals([(":status", "404")])))
+        let list = h2.exchanges()
+        #expect(list.count == 2)
+        let e = list[0]
+        #expect(e.method == "GET")
+        #expect(e.path == "/api")
+        #expect(e.target == "/api?x=1")
+        #expect(e.httpVersion == "HTTP/2")
+        #expect(e.status == 200)
+        #expect(e.header("grpc-status", response: true) == "0")
+        #expect(e.startedAt == 100 && e.requestEndAt == 110 && e.responseStartAt == 150 && e.endedAt == 170)
+        #expect(e.requestBodyBytes == 7)
+        #expect(e.responseBodyBytes == 11)
+        #expect(e.requestBodyStored && e.responseBodyStored)
+        #expect(e.parameters.first { $0.name == "a" }?.value == "1")
+        #expect(bodies["0-false"] == bytes(#"{"ok":true}"#))
+        #expect(list[1].status == 404)
+        let flow = TrafficFlow(id: 1, proto: "TCP", source: "10.0.0.1", sourcePort: 1, destination: "1.2.3.4",
+                               destinationPort: 443, host: "example.com", tls: true, startedAt: 0, lastAt: 0, exchanges: list)
+        let curl = Curl.command(flow, e, body: Data(bytes(#"{"a":1}"#)))
+        #expect(curl.contains("--http2"))
+        #expect(curl.contains("'https://example.com/api?x=1'"))
+        #expect(!curl.contains("':"))
+        let broken = Http2Assembler()
+        broken.client(bytes("GET / HTTP/1.1\r\n\r\n") + [UInt8](repeating: 0, count: 20))
+        #expect(broken.exchanges().isEmpty)
+    }
+
+    private func wsFrame(_ opcode: UInt8, _ payload: [UInt8], fin: Bool = true, mask: Bool = false, rsv1: Bool = false) -> [UInt8] {
+        var head: [UInt8] = [(fin ? 0x80 : 0) | (rsv1 ? 0x40 : 0) | opcode]
+        let maskBit: UInt8 = mask ? 0x80 : 0
+        if payload.count < 126 { head.append(maskBit | UInt8(payload.count)) } else {
+            head += [maskBit | 126, UInt8(payload.count >> 8), UInt8(payload.count & 0xFF)]
+        }
+        guard mask else { return head + payload }
+        let key: [UInt8] = [1, 2, 3, 4]
+        return head + key + payload.enumerated().map { $0.element ^ key[$0.offset & 3] }
+    }
+
+    @Test func webSocketMessagesFollowTheUpgrade() throws {
+        var messages: [String: [UInt8]] = [:]
+        var now: Int64 = 0
+        let a = HttpAssembler(sink: { _, _, _ in true },
+                              messageSink: { index, number, body in messages["\(index)-\(number)"] = body; return true },
+                              clock: { now })
+        a.client(bytes("GET /chat HTTP/1.1\r\nHost: h\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"))
+        now = 5
+        a.server(bytes("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n") + wsFrame(9, bytes("p")))
+        now = 10
+        let parts = wsFrame(1, bytes("hello"), mask: true) + wsFrame(1, bytes("par"), fin: false, mask: true)
+            + wsFrame(10, [], mask: true) + wsFrame(0, bytes("ts"), mask: true)
+        a.client(Array(parts[0..<9]))
+        a.client(Array(parts[9...]))
+        // Two messages from one deflate stream (zlib, raw, sync flush, tail removed): the second refers to the first.
+        a.server(wsFrame(1, [0x4a, 0xcb, 0x2c, 0x2a, 0x2e, 0x51, 0x48, 0xce, 0xcf, 0x2d, 0x28, 0x4a, 0x2d, 0x2e, 0x4e, 0x4d, 0x01, 0x00], rsv1: true))
+        a.server(wsFrame(1, [0x4a, 0x43, 0xe3, 0x2b, 0x24, 0xa6, 0x27, 0x66, 0xe6, 0x01, 0x00], rsv1: true))
+        a.server(wsFrame(2, [0, 1, 2]) + wsFrame(8, [0x03, 0xE8] + bytes("bye")))
+        let exchange = a.exchanges()[0]
+        #expect(exchange.status == 101)
+        let list = exchange.messages
+        #expect(list.map(\.kind) == ["ping", "text", "pong", "text", "text", "text", "binary", "close"])
+        #expect(!list[0].fromClient)
+        #expect(list[1].preview == "hello" && list[1].fromClient)
+        #expect(list[3].preview == "parts")
+        #expect(list[3].at == 10)
+        #expect(list[4].preview == "first compressed" && list[4].compressed)
+        #expect(list[5].preview == "first compressed again")
+        #expect(list[7].preview == "1000 bye")
+        #expect(messages["0-6"] == [0, 1, 2])
+        #expect(messages["0-3"] == bytes("parts"))
+        let again = try JSONDecoder().decode(HttpExchange.self, from: JSONEncoder().encode(exchange))
+        #expect(again.messages == list)
+        let flow = TrafficFlow(id: 1, proto: "TCP", source: "10.0.0.1", sourcePort: 1, destination: "1.2.3.4",
+                               destinationPort: 80, host: "h", startedAt: 0, lastAt: 0, exchanges: [exchange])
+        let har = try harLog(Har.build([flow], bodies: { _, _, _ in nil },
+                                       messages: { _, index, number in messages["\(index)-\(number)"].map { Data($0) } }, version: "1"))
+        let socket = try #require((har["entries"] as? [[String: Any]])?.first?["_webSocketMessages"] as? [[String: Any]])
+        #expect(socket.count == 8)
+        #expect(socket[1]["type"] as? String == "send")
+        #expect(socket[1]["data"] as? String == "hello")
+        #expect(socket[6]["data"] as? String == "AAEC")
+    }
+
+    @Test func clientHelloAlpnIsRead() {
+        let name = bytes("example.com")
+        let sni: [UInt8] = [0, 0, 0, UInt8(5 + name.count), 0, UInt8(3 + name.count), 0, 0, UInt8(name.count)] + name
+        let protocols: [UInt8] = [2] + bytes("h2") + [8] + bytes("http/1.1")
+        let alpn: [UInt8] = [0, 16, 0, UInt8(protocols.count + 2), 0, UInt8(protocols.count)] + protocols
+        let extensions = sni + alpn
+        var head = [UInt8](repeating: 0, count: 43)
+        head[0] = 3; head[1] = 3; head[36] = 2; head[38] = 0x2f; head[39] = 1
+        head[41] = UInt8(extensions.count >> 8); head[42] = UInt8(extensions.count & 0xFF)
+        let body = head + extensions
+        let handshake: [UInt8] = [1, 0, 0, UInt8(body.count)] + body
+        let hello: [UInt8] = [22, 3, 3, UInt8(handshake.count >> 8), UInt8(handshake.count & 0xFF)] + handshake
+        #expect(TrafficHints.tlsAlpn(hello) == ["h2", "http/1.1"])
+        #expect(TrafficHints.tlsServerName(hello) == "example.com")
+        #expect(TrafficHints.tlsAlpn(bytes("GET / HTTP/1.1")).isEmpty)
+    }
+
     private func harLog(_ text: String) throws -> [String: Any] {
         let object = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
         return try #require(object?["log"] as? [String: Any])

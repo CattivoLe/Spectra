@@ -21,6 +21,20 @@ nonisolated final class TrafficBodies: Sendable {
         try? Data(contentsOf: url(flowID: flowID, index: index, request: request))
     }
 
+    /// WebSocket message `number` of exchange `index`: `<flow>-<exchange>-ws<number>.bin`.
+    func messageURL(flowID: Int64, index: Int, number: Int) -> URL {
+        dir.appendingPathComponent("\(flowID)-\(index)-ws\(number).bin")
+    }
+
+    func readMessage(flowID: Int64, index: Int, number: Int) -> Data? {
+        try? Data(contentsOf: messageURL(flowID: flowID, index: index, number: number))
+    }
+
+    func writeMessage(flowID: Int64, index: Int, number: Int, body: Data) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? body.write(to: messageURL(flowID: flowID, index: index, number: number))
+    }
+
     /// Claims room for `size` bytes in the budget. False once a recording has kept `budget` bytes of bodies:
     /// later ones are not written.
     func reserve(_ size: Int) -> Bool {

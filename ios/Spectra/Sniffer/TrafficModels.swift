@@ -40,6 +40,10 @@ nonisolated struct HttpExchange: Codable, Equatable, Sendable {
     var requestBodyBytes: Int64?
     var responseHeaderBytes: Int64?
     var responseBodyBytes: Int64?
+    /// WebSocket messages after a `101 Switching Protocols`, oldest first.
+    var messages: [WsMessage] = []
+    /// Messages past the cap that were counted but not listed.
+    var messagesDropped = 0
 
     init(
         method: String, path: String, query: [HttpField], requestHeaders: [HttpField],
@@ -88,6 +92,8 @@ nonisolated struct HttpExchange: Codable, Equatable, Sendable {
         requestBodyBytes = try c.decodeIfPresent(Int64.self, forKey: .requestBodyBytes)
         responseHeaderBytes = try c.decodeIfPresent(Int64.self, forKey: .responseHeaderBytes)
         responseBodyBytes = try c.decodeIfPresent(Int64.self, forKey: .responseBodyBytes)
+        messages = try c.decodeIfPresent([WsMessage].self, forKey: .messages) ?? []
+        messagesDropped = try c.decodeIfPresent(Int.self, forKey: .messagesDropped) ?? 0
     }
 
     var summary: String { "\(method) \(path)" }

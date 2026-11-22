@@ -67,6 +67,8 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Sniffer/AcceptEncodingStrip.swift,
+				Sniffer/Hpack.swift,
+				Sniffer/Http2Assembler.swift,
 				Sniffer/HttpAssembler.swift,
 				Sniffer/IPCodec.swift,
 				Sniffer/LocalCertificateAuthority.swift,
@@ -78,6 +80,7 @@
 				Sniffer/TrafficModels.swift,
 				Sniffer/TrafficProxy.swift,
 				Sniffer/TrafficProxyLinks.swift,
+				Sniffer/WebSocket.swift,
 			);
 			target = FA9378FF308AA3D2000F5E0A /* SpectraTunnel */;
 		};

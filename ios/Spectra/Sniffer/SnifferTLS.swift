@@ -9,7 +9,7 @@ import NIOSSL
 extension LocalCertificateAuthority {
     /// A TLS **server** context that presents this CA's leaf for `host` to the
     /// phone. The chain is leaf → CA so a phone that trusts the CA accepts it.
-    func makeServerContext(for host: String) throws -> NIOSSLContext {
+    func makeServerContext(for host: String, protocols: [String] = ["http/1.1"]) throws -> NIOSSLContext {
         let leaf = try NIOSSLCertificate(bytes: leafDER(for: host), format: .der)
         let ca = try NIOSSLCertificate(bytes: certificateDER, format: .der)
         let key = try NIOSSLPrivateKey(bytes: Array(pemString(label: "RSA PRIVATE KEY", der: leafPrivateKeyDER()).utf8), format: .pem)
@@ -17,7 +17,7 @@ extension LocalCertificateAuthority {
             certificateChain: [.certificate(leaf), .certificate(ca)],
             privateKey: .privateKey(key)
         )
-        config.applicationProtocols = ["http/1.1"]
+        config.applicationProtocols = protocols
         return try NIOSSLContext(configuration: config)
     }
 
@@ -29,22 +29,23 @@ extension LocalCertificateAuthority {
     /// a local debugging sniffer on the user's own device this is an acceptable
     /// trade-off (the same as a proxy's "don't verify upstream" option); the
     /// phone still verifies *our* leaf against the installed CA.
-    static func makeSystemClientContext() throws -> NIOSSLContext {
+    static func makeSystemClientContext(protocols: [String] = ["http/1.1"]) throws -> NIOSSLContext {
         var config = TLSConfiguration.makeClientConfiguration()
         config.certificateVerification = .none
-        config.applicationProtocols = ["http/1.1"]
+        config.applicationProtocols = protocols
         return try NIOSSLContext(configuration: config)
     }
 
     /// A TLS **client** context that trusts exactly `caDER`. Production uses the
     /// system trust store (`.default`) toward the real origin; tests pin the
     /// origin's own CA here.
-    static func makeClientContext(trusting caDER: [UInt8], fullVerification: Bool = true) throws -> NIOSSLContext {
+    static func makeClientContext(trusting caDER: [UInt8], fullVerification: Bool = true,
+                                  protocols: [String] = ["http/1.1"]) throws -> NIOSSLContext {
         let ca = try NIOSSLCertificate(bytes: caDER, format: .der)
         var config = TLSConfiguration.makeClientConfiguration()
         config.trustRoots = .certificates([ca])
         config.certificateVerification = fullVerification ? .fullVerification : .noHostnameVerification
-        config.applicationProtocols = ["http/1.1"]
+        config.applicationProtocols = protocols
         return try NIOSSLContext(configuration: config)
     }
 }

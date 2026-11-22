@@ -52,6 +52,10 @@ import cattivole.spectra.core.BodyView
 import cattivole.spectra.core.Curl
 import cattivole.spectra.core.Har
 import cattivole.spectra.core.HttpAssembler
+import cattivole.spectra.core.Http2Assembler
+import cattivole.spectra.core.WsMessage
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.ArrowUpward
 import cattivole.spectra.core.TlsHostFilter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -564,6 +568,7 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
                 add { InfoRow(tr("Source port"), flow.sourcePort.toString(), mono = true) }
                 flow.app?.let { add { InfoRow(tr("Application"), it) } }
                 http?.status?.let { add { InfoRow(tr("Status"), it.toString(), mono = true) } }
+                http?.httpVersion?.let { add { InfoRow(tr("HTTP version"), it, mono = true) } }
                 if (http == null) flow.request?.let { add { InfoRow(tr("Request"), it, copyable = true) } }
                 if (flow.refused) add { NoteRow(tr("This app did not trust the Spectra certificate."), warning = true) }
                 add { InfoRow(tr("Sent"), byteSize(flow.sent)) }
@@ -663,6 +668,17 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
                     nav.trafficBody(flow.id, exchange, sessionId, request = false)
                 }
             }
+            if (http.messages.isNotEmpty()) {
+                cardSection(
+                    http.messages.withIndex().toList(),
+                    header = tr("WebSocket messages (%d)", http.messages.size + http.messagesDropped),
+                    footer = if (http.messagesDropped > 0) tr("%d later messages were counted but not listed.", http.messagesDropped) else null,
+                    key = { "ws-${it.index}" },
+                    sectionKey = "ws",
+                ) { (number, message) ->
+                    MessageRow(message, onClick = { nav.trafficMessage(flow.id, exchange!!, number, sessionId) })
+                }
+            }
         }
         card(
             header = tr("Observed"),
@@ -752,6 +768,8 @@ private fun TlsSwitch(traffic: TrafficSniffer) {
 
 @Composable
 private fun FlowBadges(flow: TrafficFlow, exchange: HttpExchange? = null) {
+    if (exchange?.httpVersion == Http2Assembler.VERSION) Pill("H2", MaterialTheme.colorScheme.primary)
+    if (exchange?.messages?.isNotEmpty() == true) Pill("WS", MaterialTheme.colorScheme.tertiary)
     when (flow.kind()) {
         TrafficKind.HTTP -> Pill(exchange?.method ?: "HTTP", Spectra.colors.warning)
         TrafficKind.TLS -> Pill("TLS", MaterialTheme.colorScheme.primary)
@@ -978,6 +996,88 @@ private fun MonoText(text: String, full: Boolean, onOpen: (() -> Unit)?, copy: (
     }
 }
 
+/** One WebSocket message: who sent it, what kind, when, how big, and the start of its text. */
+@Composable
+private fun MessageRow(message: WsMessage, onClick: () -> Unit) {
+    ListRow(
+        title = message.preview?.lineSequence()?.firstOrNull()?.takeIf { it.isNotBlank() } ?: messageKind(message),
+        subtitle = listOf(
+            if (message.fromClient) tr("↑ sent") else tr("↓ received"),
+            messageKind(message),
+            preciseTime(message.at),
+        ).joinToString(" · "),
+        detail = byteSize(message.size),
+        leading = {
+            IconTile(
+                if (message.fromClient) Icons.Rounded.ArrowUpward else Icons.Rounded.ArrowDownward,
+                if (message.fromClient) MaterialTheme.colorScheme.primary else Spectra.colors.success,
+            )
+        },
+        onClick = onClick,
+    )
+}
+
+private fun messageKind(message: WsMessage): String = when (message.opcode) {
+    WsMessage.TEXT -> tr("Text")
+    WsMessage.BINARY -> tr("Binary")
+    WsMessage.CLOSE -> tr("Close frame")
+    WsMessage.PING -> "Ping"
+    WsMessage.PONG -> "Pong"
+    else -> message.kind
+}
+
+/** One WebSocket message in full. */
+@Composable
+fun TrafficMessageScreen(model: SpectraModel, nav: Navigator, flowId: Long, exchange: Int, number: Int, sessionId: String?) {
+    model.generation
+    val traffic = model.traffic
+    val flow = if (sessionId != null) {
+        traffic.session(sessionId)?.flows?.firstOrNull { it.id == flowId }
+    } else {
+        traffic.flows.firstOrNull { it.id == flowId }
+    }
+    val message = flow?.exchanges?.getOrNull(exchange)?.messages?.getOrNull(number)
+    if (flow == null || message == null) {
+        SpectraScreen(tr("Message"), onBack = nav::back, overlay = {
+            EmptyState(Icons.Rounded.DataObject, tr("Gone"), tr("This connection is no longer in the list."))
+        }) {}
+        return
+    }
+    val copy = rememberCopier()
+    val loaded by produceState<BodyView?>(null, flowId, exchange, number, sessionId) {
+        value = withContext(Dispatchers.IO) {
+            val bytes = if (message.stored) traffic.message(sessionId, flowId, exchange, number) else null
+            when {
+                bytes != null -> BodyPreview.of(bytes, if (message.opcode == WsMessage.BINARY) "application/octet-stream" else "text/plain")
+                message.preview != null -> BodyView.Text(message.preview)
+                else -> BodyView.Empty
+            }
+        }
+    }
+    SpectraScreen(title = tr("Message"), subtitle = flow.title, onBack = nav::back) {
+        card(key = "about", rows = buildList {
+            add { InfoRow(tr("Direction"), if (message.fromClient) tr("↑ sent") else tr("↓ received")) }
+            add { InfoRow(tr("Type"), messageKind(message)) }
+            add { InfoRow(tr("Time"), preciseTime(message.at)) }
+            add { InfoRow(tr("Size"), byteSize(message.size)) }
+            if (message.compressed) add { InfoRow(tr("Compression"), "permessage-deflate") }
+            if (message.cut) add { NoteRow(tr("Only the start of this message was kept."), warning = true) }
+        })
+        freeCard("payload") {
+            when (val view = loaded) {
+                null -> Text(tr("Loading…"), style = MaterialTheme.typography.bodyMedium)
+                is BodyView.Json -> MonoText(view.text, full = true, onOpen = null, copy = copy)
+                is BodyView.Text -> MonoText(view.text, full = true, onOpen = null, copy = copy)
+                is BodyView.Binary -> SelectionContainer {
+                    Text(view.hex, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                }
+                is BodyView.Image -> Text(tr("Image, %s. This phone cannot draw this format.", byteSize(view.bytes.size.toLong())))
+                BodyView.Empty -> NoteRow(tr("This message is empty."), warning = false)
+            }
+        }
+    }
+}
+
 private const val PREVIEW_TEXT = 3_000
 private const val FULL_TEXT = 400_000
 
@@ -1140,7 +1240,10 @@ private fun sizeLine(total: Long, headers: Long?, body: Long?): String =
 private suspend fun shareHar(context: Context, traffic: TrafficSniffer, sessionId: String?, flows: List<TrafficFlow>) {
     val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
     val text = withContext(Dispatchers.IO) {
-        Har.build(flows, { flow, index, request -> traffic.body(sessionId, flow.id, index, request) }, version)
+        Har.build(flows, object : cattivole.spectra.core.BodySource {
+            override fun body(flow: TrafficFlow, index: Int, request: Boolean) = traffic.body(sessionId, flow.id, index, request)
+            override fun message(flow: TrafficFlow, index: Int, number: Int) = traffic.message(sessionId, flow.id, index, number)
+        }, version)
     }
     val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
     shareTextFile(context, "spectra-traffic-$stamp.har", text, mime = "application/json")

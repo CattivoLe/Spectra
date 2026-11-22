@@ -17,6 +17,19 @@ class TrafficBodies(val dir: File) {
     fun read(flowId: Long, index: Int, request: Boolean): ByteArray? =
         file(flowId, index, request).takeIf { it.isFile }?.let { runCatching { it.readBytes() }.getOrNull() }
 
+    /** WebSocket message [number] of exchange [index]: `<flow>-<exchange>-ws<number>.bin`. */
+    fun messageFile(flowId: Long, index: Int, number: Int): File = File(dir, "$flowId-$index-ws$number.bin")
+
+    fun readMessage(flowId: Long, index: Int, number: Int): ByteArray? =
+        messageFile(flowId, index, number).takeIf { it.isFile }?.let { runCatching { it.readBytes() }.getOrNull() }
+
+    fun writeMessage(flowId: Long, index: Int, number: Int, body: ByteArray) {
+        runCatching {
+            dir.mkdirs()
+            messageFile(flowId, index, number).writeBytes(body)
+        }
+    }
+
     /**
      * Claims room for [size] bytes in this folder's budget. False once a
      * recording has kept [BUDGET] bytes of bodies: later ones are not written.
