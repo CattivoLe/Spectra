@@ -27,7 +27,7 @@ keyboard or battery reading, so `bat` is omitted. Older firmware advertised
 UTF-8 JSON, for example:
 
 ```json
-{"proto":6,"fw":"0.8.0","chip":"ESP32-S3","bands":["2.4"],"interval":5,"ota":true,"bat":85,"chg":false}
+{"proto":10,"fw":"0.11.0","chip":"ESP32-S3","bands":["2.4"],"interval":5,"ota":true,"bat":85,"chg":false}
 ```
 
 `interval` is the current automatic scan interval in seconds, 0 when off.

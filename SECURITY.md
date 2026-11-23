@@ -62,4 +62,12 @@ for how you use this software.
   directory is excluded from backups and device transfers. Saved decrypted
   traffic is excluded from backups too, as are the assistant's encrypted
   summaries on Android.
-- Exported `.pcap` files and history exports are not encrypted.
+- Recorded traffic can hold passwords, tokens and other people's messages once
+  TLS is decrypted. Bodies are kept in the app's own storage, up to 64 MB for a
+  recording. A ✨ summary of it and the model behind the summary get the kind and
+  the place of what was found, not the values, and nothing from it goes to the
+  web search. What a path says in ordinary words, such as a user name, is not
+  hidden. On iPhone the origin's certificate is not checked while a connection
+  is decrypted; Android checks it.
+- Exported `.pcap` and HAR files, copied cURL commands and history exports are
+  not encrypted and hold everything they were made from.

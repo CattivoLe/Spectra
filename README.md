@@ -38,18 +38,27 @@ model, never an address or a name) to the search service you pick.
 
 - **Wi‑Fi.** Networks with channel, security, Wi‑Fi generation, signal over
   time and the clients on them. With the sensor: deauthentication attacks,
-  hidden networks, steady traffic that may be a camera, and phones probing for
-  networks they joined before. On Android the phone joins a network through
-  the system's own "save network" sheet. **Saved networks** (Android and
-  iPhone) keeps the passwords that worked (they go to the sensor too).
+  hidden networks, a device that keeps sending like a camera or a microphone
+  (named by its maker and address), and phones probing for networks they joined
+  before. On Android the phone joins a network through the system's own "save
+  network" sheet. **Saved networks** keeps the passwords that worked (they go
+  to the sensor too).
 - **LAN.** Every device on your network, its maker, open ports and what they
   mean: Telnet, open shares, camera streams, unencrypted web pages, UPnP port
   forwarding on the router. Smart-home appliances that open no TCP port at all,
   such as Xiaomi Mi Home devices, are found by their own UDP hello. A device
   new to the network gets a notification.
 - **Internet.** A connection check, a link checker for phishing and look-alike
-  names, a speed test, traceroute on a map and a recording of the phone's own
-  traffic.
+  names, a speed test and traceroute on a map. Wi‑Fi, the mobile network and a
+  VPN are measured apart; when a VPN lets no app around it, the Android app
+  says so instead of passing the VPN off as Wi‑Fi.
+- **Traffic.** A recording of the phone's own traffic, like Charles on the
+  phone: HTTP/1.1, HTTP/2 and WebSocket, bodies of any type with JSON coloured
+  and searchable, timing and sizes. Requests as a list or grouped by endpoint,
+  filters by method, errors and protocol, repeat and edit, Map Local,
+  throttling, HAR and cURL export, and a list of hosts to decrypt. HTTPS is
+  read only after you install the app's own certificate; pinned apps pass
+  through unread. ([More](#recording-traffic))
 - **Bluetooth.** Nearby devices with their names, makers and signal, and
   trackers (Find My, Tile, SmartTag, Chipolo, Pebblebee) that may be following
   you.
@@ -58,10 +67,12 @@ model, never an address or a name) to the search service you pick.
   findings at once, the model's plain words under them, and buttons for the
   next check. **More detail** and **Deep analysis** can also search the web for
   the device's model and known problems and show its photo, with the sources
-  listed. Summaries are filed in folders.
+  listed. In recorded traffic ✨ works on the whole recording, an endpoint, a
+  request and a connection. Summaries are filed in folders.
 - **History.** Finished scans are kept per network and day; the clock on each
-  tab opens that tab's own history. A saved network, host or Bluetooth device
-  opens the same card as a live one.
+  tab opens that tab's own history, and a session opens onto its records. A
+  saved network, host or Bluetooth device opens the same card as a live one,
+  and "first seen" is the earliest date in all of History.
 
 iOS does not let apps list nearby networks, so on iPhone the Wi-Fi list comes
 from the sensor: an M5Stack Cardputer (ESP32-S3), an ESP32-C5 or an
@@ -149,8 +160,8 @@ Or install through Launcher: copy `firmware/.pio/build/m5stack-cardputer-adv/fir
 choose **SD** → file → **Install**. Use the app image, not a merged one with
 bootloader and partitions, or it overwrites Launcher.
 
-The Cardputer advertises as `Spectra-XXXX`. Its screen shows the link state
-and the strongest networks. Fn and the horizontal arrows move between Wi-Fi,
+The Cardputer advertises as `M5Cardputer` (older firmware as `Spectra-XXXX`).
+Its screen shows the link state and the strongest networks. Fn and the horizontal arrows move between Wi-Fi,
 LAN, BLE, LoRa and Join; the vertical arrows scroll the list. **Enter** scans.
 It works on its own: scans are saved to flash with the side button and uploaded
 the next time a phone connects. **Join** picks a network and shows the password
@@ -188,8 +199,8 @@ Copy `ios/Config/Signing.local.xcconfig.example` to
 `ios/Config/Signing.local.xcconfig`, set your team, open
 `ios/Spectra.xcodeproj` and run. Requires iOS 18.
 
-The iPhone app is at 1.1.0, like the Android one, and has the same tabs: Wi‑Fi,
-LAN, Internet, Bluetooth and Assistant with its summary cards. What iOS does
+The iPhone app has the Android app's version and the same tabs: Wi‑Fi, LAN,
+Internet, Bluetooth and Assistant with its summary cards. What iOS does
 not allow is left out: the phone's own Wi-Fi scan, flashing the sensor over
 USB, and a broadcast miIO hello (the iPhone asks each address in turn). The
 assistant and the whole app can be locked with Face ID. If the matching
@@ -267,12 +278,39 @@ Brave Search, Tavily, Exa, Firecrawl, You.com or Serper (Google). Keys are
 kept encrypted on the phone. Tavily, Exa, Firecrawl and You.com read the
 pages themselves, so the sites see the service rather than the phone; Brave,
 Serper and SearXNG return links that the phone then reads. Each query can be
-shown for approval before it goes out, and every query sent is listed under
-**What was sent**. On a summary card only the device's maker and model (or a
-link's domain) is searched: never an IP or MAC address, a network name or a
-name someone gave their device.
+shown for approval before it goes out. **Searches** lists every query sent and,
+for a day, what it found: a similar query is answered from there. On a summary
+card only the device's maker and model (or a link's domain) is searched: never
+an IP or MAC address, a network name or a name someone gave their device.
+Nothing from recorded traffic is searched for.
 
 Spectra and Probe Lab, its App Store sibling, share one icon.
+
+## Recording traffic
+
+Internet → **Traffic** sends the phone's own traffic through a local VPN
+(a packet tunnel on iOS, `VpnService` on Android); the recording stays on it.
+Without a certificate it lists the connections: site, protocol, size. To read
+HTTPS, turn on **Decrypt TLS**, export the certificate the app made for this
+phone and trust it:
+
+- **iPhone:** install the profile in Settings, then turn it on in General →
+  About → Certificate Trust Settings.
+- **Android:** install it as a CA certificate in the security settings. Only
+  apps that trust user certificates can be read: Chrome does, most apps do not.
+
+An app that pins its certificate refuses it: such a connection goes through
+unread and is marked. **Hosts to decrypt** narrows decryption to some hosts or
+leaves some out. On iPhone the origin's certificate is not checked while a
+connection is decrypted, so do not decrypt what you would not want intercepted.
+Android checks it.
+
+**Requests** can be grouped by endpoint: method, server and path, with numbers,
+UUIDs and long tokens in the path shown as `{id}`. A body opens full screen,
+with a search over all of it. The ✨ summaries look for passwords, tokens and
+keys, unencrypted HTTP, errors, slow answers, needless repeats and weak
+cookies. They name the kind and place of a secret, never its value. An ordinary
+word in a path, such as a user name, is not recognised as private and is shown.
 
 ## Protocol
 

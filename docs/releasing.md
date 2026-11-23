@@ -2,8 +2,8 @@
 
 Releases are built on GitHub Actions and published as
 [GitHub releases](https://github.com/CattivoLe/Spectra/releases). The iOS app
-is not part of them: it ships through the App Store as Probe Lab, and an iOS
-build cannot be handed out any other way.
+is not part of them: an iOS build cannot be handed out this way. It is built in
+Xcode, with the same version number. (Its App Store sibling is Probe Lab.)
 
 ## What runs when
 
@@ -41,7 +41,9 @@ so anyone can check that it was built by this repository's workflow.
 
 - **App:** `versionName` in `android/app/build.gradle.kts`. The tag must be
   `v` + `versionName`, or the release workflow stops. `versionCode` is derived
-  from it (`1.2.3` → `10203`), so there is nothing else to bump.
+  from it (`1.2.3` → `10203`), so there is nothing else to bump for Android.
+- **iPhone app:** `MARKETING_VERSION` of the `Spectra` and `SpectraTunnel`
+  targets in `ios/Spectra.xcodeproj`, the same as `versionName`.
 - **Sensor firmware:** `kFirmwareTag` in `firmware/src/main.cpp`
   (`"SPECTRA-FW:x.y.z"`). It has its own version because the app compares it
   with the sensor's to offer an update: raise it only when the firmware
@@ -91,9 +93,10 @@ CI never asks for them: only `release.yml` signs.
 
 ## Each release
 
-1. Raise `versionName` in `android/app/build.gradle.kts`. If the firmware
-   changed, raise `kFirmwareTag` in `firmware/src/main.cpp` too.
-2. In `CHANGELOG.md`, turn `## X.Y.Z (unreleased)` into `## X.Y.Z (YYYY-MM-DD)`
+1. Raise `versionName` in `android/app/build.gradle.kts` and
+   `MARKETING_VERSION` in `ios/Spectra.xcodeproj` to the same number. If the
+   firmware changed, raise `kFirmwareTag` in `firmware/src/main.cpp` too.
+2. In `CHANGELOG.md`, turn `## Unreleased` into `## X.Y.Z (YYYY-MM-DD)`
    and list the changes. That section becomes the release text, with the
    firmware version, checksums and signing certificate added below it. With
    no section for the version, the notes list the commits since the previous
@@ -103,14 +106,14 @@ CI never asks for them: only `release.yml` signs.
 4. Commit, tag and push:
 
    ```sh
-   git tag v1.0.0
-   git push origin main v1.0.0
+   git tag vX.Y.Z
+   git push origin main vX.Y.Z
    ```
 
 The workflow checks the tag against `versionName`, runs the tests, builds and
 signs, checks that the APK has all three firmware bundles and no x86 code,
 verifies the signature and publishes. If a run fails after the tag is pushed,
-fix it, delete the tag (`git push --delete origin v1.0.0 && git tag -d v1.0.0`)
+fix it, delete the tag (`git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`)
 and tag again.
 
 ## Local builds

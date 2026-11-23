@@ -19,7 +19,7 @@ android {
         targetSdk = 35
         // The release workflow refuses a `vX.Y.Z` tag that differs from versionName. versionCode follows from it:
         // 1.2.3 → 10203, so a release only edits this one line.
-        versionName = "1.1.0"
+        versionName = "1.2.0"
         versionCode = versionName!!.split('.').map(String::toInt).let { (major, minor, patch) ->
             major * 10_000 + minor * 100 + patch
         }

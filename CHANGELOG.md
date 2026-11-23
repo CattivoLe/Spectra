@@ -5,9 +5,78 @@ Each `## X.Y.Z` section is the text of the GitHub release for tag `vX.Y.Z`
 `versionName`; the sensor firmware keeps its own version, which the release
 notes name.
 
-## Unreleased
+## 1.2.0 (2026-11-23)
 
-iPhone app, brought level with Android 1.1.0 (its version is now 1.1.0 too).
+Android and iPhone apps, sensor firmware 0.11.0. The iPhone app is level with
+the Android one and has the same version from now on.
+
+Traffic recording:
+
+- Everything Charles shows: request and response bodies of any type, timing and
+  sizes, HTTP/2 and WebSocket messages, HAR and cURL export, and a list of hosts
+  to decrypt. Requests can be repeated and edited, answered by the phone (Map
+  Local), and connections slowed down.
+- Requests and connections have a screen of their own, with filters on it (GET,
+  POST, PUT, PATCH, DELETE, errors, WebSocket; HTTP, TLS, DNS, TCP, UDP). TCP and
+  UDP show everything that went over them. JSON bodies are coloured, and the
+  whole body can be searched.
+- Requests can be grouped by endpoint: method, server and path, with numbers,
+  UUIDs and long tokens in the path shown as `{id}`. A group shows how many
+  requests it has, how many failed, the typical and the longest time, the size
+  and the last request; filters and search work inside it.
+- ✨ on a recording, an endpoint, a request and a connection: whom it goes to,
+  what is wrong and what to check next. The app's own rules look for passwords,
+  tokens and keys, unencrypted HTTP, errors, slow and large answers, needless
+  repeats, missing compression and caching, weak cookies, known analytics and
+  advertising services, and refused certificates. Values never reach the summary
+  or the model, only their kind and place, and nothing from recorded traffic
+  goes to the web search.
+- Android: the certificate can be saved and installed again. iPhone: HTTPS is
+  really decrypted now; it never was before, and a refused certificate no longer
+  stops the recording.
+
+Sensor and Wi‑Fi:
+
+- A stream is traced to the device that sends it. The sensor (protocol 10) counts
+  what each client sends and receives, says for how long it listened, and stays
+  longer on channels with access points. A device that keeps sending like a
+  camera or a microphone for three sweeps is named with its maker, address and
+  LAN name. With an older sensor the network is judged, at about 320 kbit/s kept
+  up for three sweeps; before, only a feed of 4 Mbit/s was noticed. The limits
+  are not calibrated on a real camera yet.
+- The sensor's own alert uses the same rule and sounds once per device. The
+  estimated bitrate is counted over the time the sensor listened.
+- "Connected" follows the network the phone is on, and an error is not shown
+  once it is there. "Out of range" moved from the chips to the menu. No "Open
+  Wi‑Fi" warning when a password is saved for the network or another reading of
+  it is protected.
+
+Everywhere:
+
+- "First seen" of a network, a host and a Bluetooth device is the earliest date
+  in History (records from other phones do not count).
+- History: a session opens onto its records, with no page in between.
+- Bluetooth filters are chips on the screen. The search log and the saved
+  searches are one list, with what each search found.
+- Texts and translations were checked throughout.
+
+Android:
+
+- VPN: a VPN that lets no app around it is no longer measured as if it were
+  Wi‑Fi or the mobile network. The connection check, the speed test, the
+  traceroute and the device scan say so instead, and follow the VPN as it is
+  turned on and off. A VPN that leaves the local network or the internet alone
+  does not get in the way. HTTPS banners of LAN devices went into the VPN even
+  when it could be bypassed; they no longer do.
+- The connection check moved to the mobile network by itself on a phone that
+  hides the Wi‑Fi name (location off or not allowed). It now does so only when
+  there is no Wi‑Fi.
+- Assistant: the old chats are gone. The assistant has worked through summary
+  cards since 1.0.0, and the chats it kept from before could only be read; they
+  are erased once on the first start of this version. Summaries and their
+  folders stay. The code behind the chat is removed with them.
+
+iPhone:
 
 - Assistant: summary cards instead of the chat, as on Android. ✨ on a screen
   opens a card with the findings, the model's words and buttons for the next
@@ -16,94 +85,14 @@ iPhone app, brought level with Android 1.1.0 (its version is now 1.1.0 too).
   are erased on the first start. The Face ID lock stays.
 - Tabs: Wi‑Fi, LAN, Internet, Bluetooth and Assistant. The new Internet tab
   holds the link check, the connection check, your sites, traceroute, the
-  speed test and the phone's traffic. There is no shared History tab: the
-  clock on each tab opens that tab's own history, and deleting or clearing
-  there removes only that tab's records.
-- LAN: Xiaomi Mi Home appliances are found through their UDP hello (sent to
-  each address in turn) and `_miio._udp`; a full port scan stands for 30
-  minutes across a rescan.
-- Wi‑Fi: a Saved networks screen with the passwords that worked (show, copy,
-  connect, add, edit, delete); the join prompt can show the password and
-  offers the saved one.
+  speed test and the phone's traffic. The clock on each tab opens that tab's own
+  history, and deleting or clearing there removes only that tab's records.
+- LAN: the scan waits for the local network permission and asks quiet addresses
+  once more. Xiaomi Mi Home appliances are found through their UDP hello and
+  `_miio._udp`; a full port scan stands for 30 minutes across a rescan.
+- Wi‑Fi: a Saved networks screen with the passwords that worked; the join prompt
+  can show the password and offers the saved one.
 - Bluetooth: the Trackers section is folded to the tags that need a look.
-- Licenses moved to the Sensor screen's menu; a slim "add a site" field.
-- Traffic: requests and connections have a screen of their own, with filters on
-  it (GET, POST, PUT, PATCH, DELETE, errors, WebSocket; HTTP, TLS, DNS, TCP,
-  UDP). TCP and UDP now show everything that went over them. JSON bodies are
-  coloured, and the whole body can be searched.
-- "First seen" of a network, a host and a Bluetooth device is the earliest date
-  in History, not today.
-- History: a session opens onto its records, with no page in between.
-- Joining a Wi‑Fi network shows "Connected" only once the phone is on it.
-- A camera's steady stream is noticed at about 320 kbit/s kept up for three
-  sweeps; before, only a feed of 4 Mbit/s was. The estimated bitrate is counted
-  over the time the sensor listens on the channel.
-- Bluetooth filters are chips on the screen; the search log and the saved
-  searches are one list; texts and translations were checked throughout.
-
-Sensor firmware 0.11.0 (protocol 10), with both apps:
-
-- A stream is traced to the device that sends it. The sensor counts what each
-  client sends and receives, says for how long it listened, and stays longer on
-  channels with access points. A device that keeps sending like a camera or a
-  microphone for three sweeps is named with its maker, address and LAN name.
-  With an older sensor the network is judged, as before.
-- The sensor's own alert uses the same rule and sounds once per device; its old
-  bar was out of reach. The limits are not calibrated on a real camera yet.
-- Android: the network rule is the iPhone's (about 320 kbit/s kept up for three
-  sweeps), and so is the estimated bitrate.
-
-Traffic recording, in both apps:
-
-- Requests can be grouped by endpoint: method, server and path, with numbers,
-  UUIDs and long tokens in the path shown as `{id}`. A group shows how many
-  requests it has, how many failed, the typical and the longest time, the size
-  and the last request; filters and search work inside it. The choice is kept.
-- ✨ on a request, an endpoint and a connection: whom it goes to, what is wrong
-  and what to check next. The app's own rules look for passwords, tokens and
-  keys in addresses, headers and bodies, unencrypted HTTP, errors, slow and
-  large answers, needless repeats, missing compression and caching, weak
-  cookies, known analytics and advertising services, and refused certificates.
-- Values of secrets, cookies, parameters and bodies never reach the summary or
-  the model: only their kind and place. Nothing from recorded traffic goes to
-  the web search.
-- Buttons on these summaries repeat a GET and compare the answers, open Repeat
-  or Map Local filled in, check the site or trace the path to it.
-- The summary of a whole recording names the endpoints asked most often, failing
-  and slowest, and no longer lists paths as they were.
-
-Android app.
-
-- Assistant: the old chats are gone. The assistant has worked through summary
-  cards since 1.0.0, and the chats it kept from before could only be read;
-  they are erased once on the first start of this version. Summaries and
-  their folders stay. The code behind the chat (tool calling by the model,
-  the search-query planner, pictures by question) is removed with them.
-- VPN: a VPN that lets no app around it is no longer measured as if it were
-  Wi‑Fi or the mobile network. The connection check, the speed test, the
-  traceroute and the device scan say so instead, and follow the VPN as it is
-  turned on and off. A VPN that leaves the local network or the internet alone
-  does not get in the way. HTTPS banners of LAN devices went into the VPN even
-  when it could be bypassed; they no longer do.
-- Connection: the check moved to the mobile network by itself on a phone that
-  hides the Wi‑Fi name (location off or not allowed). It now does so only when
-  there is no Wi‑Fi.
-- Traffic: requests and connections have a screen of their own, with filters on
-  it (GET, POST, PUT, PATCH, DELETE, errors, WebSocket; HTTP, TLS, DNS, TCP,
-  UDP). TCP and UDP now show everything that went over them. JSON bodies are
-  coloured, and the whole body can be searched. A request's row names its site;
-  a connection lists its requests.
-- "First seen" of a network, a host and a Bluetooth device is the earliest date
-  in History (records from other phones do not count), with the date.
-- History: a session opens onto its records, with no page in between; a search
-  opens the sessions it found something in, narrowed to it.
-- Wi‑Fi: "Connected" follows the network the phone is on, and an error is not
-  shown once it is there. "Out of range" moved from the chips to the menu. No
-  "Open Wi‑Fi" warning when a password is saved for the network or another
-  reading of it is protected.
-- Bluetooth filters are chips on the screen, sorting is in the menu; the search
-  log and the saved searches are one list with what each search found; texts
-  and translations were checked throughout.
 
 ## 1.1.0 (2026-11-22)
 
