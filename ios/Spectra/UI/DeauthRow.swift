@@ -72,7 +72,7 @@ struct DeauthRow: View {
         let target = event.isBroadcast
             ? String(localized: "all devices")
             : event.target.description
-        return "\(event.reasonDescription) → \(target)"
+        return "\(linkText(event.reasonDescription)) → \(target)"
     }
 
     private var icon: String {

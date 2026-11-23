@@ -110,7 +110,7 @@ public final class AppLock {
         guard isLocked, !isAuthenticating else { return }
         isAuthenticating = true
         defer { isAuthenticating = false }
-        if await authenticator.authenticate(reason: String(localized: "Unlock your chats")) { isLocked = false }
+        if await authenticator.authenticate(reason: String(localized: "Unlock Spectra")) { isLocked = false }
     }
 
     /// Включает блокировку. Сначала проверяет владельца, чтобы не включить то, что потом не открыть.

@@ -66,7 +66,7 @@ struct AssistantSources {
                 isHidden: name == nil,
                 inRange: network.isInRange,
                 clients: network.clients.count,
-                streaming: (network.traffic?.bytes ?? 0) >= Threats.streamingByteThreshold
+                streaming: network.movesDataSteadily
             )
         }
         snapshot.findings = Threats.assess(networks: networks, deauths: store.deauthEvents).map {

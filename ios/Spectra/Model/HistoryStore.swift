@@ -333,6 +333,8 @@ final class HistoryStore {
 
     private var partials: [UInt32: Partial] = [:]
     private let file: URL
+    /// When everything saved here was first met. Follows `entries`.
+    private(set) var sightings = Sightings()
 
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -340,7 +342,8 @@ final class HistoryStore {
         file = base.appendingPathComponent("spectra-history.json")
         if let data = try? Data(contentsOf: file),
            let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: data) {
-            entries = decoded
+            sightings = Sightings(decoded)
+            entries = decoded.map { $0.dated(by: sightings) }
         }
     }
 
@@ -485,6 +488,7 @@ final class HistoryStore {
 
     func delete(_ id: UUID) {
         entries.removeAll { $0.id == id }
+        sightings = Sightings(entries)
         persist()
     }
 
@@ -502,6 +506,7 @@ final class HistoryStore {
         let next = entries.compactMap(change)
         guard next != entries else { return }
         entries = next
+        sightings = Sightings(entries)
         persist()
     }
 
@@ -512,6 +517,7 @@ final class HistoryStore {
             partials = [:]
             pendingFix = [:]
         }
+        sightings = Sightings(entries)
         persist()
     }
 
@@ -586,7 +592,8 @@ final class HistoryStore {
             entry.connections = Self.mergeConnections(entry.connections, connections)
             entry.lines = Self.mergeLines(entry.lines, lines)
             entries.remove(at: index)
-            entries.insert(entry, at: 0)
+            entries.insert(entry.dated(by: sightings), at: 0)
+            sightings.note(entry)
             persist()
             return
         }
@@ -598,7 +605,8 @@ final class HistoryStore {
             latitude: latitude, longitude: longitude
         )
         guard entry.itemCount > 0 else { return }
-        entries.insert(entry, at: 0)
+        entries.insert(entry.dated(by: sightings), at: 0)
+        sightings.note(entry)
         trim()
         persist()
     }

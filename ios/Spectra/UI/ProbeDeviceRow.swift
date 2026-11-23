@@ -52,7 +52,7 @@ struct ProbeDeviceRow: View {
     }
 
     private var subtitle: String {
-        var parts = ["Ch \(device.channel)"]
+        var parts = [String(localized: "Ch \(device.channel)")]
         if device.ssids.isEmpty {
             parts.append(String(localized: "broadcast"))
         } else {

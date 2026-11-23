@@ -7,8 +7,7 @@ struct AssistantWebView: View {
     @State private var confirmEnable = false
     @State private var testing = false
     @State private var testResult: String?
-    @State private var logCount = 0
-    @State private var cacheCount = 0
+    @State private var searchCount = 0
 
     var body: some View {
         @Bindable var web = model.web
@@ -108,29 +107,15 @@ struct AssistantWebView: View {
             }
 
             Section {
-                NavigationLink("Query log (\(logCount))") { AssistantSearchLogView() }
+                NavigationLink("Searches (\(searchCount))") { AssistantSearchesView() }
             } footer: {
-                Text("Everything that was sent to the internet is recorded here.")
-            }
-
-            Section {
-                LabeledContent("Saved searches", value: "\(cacheCount)")
-                Button("Forget saved searches", role: .destructive) {
-                    Task {
-                        try? await model.store.clearSearchCache()
-                        cacheCount = 0
-                    }
-                }
-                .disabled(cacheCount == 0)
-            } footer: {
-                Text("A query searched in the last 24 hours, or one worded almost the same, reuses what that search found: nothing is sent again. The pages are kept on the phone, encrypted with the summaries.")
+                Text("Everything that was sent to the internet, and what it found.")
             }
         }
         .navigationTitle("Internet")
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            logCount = (try? await model.store.searchLog().count) ?? 0
-            cacheCount = (try? await model.store.searchCacheCount()) ?? 0
+            searchCount = (try? await model.store.searches().count) ?? 0
         }
         .confirmationDialog("Allow web search?", isPresented: $confirmEnable, titleVisibility: .visible) {
             Button("Allow") { model.web.isEnabled = true }
@@ -168,48 +153,105 @@ struct AssistantWebSheet: View {
     }
 }
 
-/// The log: what was sent, when and where.
-struct AssistantSearchLogView: View {
+/// Every search: what was sent, when and where, and what it found while that is kept for reuse.
+struct AssistantSearchesView: View {
     @Environment(AssistantModel.self) private var model
-    @State private var entries: [SearchLogEntry] = []
+    @State private var searches: [PastSearch] = []
+    @State private var confirmClear = false
 
     var body: some View {
         List {
-            if entries.isEmpty { Text("No queries yet").foregroundStyle(.secondary) }
-            ForEach(entries) { entry in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.query)
-                    HStack {
-                        Text(entry.provider)
-                        Text(entry.date, format: .dateTime.day().month().hour().minute())
-                        if !entry.succeeded { Text("failed").foregroundStyle(.red) }
+            if !searches.isEmpty {
+                Section {
+                    ForEach(searches) { search in
+                        if search.results.isEmpty {
+                            row(search)
+                        } else {
+                            NavigationLink { AssistantSearchView(search: search) } label: { row(search) }
+                        }
                     }
-                    .font(.caption).foregroundStyle(.secondary)
+                    .onDelete(perform: delete)
+                } footer: {
+                    Text("What a search found is kept for 24 hours: a query worded almost the same is answered from it, and nothing is sent again. The pages are kept on the phone, encrypted with the summaries.")
                 }
             }
-            .onDelete(perform: delete)
         }
-        .navigationTitle("Query log")
+        .overlay {
+            if searches.isEmpty {
+                ContentUnavailableView("No queries yet", systemImage: "magnifyingglass")
+            }
+        }
+        .navigationTitle("Searches")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            Button("Clear", role: .destructive) {
-                Task {
-                    try? await model.store.clearSearchLog()
-                    entries = []
-                }
-            }
-            .disabled(entries.isEmpty)
+            Button("Clear", role: .destructive) { confirmClear = true }
+                .disabled(searches.isEmpty)
         }
-        .task { entries = (try? await model.store.searchLog()) ?? [] }
+        .confirmationDialog("Forget all searches?", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("Forget", role: .destructive) {
+                searches = []
+                Task { try? await model.store.clearSearches() }
+            }
+        } message: {
+            Text("The list and what the searches found are erased. Summaries stay.")
+        }
+        .task { searches = (try? await model.store.searches()) ?? [] }
     }
 
-    /// Swipe to delete a single entry.
-    private func delete(_ offsets: IndexSet) {
-        let ids = offsets.compactMap { entries[$0].id }
-        entries.remove(atOffsets: offsets)
-        Task {
-            for id in ids { try? await model.store.deleteSearchLogEntry(id: id) }
+    private func row(_ search: PastSearch) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(search.query)
+            HStack(spacing: 4) {
+                Text(search.date, format: .dateTime.day().month().hour().minute())
+                Text(verbatim: "· \(search.provider)")
+                if !search.succeeded {
+                    Text("· failed").foregroundStyle(.red)
+                } else if !search.results.isEmpty {
+                    Text("· found: \(search.results.count)")
+                }
+            }
+            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
+    }
+
+    private func delete(_ offsets: IndexSet) {
+        let gone = offsets.map { searches[$0] }
+        searches.remove(atOffsets: offsets)
+        Task {
+            for search in gone { try? await model.store.deleteSearch(search) }
+        }
+    }
+}
+
+/// What one search found, while it is kept.
+private struct AssistantSearchView: View {
+    let search: PastSearch
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(search.results, id: \.self) { result in
+                    Link(destination: result.url) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(result.title).foregroundStyle(.tint)
+                            Text(verbatim: result.url.host() ?? result.url.absoluteString)
+                                .font(.caption).foregroundStyle(.secondary)
+                            if !result.snippet.isEmpty {
+                                Text(result.snippet).font(.footnote).foregroundStyle(.primary).lineLimit(4)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text(search.query).textCase(nil)
+            } footer: {
+                if let until = search.keptUntil {
+                    Text("Reused for similar queries until \(until.formatted(date: .abbreviated, time: .shortened)).")
+                }
+            }
+        }
+        .navigationTitle("Found")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

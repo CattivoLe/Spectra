@@ -13,25 +13,20 @@ struct TrafficSnapshot: Equatable, Codable {
     var packets: Int
 
     var formattedBytes: String {
-        if bytes >= 1_000_000 {
-            String(format: "%.1f MB", Double(bytes) / 1_000_000)
-        } else if bytes >= 1_000 {
-            String(format: "%.1f KB", Double(bytes) / 1_000)
-        } else {
-            "\(bytes) B"
-        }
+        Int64(bytes).formatted(.byteCount(style: .decimal))
     }
 
-    func estimatedBitrate(scanDuration: Duration) -> String? {
-        let seconds = Double(scanDuration / .milliseconds(1)) / 1000
-        guard seconds > 0 else { return nil }
-        let bitsPerSecond = Double(bytes) * 8 / seconds
+    /// How long a sweep listens on one channel (`kSniffMsPerChannel` in the firmware): the time these bytes took.
+    static let secondsPerChannel = 0.25
+
+    var estimatedBitrate: String {
+        let bitsPerSecond = Double(bytes) * 8 / Self.secondsPerChannel
         if bitsPerSecond >= 1_000_000 {
-            return String(format: "%.1f Mbps", bitsPerSecond / 1_000_000)
+            return String(localized: "\(bitsPerSecond / 1_000_000, specifier: "%.1f") Mbit/s")
         } else if bitsPerSecond >= 1_000 {
-            return String(format: "%.0f Kbps", bitsPerSecond / 1_000)
+            return String(localized: "\(bitsPerSecond / 1_000, specifier: "%.0f") kbit/s")
         }
-        return String(format: "%.0f bps", bitsPerSecond)
+        return String(localized: "\(bitsPerSecond, specifier: "%.0f") bit/s")
     }
 }
 
@@ -57,6 +52,18 @@ struct TrackedNetwork: Identifiable, Equatable, Codable {
     var vendorInfo: VendorDeviceInfo?
     /// Traffic volume from the latest scan's promiscuous capture.
     var traffic: TrafficSnapshot?
+    /// Goes up with each sweep that hears a stream's worth of data, down with each that does not. Optional, so that
+    /// history saved without it still opens.
+    var steadyScans: Int?
+
+    /// Data in nearly every recent sweep, as a camera's or microphone's feed would leave.
+    var movesDataSteadily: Bool { (steadyScans ?? 0) >= Threats.streamingScans }
+
+    mutating func noteTraffic(_ snapshot: TrafficSnapshot?) {
+        traffic = snapshot
+        let busy = (snapshot?.bytes ?? 0) >= Threats.streamingByteThreshold
+        steadyScans = min(max((steadyScans ?? 0) + (busy ? 1 : -1), 0), Threats.streamingScansKept)
+    }
 
     var id: BSSID { latest.bssid }
     var wasInLastScan: Bool { missedScans == 0 }
@@ -73,6 +80,8 @@ struct TrackedNetwork: Identifiable, Equatable, Codable {
 
 @Observable
 final class NetworkStore {
+    /// When a network was first met, if it was before: its card says so instead of "today".
+    @ObservationIgnored var earlier: ((BSSID) -> Date?)?
     static let scansBeforeOutOfRange = 3
     /// Gone from the list after this many scans in a row without it.
     static let scansBeforeRemoval = 6
@@ -156,11 +165,8 @@ final class NetworkStore {
                 aggregateProbes()
                 deauthEvents = pendingDeauths.sorted { $0.count > $1.count }
                 pendingDeauths = []
-                for (bssid, snapshot) in pendingTraffic {
-                    networks[bssid]?.traffic = snapshot
-                }
-                for id in networks.keys where pendingTraffic[id] == nil {
-                    networks[id]?.traffic = nil
+                for id in Array(networks.keys) {
+                    networks[id]?.noteTraffic(pendingTraffic[id])
                 }
                 pendingTraffic = [:]
             }
@@ -207,7 +213,7 @@ final class NetworkStore {
             networks[reading.bssid] = network
         } else {
             networks[reading.bssid] = TrackedNetwork(
-                latest: reading, firstSeen: date, lastSeen: date, samples: [sample]
+                latest: reading, firstSeen: earlier?(reading.bssid) ?? date, lastSeen: date, samples: [sample]
             )
         }
     }

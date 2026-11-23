@@ -177,11 +177,7 @@ struct NetworkDetailView: View {
                 Section {
                     InfoRow("Volume", value: traffic.formattedBytes)
                     InfoRow("Packets", value: "\(traffic.packets)")
-                    if snapshot == nil,
-                       let duration = store.lastScanDuration,
-                       let bitrate = traffic.estimatedBitrate(scanDuration: duration) {
-                        InfoRow("Est. bitrate", value: bitrate)
-                    }
+                    InfoRow("Est. bitrate", value: traffic.estimatedBitrate)
                 } header: {
                     Text("Traffic")
                 } footer: {
@@ -234,7 +230,7 @@ struct NetworkDetailView: View {
                     Label("Forget this network", systemImage: "wifi.slash")
                 }
             } else {
-                if case .failed(let failed, let message) = joiner.status, failed == ssid {
+                if let message = joiner.failure(for: ssid) {
                     Label(message, systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                         .font(.subheadline)

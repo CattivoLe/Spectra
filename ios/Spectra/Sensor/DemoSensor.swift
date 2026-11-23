@@ -71,7 +71,7 @@ final class DemoSensor {
             let base: UInt32 = switch index {
             case 0: 185_000  // Home — active
             case 7: 420_000  // Hidden cam — suspicious streaming
-            default: UInt32.random(in: 200...15_000)
+            default: UInt32.random(in: 200...6_000)
             }
             let jitter = Int32.random(in: -Int32(base / 5)...Int32(base / 5))
             let bytes = UInt32(clamping: Int64(base) + Int64(jitter))

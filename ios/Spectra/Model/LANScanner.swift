@@ -601,6 +601,8 @@ final class LANScanner {
     let labels: DeviceLabels
     /// The Wi-Fi name, when the user lets the app read it.
     let wifi: WiFiInfo
+    /// When a host was first met on this network, if it was before.
+    @ObservationIgnored var earlier: ((LANDevice, [String]) -> Date?)?
     /// Set while the router is being asked for its port forwardings.
     private(set) var checkingForwarding = false
 
@@ -638,6 +640,15 @@ final class LANScanner {
         }
         guard let subnet = subnetInfo else { return nil }
         return "lan:net:\(subnet.networkLabel)"
+    }
+
+    /// Every key this network may have been saved under: before its name was readable, or its router's address known.
+    var networkKeys: [String] {
+        var keys: [String] = []
+        if let ssid = wifi.current?.ssid, !ssid.isEmpty { keys.append("lan:ssid:\(ssid)") }
+        if let router = gateway?.macAddress { keys.append("lan:gw:\(router.description)") }
+        if let subnet = subnetInfo { keys.append("lan:net:\(subnet.networkLabel)") }
+        return keys
     }
 
     /// Human label for the joined network, shown in History's by-place view.
@@ -698,6 +709,11 @@ final class LANScanner {
     private func classifyNewHosts(now: Date) {
         guard let key = networkKey else { return }
         lastVerdict = knownHosts.classify(Array(devices.values), network: key, now: now)
+        // The names and hardware addresses are in by now, so the hosts can be told apart across scans.
+        for device in devices.values {
+            let dates = [knownHosts.firstSeen(device, network: key), earlier?(device, networkKeys)].compactMap { $0 }
+            if let date = dates.min(), date < device.firstSeen { device.firstSeen = date }
+        }
     }
 
     // MARK: Actions

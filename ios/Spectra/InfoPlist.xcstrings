@@ -103,8 +103,14 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Spectra tags a saved scan with where your phone is, so you can tell captures apart on the map."
+            "state" : "translated",
+            "value" : "Spectra uses your location to read the name of the joined Wi-Fi and to mark saved scans on the map."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Геопозиция нужна Spectra, чтобы узнать имя вашей сети Wi-Fi и отметить сохранённые сканирования на карте."
           }
         }
       }

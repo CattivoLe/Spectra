@@ -10,7 +10,9 @@ struct ThreatsTests {
             countryCode: nil, ssidBytes: Data(ssid.utf8)
         )
         var net = TrackedNetwork(latest: reading, firstSeen: .distantPast, lastSeen: .distantPast, samples: [])
-        if let bytes { net.traffic = TrafficSnapshot(bytes: bytes, packets: 10) }
+        if let bytes {
+            for _ in 0 ..< Threats.streamingScans { net.noteTraffic(TrafficSnapshot(bytes: bytes, packets: 10)) }
+        }
         return net
     }
 
@@ -59,6 +61,43 @@ struct ThreatsTests {
         let findings = Threats.assess(networks: [], deauths: [event])
         #expect(findings.first?.kind == .deauthAttack)
         #expect(findings.first?.severity == .critical)
+    }
+
+    /// A camera at about a megabit: 31 KB in the quarter of a second the sensor spends on its channel.
+    @Test func aCameraIsFlaggedOnceItKeepsGoing() {
+        var camera = ap([2, 0, 0, 0, 0, 2], ssid: "Camera", auth: .wpa2PSK)
+        let feed = TrafficSnapshot(bytes: 31_000, packets: 40)
+        func flagged() -> Bool { !Threats.assess(networks: [camera], deauths: []).isEmpty }
+        for _ in 1 ..< Threats.streamingScans {
+            camera.noteTraffic(feed)
+            #expect(!flagged())
+        }
+        camera.noteTraffic(feed)
+        #expect(flagged())
+        // One sweep that missed it changes nothing; a feed that stopped goes away.
+        camera.noteTraffic(feed)
+        camera.noteTraffic(nil)
+        #expect(flagged())
+        camera.noteTraffic(nil)
+        #expect(!flagged())
+    }
+
+    @Test func aSingleBusySweepIsNotAStream() {
+        var network = ap([3, 0, 0, 0, 0, 3], ssid: "Browsing", auth: .wpa2PSK)
+        network.noteTraffic(TrafficSnapshot(bytes: 900_000, packets: 700))
+        network.noteTraffic(TrafficSnapshot(bytes: 2_000, packets: 4))
+        #expect(Threats.assess(networks: [network], deauths: []).isEmpty)
+    }
+
+    @Test func theBitrateIsOverTheTimeOnTheChannel() {
+        #expect(TrafficSnapshot(bytes: 31_250, packets: 40).estimatedBitrate == String(localized: "\(1.0, specifier: "%.1f") Mbit/s"))
+    }
+
+    @Test func historySavedWithoutTheCountStillOpens() throws {
+        var old = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(ap([1, 0, 0, 0, 0, 1], ssid: "Old", auth: .wpa2PSK, bytes: 500))) as? [String: Any])
+        old["steadyScans"] = nil
+        let network = try JSONDecoder().decode(TrackedNetwork.self, from: JSONSerialization.data(withJSONObject: old))
+        #expect(network.steadyScans == nil && !network.movesDataSteadily)
     }
 
     @Test func heavyTrafficIsFlagged() {

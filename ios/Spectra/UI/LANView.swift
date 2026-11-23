@@ -3,6 +3,8 @@ import SwiftUI
 struct LANView: View {
     @Environment(LANScanner.self) private var scanner
     @Environment(WiFiInfo.self) private var wifi
+    @Environment(SensorLink.self) private var link
+    @Environment(NetworkStore.self) private var store
     @AppStorage("notifyNewDevices") private var notifyNewDevices = true
     @AppStorage("hideTrusted") private var hideTrusted = false
     @AppStorage("autosaveHistory") private var autosave = true
@@ -12,6 +14,14 @@ struct LANView: View {
     @State private var showHistory = false
     /// Show only the hosts whose services need attention.
     @State private var onlyAtRisk = false
+
+    private var isOpenWiFi: Bool {
+        guard let current = wifi.current else { return false }
+        let heard = store.networks.values
+            .filter { ($0.revealedSSID ?? $0.latest.ssid) == current.ssid }
+            .map(\.latest.auth.strength)
+        return current.isOpen(savedPassword: link.knownPassword(for: current.ssid), heard: heard)
+    }
 
     private var atRisk: [LANDevice] { scanner.sortedDevices.filter(\.needsAttention) }
 
@@ -44,7 +54,7 @@ struct LANView: View {
 
                 if case .done = scanner.state, !scanner.devices.isEmpty, search.isEmpty {
                     Section {
-                        if wifi.current?.isSecure == false {
+                        if isOpenWiFi {
                             summaryRow(
                                 "Open Wi-Fi",
                                 detail: "This network has no password. Anyone nearby can join it and read traffic that is not encrypted.",

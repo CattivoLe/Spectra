@@ -89,7 +89,7 @@ struct ClientDetailView: View {
         List {
             Section {
                 InfoRow("MAC address", value: client.mac.description)
-                InfoRow("Signal", value: "\(client.rssi) dBm")
+                InfoRow("Signal", value: String(localized: "\(client.rssi) dBm"))
                 if client.mac.isLocallyAdministered {
                     InfoRow("Address type", value: String(localized: "Randomised"))
                 } else if let maker = client.manufacturer {

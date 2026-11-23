@@ -8,6 +8,8 @@ import Observation
 /// is suspended as soon as the scene backgrounds.
 @Observable
 final class BLEScanner: NSObject {
+    /// When a device was first met, if it was before.
+    @ObservationIgnored var earlier: ((UUID) -> Date?)?
     enum Availability: Equatable {
         case starting, poweredOff, unauthorized, unsupported
     }
@@ -219,10 +221,16 @@ final class BLEScanner: NSObject {
         let id = peripheral.identifier
         peripherals[id] = peripheral
         let seen = Date.now
-        let device = devices[id] ?? BLEDevice(id: id, rssi: rssi == 127 ? -100 : rssi, seen: seen)
+        let device = devices[id] ?? newDevice(id, rssi: rssi == 127 ? -100 : rssi, seen: seen)
         device.absorb(BLEAdvertisement.parse(fields), peripheralName: peripheral.name, rssi: rssi, at: seen)
         devices[id] = device
         if !hasDevices { hasDevices = true }
+    }
+
+    private func newDevice(_ id: UUID, rssi: Int, seen: Date) -> BLEDevice {
+        let device = BLEDevice(id: id, rssi: rssi, seen: seen)
+        if let date = earlier?(id) { device.firstSeen = date }
+        return device
     }
 
     private func uuids(_ value: Any?) -> [String] {

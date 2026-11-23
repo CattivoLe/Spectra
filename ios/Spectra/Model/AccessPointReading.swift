@@ -101,7 +101,7 @@ nonisolated struct AuthMode: RawRepresentable, Hashable, Codable, Sendable {
 
     var name: String {
         switch rawValue {
-        case 0: String(localized: "Open")
+        case 0: String(localized: "security.open", defaultValue: "Open", comment: "A Wi-Fi network without a password")
         case 1: "WEP"
         case 2: "WPA"
         case 3: "WPA2"

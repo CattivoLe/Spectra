@@ -5,9 +5,14 @@ import Foundation
 /// device generating steady traffic (a camera or microphone streaming). Pure,
 /// so the rules can be checked by tests.
 enum Threats {
-    /// Bytes seen for one AP during the ~3 s sniff window that suggest a
-    /// continuous stream rather than idle beacons.
-    static let streamingByteThreshold: UInt32 = 120_000
+    /// Bytes heard for one AP in a sweep that look like a stream: about 320 kbit/s over the time the sensor spends on
+    /// its channel. The bar used to be 120 000, meant for three seconds of listening; the sensor stays a quarter of a
+    /// second on a channel, so only a feed of 4 Mbit/s and more was ever noticed.
+    static let streamingByteThreshold: UInt32 = 10_000
+    /// Sweeps it has to keep up. One busy sweep is a page being opened; a camera is there in every one.
+    static let streamingScans = 3
+    /// How many sweeps are remembered, so a feed that stops is dropped within a few of them.
+    static let streamingScansKept = 4
 
     enum Severity: Int, Comparable {
         case warning, critical
@@ -89,7 +94,7 @@ enum Threats {
 
     private static func streamingFindings(_ networks: [TrackedNetwork]) -> [Finding] {
         networks.compactMap { network in
-            guard let traffic = network.traffic, traffic.bytes >= streamingByteThreshold else { return nil }
+            guard network.movesDataSteadily else { return nil }
             let name = network.revealedSSID ?? network.latest.ssid ?? network.latest.bssid.description
             return Finding(
                 id: "stream-\(network.latest.bssid)",

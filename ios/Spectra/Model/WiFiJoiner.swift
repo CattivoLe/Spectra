@@ -6,10 +6,11 @@ import Observation
 /// This is the phone's own radio, not the sensor's "Join": the Cardputer joins
 /// over the BLE protocol (`rememberWifi`), while this configures iOS directly.
 ///
-/// `apply` can return before the phone has actually associated (the network
-/// may be out of range, or the user may answer the system prompt later), so a
-/// success here means the configuration was accepted, not that the link is up.
-/// `currentSSID` reflects what the phone is actually on. Once the phone is
+/// What `apply` answers is not whether the phone is on the network: it returns
+/// without an error once the configuration is accepted, even when iOS then shows
+/// its own "Unable to join" alert, and it can fail although iOS joins a moment
+/// later. So neither answer is shown as it is: the phone's current network is
+/// watched for a while, and only that says connected or not. Once the phone is
 /// seen on the network, `onJoined` gets the password that worked.
 @Observable
 final class WiFiJoiner {
@@ -30,12 +31,8 @@ final class WiFiJoiner {
     /// Called with the SSID and password once the phone is seen on a network it was asked to join.
     @ObservationIgnored var onJoined: ((String, String) -> Void)?
 
-    /// True once the phone is, or has just been, put on `ssid`.
-    func isOn(_ ssid: String) -> Bool {
-        if currentSSID == ssid { return true }
-        if case .joined(let joined) = status, joined == ssid { return true }
-        return false
-    }
+    /// True when the phone is on `ssid`, as iOS reports it.
+    func isOn(_ ssid: String) -> Bool { currentSSID == ssid }
 
     /// True when `network` is the access point the phone is on: by BSSID when
     /// iOS reports one, otherwise by name.
@@ -56,25 +53,39 @@ final class WiFiJoiner {
         config.hidden = hidden
         config.joinOnce = false
 
+        var refusal: NSError?
         do {
             try await NEHotspotConfigurationManager.shared.apply(config)
-            status = .joined(ssid: ssid)
-        } catch let error as NSError where Self.isAlreadyAssociated(error) {
-            status = .joined(ssid: ssid)
         } catch {
-            status = .failed(ssid: ssid, message: Self.describe(error as NSError))
-            return
+            let error = error as NSError
+            if Self.isFinal(error) {
+                status = .failed(ssid: ssid, message: Self.describe(error))
+                return
+            }
+            if !Self.isAlreadyAssociated(error) { refusal = error }
         }
-        // Association lags the accepted configuration by a moment.
-        for _ in 0 ..< 8 {
+        // Association lags the accepted configuration, and iOS may retry on its own after saying it could not join.
+        for _ in 0 ..< 15 {
             await refreshCurrent()
             if currentSSID == ssid { break }
             try? await Task.sleep(for: .seconds(1))
         }
-        // An open network is kept too, with no password: the Saved networks list shows what the phone joined.
+        // A join of another network was started meanwhile: its status is the one to show.
+        guard status == .joining(ssid: ssid) else { return }
         if currentSSID == ssid {
+            status = .joined(ssid: ssid)
+            // An open network is kept too, with no password: the Saved networks list shows what the phone joined.
             onJoined?(ssid, passphrase ?? "")
+        } else {
+            status = .failed(ssid: ssid, message: refusal.map(Self.describe)
+                ?? String(localized: "The iPhone did not join. The password may be wrong, or the network too weak."))
         }
+    }
+
+    /// The failure to show for `ssid`: none once the phone is on it after all.
+    func failure(for ssid: String) -> String? {
+        guard currentSSID != ssid, case .failed(let failed, let message) = status, failed == ssid else { return nil }
+        return message
     }
 
     func forget(ssid: String) {
@@ -97,6 +108,19 @@ final class WiFiJoiner {
             NEHotspotNetwork.fetchCurrent { network in
                 continuation.resume(returning: network.map { ($0.ssid, $0.bssid) })
             }
+        }
+    }
+
+    /// Errors after which iOS certainly will not join by itself: the person declined, or the password cannot be one.
+    static func isFinal(_ error: NSError) -> Bool {
+        guard error.domain == NEHotspotConfigurationErrorDomain,
+              let code = NEHotspotConfigurationError(rawValue: error.code) else { return false }
+        switch code {
+        case .userDenied, .invalid, .invalidSSID, .invalidSSIDPrefix, .invalidWPAPassphrase, .invalidWEPPassphrase,
+             .invalidEAPSettings, .invalidHS20Settings, .invalidHS20DomainName, .applicationIsNotInForeground:
+            return true
+        default:
+            return false
         }
     }
 

@@ -35,21 +35,13 @@ struct AssistantPrivacyView: View {
                          : "No passcode is set on this phone, so the lock cannot be turned on.")
                 }
 
-                Section("Internet") {
-                    NavigationLink {
-                        AssistantWebView().environment(model)
-                    } label: {
-                        Label(model.web.isEnabled ? "Search allowed" : "Search off", systemImage: "globe")
-                    }
-                }
-
                 Section("How it works") {
                     fact("sparkle.magnifyingglass", "A summary reads what Spectra found (networks, devices, history) on this phone only. Its findings come from the app's own rules; the model on this phone only puts them into words.")
                     fact("bolt.horizontal", "The buttons under a summary run the same scans and checks you can run by hand on the other tabs. Nothing that sends to the air, such as deauthenticating a device or flashing the sensor, is ever among them.")
                     fact("lock.doc.fill", "Summaries are encrypted (AES-256). The key is in this phone's keychain and is never copied anywhere.")
                     fact("icloud.slash", "Summaries are not included in iCloud or computer backups.")
                     if model.web.isEnabled {
-                        fact("globe", "Web search is allowed: the query text goes out, and you can see it in the log. With page reading on, the phone also opens the pages found, as a browser does. Besides this, the internet is used to download models.")
+                        fact("globe", "Web search is allowed: the query text goes out, and you can see it in the searches under Internet. With page reading on, the phone also opens the pages found, as a browser does. Besides this, the internet is used to download models.")
                     } else {
                         fact("antenna.radiowaves.left.and.right.slash", "The internet is used only to download models, and only when you tap Download.")
                     }

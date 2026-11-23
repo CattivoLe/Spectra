@@ -93,23 +93,18 @@ struct NetworksView: View {
     /// Open, Known and the bands, as on the Android list. A chip narrows the
     /// networks; probing devices stay only when the filter can apply to them.
     private var filterChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                FilterChip(title: "Open", systemImage: "lock.open", isOn: openOnly) { openOnly.toggle() }
-                if hasKnown {
-                    FilterChip(title: "Known", systemImage: "key", isOn: knownOnly) { knownOnly.toggle() }
-                }
-                if bands.count > 1 {
-                    ForEach(bands, id: \.self) { shown in
-                        FilterChip(title: LocalizedStringKey(shown.rawValue), systemImage: nil, isOn: band == shown) {
-                            band = band == shown ? nil : shown
-                        }
+        FilterChipRow {
+            FilterChip(title: "Open", systemImage: "lock.open", isOn: openOnly) { openOnly.toggle() }
+            if hasKnown {
+                FilterChip(title: "Known", systemImage: "key", isOn: knownOnly) { knownOnly.toggle() }
+            }
+            if bands.count > 1 {
+                ForEach(bands, id: \.self) { shown in
+                    FilterChip(title: LocalizedStringKey(shown.rawValue), systemImage: nil, isOn: band == shown) {
+                        band = band == shown ? nil : shown
                     }
                 }
-                FilterChip(title: "Out of range", systemImage: nil, isOn: showOutOfRange) { showOutOfRange.toggle() }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 2)
         }
     }
 
@@ -172,12 +167,8 @@ struct NetworksView: View {
                     }
                 }
                 if !store.networks.isEmpty {
-                    Section {
-                        filterChips
-                            .listRowInsets(EdgeInsets())
-                            .listRowBackground(Color.clear)
-                    }
-                    .listSectionSpacing(.compact)
+                    Section { filterChips }
+                        .listSectionSpacing(.compact)
                 }
                 if !visible.isEmpty {
                     Section {
@@ -612,10 +603,28 @@ struct NetworkRow: View {
     }
 }
 
+/// A list's filters as one scrolling row: the first chip stands at the edge of the cards below, and the row
+/// scrolls out to the edge of the screen. Goes straight into a `Section`.
+struct FilterChipRow<Chips: View>: View {
+    @ViewBuilder var chips: Chips
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) { chips }
+                .padding(.vertical, 2)
+        }
+        .scrollClipDisabled()
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
+    }
+}
+
 /// One toggle in the row of list filters.
 struct FilterChip: View {
     var title: LocalizedStringKey
     var systemImage: String?
+    /// How many rows the chip leaves, when the list says.
+    var count: Int?
     var isOn: Bool
     var action: () -> Void
 
@@ -630,6 +639,11 @@ struct FilterChip: View {
                 }
                 Text(title)
                     .font(.subheadline.weight(.medium))
+                if let count {
+                    Text(verbatim: "\(count)")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(isOn ? AnyShapeStyle(.white.opacity(0.75)) : AnyShapeStyle(.secondary))
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)

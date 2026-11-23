@@ -178,6 +178,8 @@ struct SavedNetworksView: View {
                             Text("Connected").font(.caption).foregroundStyle(.green)
                         } else if joining {
                             Text("Connecting…").font(.caption).foregroundStyle(.secondary)
+                        } else if let message = joiner.failure(for: network.ssid) {
+                            Text(message).font(.caption).foregroundStyle(.orange)
                         } else if inRange {
                             Text("In range").font(.caption).foregroundStyle(.secondary)
                         }

@@ -37,7 +37,8 @@ final class BLEDevice: Identifiable {
     private var smoothedRSSI: Double
     var samples: [Sample] = []
     var packetCount = 0
-    let firstSeen: Date
+    /// May be earlier than anything heard since launch: the device was met before.
+    var firstSeen: Date
     var lastSeen: Date
     /// Start of the current unbroken stretch of advertisements. A silence
     /// longer than `presenceGap` starts a new one, so "near you for 20 min"

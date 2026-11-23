@@ -27,6 +27,19 @@ iPhone app, brought level with Android 1.1.0 (its version is now 1.1.0 too).
   offers the saved one.
 - Bluetooth: the Trackers section is folded to the tags that need a look.
 - Licenses moved to the Sensor screen's menu; a slim "add a site" field.
+- Traffic: requests and connections have a screen of their own, with filters on
+  it (GET, POST, PUT, PATCH, DELETE, errors, WebSocket; HTTP, TLS, DNS, TCP,
+  UDP). TCP and UDP now show everything that went over them. JSON bodies are
+  coloured, and the whole body can be searched.
+- "First seen" of a network, a host and a Bluetooth device is the earliest date
+  in History, not today.
+- History: a session opens onto its records, with no page in between.
+- Joining a Wi‑Fi network shows "Connected" only once the phone is on it.
+- A camera's steady stream is noticed at about 320 kbit/s kept up for three
+  sweeps; before, only a feed of 4 Mbit/s was. The estimated bitrate is counted
+  over the time the sensor listens on the channel.
+- Bluetooth filters are chips on the screen; the search log and the saved
+  searches are one list; texts and translations were checked throughout.
 
 Android app.
 
