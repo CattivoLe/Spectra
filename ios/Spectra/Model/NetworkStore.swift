@@ -13,26 +13,14 @@ struct TrafficSnapshot: Equatable, Codable {
     var packets: Int
 
     var formattedBytes: String {
-        if bytes >= 1_000_000 {
-            String(format: "%.1f MB", Double(bytes) / 1_000_000)
-        } else if bytes >= 1_000 {
-            String(format: "%.1f KB", Double(bytes) / 1_000)
-        } else {
-            "\(bytes) B"
-        }
+        Int64(bytes).formatted(.byteCount(style: .decimal))
     }
 
-    func estimatedBitrate(scanDuration: Duration) -> String? {
-        let seconds = Double(scanDuration / .milliseconds(1)) / 1000
-        guard seconds > 0 else { return nil }
-        let bitsPerSecond = Double(bytes) * 8 / seconds
-        if bitsPerSecond >= 1_000_000 {
-            return String(format: "%.1f Mbps", bitsPerSecond / 1_000_000)
-        } else if bitsPerSecond >= 1_000 {
-            return String(format: "%.0f Kbps", bitsPerSecond / 1_000)
-        }
-        return String(format: "%.0f bps", bitsPerSecond)
-    }
+    /// The time these bytes took. Sensors up to firmware 0.10 listen this long on a channel; later ones listen longer
+    /// and scale the count back to it (`kTrafficWindowMs`).
+    static let secondsPerChannel = 0.25
+
+    var estimatedBitrate: String { Bitrate.text(bytesPerSecond: Int(Double(bytes) / Self.secondsPerChannel)) }
 }
 
 /// An access point followed across scans.
@@ -57,6 +45,24 @@ struct TrackedNetwork: Identifiable, Equatable, Codable {
     var vendorInfo: VendorDeviceInfo?
     /// Traffic volume from the latest scan's promiscuous capture.
     var traffic: TrafficSnapshot?
+    /// Goes up with each sweep that hears a stream's worth of data, down with each that does not. Optional, so that
+    /// history saved without it still opens.
+    var steadyScans: Int?
+
+    /// Data in nearly every recent sweep, as a camera's or microphone's feed would leave.
+    var movesDataSteadily: Bool { (steadyScans ?? 0) >= Threats.streamingScans }
+
+    /// `judged` is false when the sensor says what each client sends: then the clients are judged, and a busy network
+    /// alone (someone watching a film) says nothing.
+    mutating func noteTraffic(_ snapshot: TrafficSnapshot?, judged: Bool = true) {
+        traffic = snapshot
+        guard judged else {
+            steadyScans = nil
+            return
+        }
+        let busy = (snapshot?.bytes ?? 0) >= Threats.streamingByteThreshold
+        steadyScans = min(max((steadyScans ?? 0) + (busy ? 1 : -1), 0), Threats.streamingScansKept)
+    }
 
     var id: BSSID { latest.bssid }
     var wasInLastScan: Bool { missedScans == 0 }
@@ -73,6 +79,8 @@ struct TrackedNetwork: Identifiable, Equatable, Codable {
 
 @Observable
 final class NetworkStore {
+    /// When a network was first met, if it was before: its card says so instead of "today".
+    @ObservationIgnored var earlier: ((BSSID) -> Date?)?
     static let scansBeforeOutOfRange = 3
     /// Gone from the list after this many scans in a row without it.
     static let scansBeforeRemoval = 6
@@ -97,12 +105,22 @@ final class NetworkStore {
     /// True when any critical-severity deauth was seen in the latest scan.
     var deauthAlert: Bool { deauthEvents.contains { $0.severity >= .warning } }
 
+    /// What each client sent in the latest scan. Empty with a sensor that does not count by client.
+    private(set) var clientTraffic: [ClientTraffic] = []
+    /// Clients that sent like a camera or a microphone in recent scans, steady or not yet.
+    private(set) var senders: [BSSID: TrackedSender] = [:]
+    /// Those that kept it up, busiest first.
+    var steadySenders: [TrackedSender] {
+        senders.values.filter(\.isSteady).sorted { $0.traffic.upBytesPerSecond > $1.traffic.upBytesPerSecond }
+    }
+
     private var currentScanID: UInt16?
     private var seenInCurrentScan: Set<BSSID> = []
     private var pendingClients: [WiFiClient] = []
     private var pendingProbes: [ProbeRequest] = []
     private var pendingDeauths: [DeauthEvent] = []
     private var pendingTraffic: [BSSID: TrafficSnapshot] = [:]
+    private var pendingClientTraffic: [ClientTraffic] = []
 
     func handle(_ message: SensorProtocol.Message, at date: Date = .now) {
         switch message {
@@ -113,6 +131,7 @@ final class NetworkStore {
             pendingProbes = []
             pendingDeauths = []
             pendingTraffic = [:]
+            pendingClientTraffic = []
             isScanning = true
 
         case .accessPoint(_, let reading):
@@ -140,10 +159,13 @@ final class NetworkStore {
         case .traffic(_, let bssid, let bytes, let packets):
             pendingTraffic[bssid] = TrafficSnapshot(bytes: bytes, packets: packets)
 
+        case .clientTraffic(_, let traffic):
+            pendingClientTraffic.append(traffic)
+
         case .battery, .saved, .lora, .loraScan, .loraProgress, .savedPosition, .gps, .knownWifi, .rawFrame:
             break
 
-        case .scanFinished(let scanID, _, let duration, _, _):
+        case .scanFinished(let scanID, _, let duration, _, _, let clientCount):
             // A finish without its start (the app connected mid-scan) still
             // delivered readings, but cannot say who was missed.
             if scanID == currentScanID {
@@ -156,13 +178,13 @@ final class NetworkStore {
                 aggregateProbes()
                 deauthEvents = pendingDeauths.sorted { $0.count > $1.count }
                 pendingDeauths = []
-                for (bssid, snapshot) in pendingTraffic {
-                    networks[bssid]?.traffic = snapshot
-                }
-                for id in networks.keys where pendingTraffic[id] == nil {
-                    networks[id]?.traffic = nil
+                for id in Array(networks.keys) {
+                    networks[id]?.noteTraffic(pendingTraffic[id], judged: clientCount == nil)
                 }
                 pendingTraffic = [:]
+                clientTraffic = pendingClientTraffic
+                senders = clientCount == nil ? [:] : TrackedSender.next(senders, sweep: pendingClientTraffic)
+                pendingClientTraffic = []
             }
             currentScanID = nil
             isScanning = false
@@ -177,6 +199,8 @@ final class NetworkStore {
         clients = []
         probingDevices = []
         deauthEvents = []
+        clientTraffic = []
+        senders = [:]
         lastScanFinished = nil
         lastScanDuration = nil
         scanCount = 0
@@ -207,7 +231,7 @@ final class NetworkStore {
             networks[reading.bssid] = network
         } else {
             networks[reading.bssid] = TrackedNetwork(
-                latest: reading, firstSeen: date, lastSeen: date, samples: [sample]
+                latest: reading, firstSeen: earlier?(reading.bssid) ?? date, lastSeen: date, samples: [sample]
             )
         }
     }

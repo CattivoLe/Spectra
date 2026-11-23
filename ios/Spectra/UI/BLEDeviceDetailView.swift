@@ -331,7 +331,7 @@ struct BLEDeviceDetailView: View {
                 .textSelection(.enabled)
             if let value = characteristic.value, !value.isEmpty {
                 if let decoded = GATTValue.decode(uuid: characteristic.uuid, bytes: value) {
-                    Text(decoded)
+                    Text(linkText(decoded))
                         .font(.subheadline)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)

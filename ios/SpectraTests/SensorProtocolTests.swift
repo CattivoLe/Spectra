@@ -56,15 +56,49 @@ struct SensorProtocolTests {
         #expect(SensorProtocol.decode(SensorProtocol.encode(message)) == message)
     }
 
+    /// Firmware 0.11 says how many client records it sent; before that the field is not there.
+    @Test func scanFinishedCarriesTheClientCount() throws {
+        let data = SensorProtocol.encode(.scanFinished(scanID: 1, count: 2, duration: .milliseconds(3), stationCount: 4, probeCount: 5, clientCount: 6))
+        #expect([UInt8](data) == [0x12, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0])
+        #expect(SensorProtocol.decode(data) == .scanFinished(scanID: 1, count: 2, duration: .milliseconds(3), stationCount: 4, probeCount: 5, clientCount: 6))
+        guard case .scanFinished(_, _, _, _, _, let older) = SensorProtocol.decode(data.prefix(11)) else {
+            Issue.record("not decoded as scanFinished")
+            return
+        }
+        #expect(older == nil)
+    }
+
+    /// The same bytes as in the firmware's `test_client_traffic_layout`.
+    @Test func clientTrafficLayout() {
+        let bytes: [UInt8] = [
+            0x25, 0x01, 0x02,
+            0x44, 0x47, 0xCC, 0x01, 0x02, 0x03,
+            0x50, 0xC7, 0xBF, 0x1E, 0x00, 0xA0,
+            0x06, 0xCE,
+            0xE2, 0x04,
+            0xB0, 0x30, 0x01, 0x00, 0x3C, 0x00,
+            0xA0, 0x0F, 0x00, 0x00, 0x28, 0x00,
+            0x0D,
+        ]
+        let message = SensorProtocol.Message.clientTraffic(scanID: 0x0201, traffic: ClientTraffic(
+            mac: BSSID(bytes: [0x44, 0x47, 0xCC, 1, 2, 3]), bssid: BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0, 0xA0]),
+            channel: 6, rssi: -50, listenMs: 1250, upBytes: 78_000, upFrames: 60, downBytes: 4_000, downFrames: 40, busySlots: 13
+        ))
+        #expect([UInt8](SensorProtocol.encode(message)) == bytes)
+        #expect(SensorProtocol.decode(Data(bytes)) == message)
+        #expect(SensorProtocol.decode(Data(bytes.dropLast())) == nil)
+    }
+
     @Test func scanFinishedV1HasZeroStations() throws {
         // v1 messages are only 7 bytes, no station count.
         let bytes: [UInt8] = [0x12, 0xFF, 0xFF, 0x05, 0x00, 0x68, 0x06]
-        guard case .scanFinished(_, _, _, let staCount, let probeCount) = SensorProtocol.decode(Data(bytes)) else {
+        guard case .scanFinished(_, _, _, let staCount, let probeCount, let clientCount) = SensorProtocol.decode(Data(bytes)) else {
             Issue.record("not decoded as scanFinished")
             return
         }
         #expect(staCount == 0)
         #expect(probeCount == 0)
+        #expect(clientCount == nil)
     }
 
     @Test func stationRoundTrips() throws {
@@ -123,7 +157,7 @@ struct SensorProtocolTests {
     @Test func scanFinishedV2HasZeroProbes() throws {
         // v2 messages are 9 bytes (no probe count).
         let bytes: [UInt8] = [0x12, 0x01, 0x00, 0x03, 0x00, 0xE8, 0x03, 0x02, 0x00]
-        guard case .scanFinished(_, _, _, _, let probeCount) = SensorProtocol.decode(Data(bytes)) else {
+        guard case .scanFinished(_, _, _, _, let probeCount, _) = SensorProtocol.decode(Data(bytes)) else {
             Issue.record("not decoded as scanFinished")
             return
         }
@@ -399,6 +433,69 @@ struct NetworkStoreTests {
         store.handle(.scanFinished(scanID: 1, count: 1, duration: .seconds(3), stationCount: 0, probeCount: 0))
         #expect(store.networks[bssid]?.traffic?.bytes == 185_000)
         #expect(store.networks[bssid]?.traffic?.packets == 312)
+    }
+
+    private func traffic(_ mac: [UInt8], up: UInt32 = 78_000, frames: Int = 60, down: UInt32 = 4_000, busy: Int = 13) -> ClientTraffic {
+        ClientTraffic(mac: BSSID(bytes: mac), bssid: BSSID(bytes: [0, 0, 0, 0, 0, 1]), channel: 6, rssi: -50, listenMs: 1250,
+                      upBytes: up, upFrames: frames, downBytes: down, downFrames: 40, busySlots: busy)
+    }
+
+    /// One sweep of a sensor that counts by client.
+    private func sweep(_ store: NetworkStore, id: UInt16, apBytes: UInt32 = 0, _ traffic: [ClientTraffic]) {
+        let bssid = BSSID(bytes: [0, 0, 0, 0, 0, 1])
+        store.handle(.scanStarted(scanID: id))
+        store.handle(.accessPoint(scanID: id, reading: reading(1, rssi: -50)))
+        store.handle(.traffic(scanID: id, bssid: bssid, bytes: apBytes, packets: 1))
+        for item in traffic { store.handle(.clientTraffic(scanID: id, traffic: item)) }
+        store.handle(.scanFinished(scanID: id, count: 1, duration: .seconds(1), stationCount: 0, probeCount: 0, clientCount: traffic.count))
+    }
+
+    @Test func aClientThatKeepsSendingIsNamed() throws {
+        let store = NetworkStore()
+        let camera = traffic([0x44, 0x19, 0xB6, 1, 2, 3])
+        sweep(store, id: 1, [camera])
+        sweep(store, id: 2, [camera])
+        #expect(store.steadySenders.isEmpty)
+        sweep(store, id: 3, [camera])
+        #expect(store.steadySenders.map(\.id) == [camera.mac])
+
+        let findings = Threats.assess(networks: Array(store.networks.values), deauths: [], senders: store.steadySenders) {
+            $0 == camera.mac ? "Front door" : nil
+        }
+        let finding = try #require(findings.first)
+        #expect(findings.count == 1)
+        #expect(finding.sender == camera)
+        #expect(finding.networks == [camera.bssid])
+        #expect(finding.detail.contains("Front door") && finding.detail.contains("44:19:B6:01:02:03") && finding.detail.contains("n1"))
+
+        // One sweep without it changes nothing, two do.
+        sweep(store, id: 4, [camera])
+        sweep(store, id: 5, [])
+        #expect(store.steadySenders.count == 1)
+        sweep(store, id: 6, [])
+        #expect(store.steadySenders.isEmpty)
+    }
+
+    /// A film someone watches fills the access point's counter and nobody's uplink.
+    @Test func aBusyNetworkIsNotAStreamWhenClientsAreCounted() {
+        let store = NetworkStore()
+        for id in 1 ... 4 { sweep(store, id: UInt16(id), apBytes: 500_000, [traffic([2, 2, 2, 2, 2, 2], up: 12_000, frames: 120, down: 400_000)]) }
+        #expect(Threats.assess(networks: Array(store.networks.values), deauths: [], senders: store.steadySenders).isEmpty)
+        #expect(store.clientTraffic.count == 1)
+    }
+
+    /// An older sensor sends no client records: the access point is judged, as before.
+    @Test func anOlderSensorStillFlagsTheNetwork() {
+        let store = NetworkStore()
+        let bssid = BSSID(bytes: [0, 0, 0, 0, 0, 1])
+        for id in UInt16(1) ... 3 {
+            store.handle(.scanStarted(scanID: id))
+            store.handle(.accessPoint(scanID: id, reading: reading(1, rssi: -50)))
+            store.handle(.traffic(scanID: id, bssid: bssid, bytes: 31_000, packets: 40))
+            store.handle(.scanFinished(scanID: id, count: 1, duration: .seconds(1), stationCount: 0, probeCount: 0))
+        }
+        let finding = Threats.assess(networks: Array(store.networks.values), deauths: [], senders: store.steadySenders).first
+        #expect(finding?.kind == .streaming && finding?.sender == nil)
     }
 
     @Test func revealUpdatesHiddenNetwork() {

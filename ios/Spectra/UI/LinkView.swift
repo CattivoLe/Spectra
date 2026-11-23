@@ -352,7 +352,7 @@ struct LinkView: View {
                         Text(DiscoveredPort.serviceName(for: port.port))
                             .foregroundStyle(.secondary)
                         Spacer(minLength: 8)
-                        Text(port.open ? "Open" : "Closed")
+                        Text(port.open ? LocalizedStringKey("port.open") : "Closed")
                             .font(.subheadline.weight(port.open ? .semibold : .regular))
                             .foregroundStyle(port.open ? Color.red : Color.secondary)
                     }

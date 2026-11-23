@@ -505,7 +505,7 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "Spectra uses the camera to read QR codes and check the links in them. Nothing is recorded.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID locks Spectra and your assistant summaries from other people. The check stays in iOS; the app never receives it.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Spectra scans the local network to find devices, their MAC addresses and open ports.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Spectra tags a saved scan with where your phone is, so you can tell captures apart on the map.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Spectra uses your location to read the name of the joined Wi-Fi and to mark saved scans on the map.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -548,7 +548,7 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "Spectra uses the camera to read QR codes and check the links in them. Nothing is recorded.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID locks Spectra and your assistant summaries from other people. The check stays in iOS; the app never receives it.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Spectra scans the local network to find devices, their MAC addresses and open ports.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Spectra tags a saved scan with where your phone is, so you can tell captures apart on the map.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Spectra uses your location to read the name of the joined Wi-Fi and to mark saved scans on the map.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

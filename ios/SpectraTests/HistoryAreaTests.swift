@@ -42,7 +42,6 @@ struct HistoryAreaTests {
         let internet = try #require(session.only(.internet))
         #expect(internet.lan.isEmpty)
         #expect(internet.connections == [check])
-        #expect(internet.rowTitle == String(localized: "Internet"))
         // Same session underneath: the same id, place and fix, so opening and deleting find it.
         #expect(internet.id == session.id)
         #expect(internet.placeLabel == "Home")

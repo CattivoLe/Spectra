@@ -74,7 +74,7 @@ extension HistoryEntry {
         return HistoryArea.allCases.contains { rest.holds($0) } ? rest : nil
     }
 
-    /// What the row names: the kinds of records this session actually holds.
+    /// The kinds of records this session actually holds.
     var shownKinds: [String] {
         var found: [String] = []
         if !networks.isEmpty || !probes.isEmpty || !deauths.isEmpty { found.append("networks") }
@@ -85,17 +85,7 @@ extension HistoryEntry {
         return found.isEmpty ? [kind.rawValue] : found
     }
 
-    /// The row's title, in the user's language: «Wi‑Fi», «LAN · Интернет».
-    var rowTitle: String {
-        shownKinds.map { kind in
-            switch kind {
-            case "internet": HistoryArea.internet.title
-            default: HistoryEntry.Kind(rawValue: kind)?.title ?? kind
-            }
-        }.joined(separator: " · ")
-    }
-
-    /// The icon of the first kind the row names.
+    /// The icon of the first kind of records.
     var rowSystemImage: String {
         let first = shownKinds.first ?? kind.rawValue
         return first == "internet" ? HistoryArea.internet.systemImage : HistoryEntry.Kind(rawValue: first)?.systemImage ?? kind.systemImage

@@ -59,7 +59,7 @@ nonisolated enum Miio {
             ("fryer", String(localized: "Air fryer")),
             ("airpurifier", String(localized: "Air purifier")),
             ("airp", String(localized: "Air purifier")),
-            ("airfresh", String(localized: "Air freshener")),
+            ("airfresh", String(localized: "Fresh air system")),
             ("aircondition", String(localized: "Air conditioner")),
             ("acpartner", String(localized: "Air conditioner")),
             ("humidifier", String(localized: "Humidifier")),

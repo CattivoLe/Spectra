@@ -78,7 +78,7 @@ class DemoSensor(
             )
             val base = when (index) {
                 0 -> 185_000L
-                7 -> 420_000L
+                7 -> 42_000L
                 else -> random.nextLong(200, 15_000)
             }
             val jitter = random.nextLong(-base / 5, base / 5 + 1)
@@ -86,12 +86,15 @@ class DemoSensor(
             val packets = (bytes / random.nextInt(400, 1200)).toInt()
             emit(SensorProtocol.encode(SensorProtocol.Message.Traffic(scanId, bssid, bytes, packets)))
         }
+        // What each client sends. Two keep a feed going: a camera at home, and one on the hidden network.
+        val senders = makeSenders(random)
+        for (sender in senders) emit(SensorProtocol.encode(SensorProtocol.Message.ClientSent(scanId, sender)))
         emitVendor()
         battery = (battery + random.nextInt(-1, 2)).coerceIn(8, 100)
         emit(SensorProtocol.encode(SensorProtocol.Message.Battery(scanId, battery, battery < 25)))
         emit(
             SensorProtocol.encode(
-                SensorProtocol.Message.ScanFinished(scanId, apSent, 4800, stations, probes),
+                SensorProtocol.Message.ScanFinished(scanId, apSent, 4800, stations, probes, senders.size),
             ),
         )
         scheduleNext()
@@ -213,13 +216,31 @@ class DemoSensor(
         private val guest = mac(0x50, 0xC7, 0xBF, 0x1E, 0x11, 0xA1)
         private val keenetic = mac(0x50, 0xC7, 0xBF, 0x1E, 0x22, 0xA2)
         private val tplink = mac(0x50, 0xC7, 0xBF, 0x1E, 0x33, 0xA3)
+        private val hidden = mac(0x50, 0xC7, 0xBF, 0x1E, 0x77, 0xA7)
         private val coffee = mac(0x50, 0xC7, 0xBF, 0x1E, 0x55, 0xA5)
+
+        private fun makeSenders(random: Random): List<ClientTraffic> {
+            fun sender(mac: MacAddress, bssid: MacAddress, channel: Int, rssi: Int, up: LongRange, frame: Int, down: Long, busy: Int): ClientTraffic {
+                val bytes = random.nextLong(up.first, up.last)
+                return ClientTraffic(
+                    mac, bssid, channel, rssi + random.nextInt(-3, 4), 1250,
+                    bytes, (bytes / frame).toInt(), down, (down / 120).toInt(), busy,
+                )
+            }
+            return listOf(
+                sender(mac(0x44, 0x19, 0xB6, 0x10, 0x20, 0x30), home, 6, -57, 180_000L..260_000L, 1300, 9_000, 13),
+                sender(mac(0x30, 0xAE, 0xA4, 0x66, 0x01, 0x7C), hidden, 11, -71, 60_000L..90_000L, 1300, 4_000, 12),
+                // A phone loading pages: acknowledgements up, the pages down.
+                sender(mac(0xF0, 0x18, 0x98, 0x01, 0x02, 0x03), home, 6, -38, 6_000L..12_000L, 100, 140_000, 8),
+            )
+        }
 
         private val clients = listOf(
             WifiClient(mac(0xF0, 0x18, 0x98, 0x01, 0x02, 0x03), home, -38, true),
             WifiClient(mac(0x3C, 0x22, 0xFB, 0x04, 0x05, 0x06), home, -51, true),
             WifiClient(mac(0x48, 0xD6, 0xD5, 0x07, 0x08, 0x09), home, -62, true),
             WifiClient(mac(0x08, 0x08, 0xC2, 0x0A, 0x0B, 0x0C), home, -55, true),
+            WifiClient(mac(0x44, 0x19, 0xB6, 0x10, 0x20, 0x30), home, -57, true),
             WifiClient(mac(0x7A, 0x12, 0x34, 0x0D, 0x0E, 0x0F), guest, -48, true),
             WifiClient(mac(0x30, 0xAE, 0xA4, 0x10, 0x11, 0x12), keenetic, -65, true),
             WifiClient(mac(0xB8, 0x27, 0xEB, 0x13, 0x14, 0x15), keenetic, -71, true),

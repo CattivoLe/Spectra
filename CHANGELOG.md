@@ -27,6 +27,31 @@ iPhone app, brought level with Android 1.1.0 (its version is now 1.1.0 too).
   offers the saved one.
 - Bluetooth: the Trackers section is folded to the tags that need a look.
 - Licenses moved to the Sensor screen's menu; a slim "add a site" field.
+- Traffic: requests and connections have a screen of their own, with filters on
+  it (GET, POST, PUT, PATCH, DELETE, errors, WebSocket; HTTP, TLS, DNS, TCP,
+  UDP). TCP and UDP now show everything that went over them. JSON bodies are
+  coloured, and the whole body can be searched.
+- "First seen" of a network, a host and a Bluetooth device is the earliest date
+  in History, not today.
+- History: a session opens onto its records, with no page in between.
+- Joining a Wi‑Fi network shows "Connected" only once the phone is on it.
+- A camera's steady stream is noticed at about 320 kbit/s kept up for three
+  sweeps; before, only a feed of 4 Mbit/s was. The estimated bitrate is counted
+  over the time the sensor listens on the channel.
+- Bluetooth filters are chips on the screen; the search log and the saved
+  searches are one list; texts and translations were checked throughout.
+
+Sensor firmware 0.11.0 (protocol 10), with both apps:
+
+- A stream is traced to the device that sends it. The sensor counts what each
+  client sends and receives, says for how long it listened, and stays longer on
+  channels with access points. A device that keeps sending like a camera or a
+  microphone for three sweeps is named with its maker, address and LAN name.
+  With an older sensor the network is judged, as before.
+- The sensor's own alert uses the same rule and sounds once per device; its old
+  bar was out of reach. The limits are not calibrated on a real camera yet.
+- Android: the network rule is the iPhone's (about 320 kbit/s kept up for three
+  sweeps), and so is the estimated bitrate.
 
 Android app.
 

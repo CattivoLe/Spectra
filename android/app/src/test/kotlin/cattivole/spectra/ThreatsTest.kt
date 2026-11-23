@@ -13,6 +13,7 @@ import cattivole.spectra.core.Threats
 import cattivole.spectra.core.TrackedNetwork
 import cattivole.spectra.core.TrafficSnapshot
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -26,9 +27,10 @@ class ThreatsTest {
         )
         return TrackedNetwork(
             reading, 0, 0, mutableListOf(),
-            traffic = bytes?.let { TrafficSnapshot(it, 10) },
             source = RadioSource.SENSOR,
-        )
+        ).apply {
+            bytes?.let { heard -> repeat(Threats.STREAMING_SCANS) { noteTraffic(TrafficSnapshot(heard, 10)) } }
+        }
     }
 
     @Test
@@ -80,6 +82,26 @@ class ThreatsTest {
         val findings = Threats.assess(emptyList(), listOf(event))
         assertEquals(Threats.Kind.DEAUTH_ATTACK, findings.first().kind)
         assertEquals(Threats.Severity.CRITICAL, findings.first().severity)
+    }
+
+    /** A camera at about a megabit: 31 KB in a quarter of a second. */
+    @Test
+    fun aCameraIsFlaggedOnceItKeepsGoing() {
+        val camera = net(byteArrayOf(2, 0, 0, 0, 0, 2), "Camera", AuthMode.WPA2_PSK)
+        val feed = TrafficSnapshot(31_000, 40)
+        fun flagged() = Threats.assess(listOf(camera), emptyList()).isNotEmpty()
+        repeat(Threats.STREAMING_SCANS - 1) {
+            camera.noteTraffic(feed)
+            assertFalse(flagged())
+        }
+        camera.noteTraffic(feed)
+        assertTrue(flagged())
+        // One sweep that missed it changes nothing; a feed that stopped goes away.
+        camera.noteTraffic(feed)
+        camera.noteTraffic(null)
+        assertTrue(flagged())
+        camera.noteTraffic(null)
+        assertFalse(flagged())
     }
 
     @Test

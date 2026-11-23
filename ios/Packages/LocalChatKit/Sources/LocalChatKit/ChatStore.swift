@@ -10,7 +10,7 @@ public enum ChatStoreError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .encryptionMismatch:
-            String(localized: "Could not move the chats into the encrypted database: the record counts differ. The previous database was left untouched.")
+            String(localized: "Could not move the summaries into the encrypted database: the record counts differ. The previous database was left untouched.")
         case .chatMissing:
             "The chat no longer exists."
         }
@@ -248,20 +248,6 @@ public final class ChatStore: Sendable {
             var entry = SearchLogEntry(id: nil, date: Date(), provider: provider, query: query, succeeded: succeeded)
             try entry.insert(db)
         }
-    }
-
-    public func searchLog(limit: Int = 200) async throws -> [SearchLogEntry] {
-        try await database.read { try SearchLogEntry.order(Column("date").desc).limit(limit).fetchAll($0) }
-    }
-
-    /// Removes one entry; the rest of the log stays.
-    public func deleteSearchLogEntry(id: Int64) async throws {
-        try await database.write { _ = try SearchLogEntry.deleteOne($0, key: id) }
-    }
-
-    public func clearSearchLog() async throws {
-        try await database.write { _ = try SearchLogEntry.deleteAll($0) }
-        try await database.vacuum()
     }
 
     public func chats() async throws -> [Chat] {

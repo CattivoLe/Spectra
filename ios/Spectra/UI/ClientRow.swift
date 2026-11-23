@@ -89,11 +89,15 @@ struct ClientDetailView: View {
         List {
             Section {
                 InfoRow("MAC address", value: client.mac.description)
-                InfoRow("Signal", value: "\(client.rssi) dBm")
+                InfoRow("Signal", value: String(localized: "\(client.rssi) dBm"))
                 if client.mac.isLocallyAdministered {
                     InfoRow("Address type", value: String(localized: "Randomised"))
                 } else if let maker = client.manufacturer {
                     InfoRow("Maker", value: maker)
+                }
+                if let traffic = store.clientTraffic.filter({ $0.mac == client.mac }).max(by: { $0.upBytes < $1.upBytes }) {
+                    InfoRow("Sends", value: Bitrate.text(bytesPerSecond: traffic.upBytesPerSecond))
+                    InfoRow("Receives", value: Bitrate.text(bytesPerSecond: traffic.downBytesPerSecond))
                 }
                 InfoRow("Associated", value: client.isAssociated ? String(localized: "Yes") : String(localized: "Probe only"))
                 if let ap = client.apBSSID, let network = store.networks[ap] {

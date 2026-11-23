@@ -10,8 +10,6 @@ struct SnifferView: View {
     @Environment(CaptureShelf.self) private var captures
     @State private var exportItem: ShareItem?
     @Environment(\.scenePhase) private var scenePhase
-    @State private var kindFilter: TrafficKind?
-    @State private var search = ""
     @State private var saves = 0
 
     var body: some View {
@@ -25,6 +23,13 @@ struct SnifferView: View {
                           systemImage: sniffer.running ? "stop.circle.fill" : "record.circle")
                 }
                 if sniffer.running || !sniffer.flows.isEmpty {
+                    NavigationLink { LiveTrafficView() } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Requests and connections", systemImage: "list.bullet.rectangle")
+                            Text("Requests: \(sniffer.flows.reduce(0) { $0 + $1.exchanges.count }) · connections: \(sniffer.flows.count)")
+                                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        }
+                    }
                     saveButton
                 }
                 if !sniffer.saved.isEmpty {
@@ -79,34 +84,15 @@ struct SnifferView: View {
                     }
                 }
             }
-
-            if !sniffer.flows.isEmpty {
-                TrafficListSections(flows: sniffer.flows, sessionID: nil, search: search, kind: kindFilter)
-            }
         }
         .navigationTitle("Traffic")
         .task(id: scenePhase) { if scenePhase == .active { await sniffer.checkTrust() } }
         .sensoryFeedback(.success, trigger: saves)
-        .searchable(text: $search, prompt: "Host or request")
         .summaryButton(isShown: !sniffer.flows.isEmpty,
                        subject: { .traffic },
                        prepare: { captures.keep(traffic: sniffer.flows, name: sniffer.running ? "recording in progress" : "current recording") })
         .shareSheet(item: $exportItem)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Picker("Protocol", selection: $kindFilter) {
-                        Text("All").tag(TrafficKind?.none)
-                        ForEach([TrafficKind.http, .tls, .dns, .tcp, .udp], id: \.self) { kind in
-                            Text(kind.rawValue.uppercased()).tag(TrafficKind?.some(kind))
-                        }
-                    }
-                } label: {
-                    Label("Filter", systemImage: kindFilter == nil
-                          ? "line.3.horizontal.decrease.circle"
-                          : "line.3.horizontal.decrease.circle.fill")
-                }
-            }
             if !sniffer.flows.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
                     HarExportButton(flows: sniffer.flows, sessionID: nil, item: $exportItem)
@@ -201,63 +187,130 @@ private struct RequestHit: Identifiable {
     var at: Int64 { exchange.startedAt ?? flow.lastAt }
 }
 
-/// The recording as a list of requests, newest first, or of the connections under them. DNS lookups outnumber
-/// everything else and say little, so they show only when asked for.
-private struct TrafficListSections: View {
-    let flows: [TrafficFlow]
-    let sessionID: String?
-    let search: String
-    let kind: TrafficKind?
-    @AppStorage("trafficShowsConnections") private var showsConnections = false
-
-    private func matches(_ texts: String?...) -> Bool {
-        search.isEmpty || texts.contains { $0?.localizedCaseInsensitiveContains(search) == true }
-    }
-
-    private var requests: [RequestHit] {
-        flows.flatMap { flow in flow.exchanges.indices.map { RequestHit(flow: flow, index: $0) } }
-            .filter { matches($0.flow.title, $0.exchange.summary) }
-            .sorted { $0.at > $1.at }
-    }
-
-    private var connections: [TrafficFlow] {
-        flows.filter { (kind == nil ? $0.kind != .dns : $0.kind == kind) && matches($0.title, $0.request) }
-    }
+/// The recording in progress, or the last one: its requests and connections.
+struct LiveTrafficView: View {
+    @Environment(TrafficSniffer.self) private var sniffer
+    @Environment(CaptureShelf.self) private var captures
+    @State private var exportItem: ShareItem?
 
     var body: some View {
-        Section {
-            Picker("List", selection: $showsConnections) {
-                Text("Requests").tag(false)
-                Text("Connections").tag(true)
-            }
-            .pickerStyle(.segmented)
-        }
-        // A protocol picked in the filter is a question about connections.
-        if showsConnections || kind != nil {
-            let rows = connections
-            Section("\(rows.count) of \(flows.count) connections") {
-                if rows.isEmpty { Text("Nothing matches the filter.").foregroundStyle(.secondary).font(.footnote) }
-                ForEach(rows) { flow in
-                    NavigationLink { FlowDetailView(flow: flow, sessionID: sessionID) } label: { FlowRow(flow: flow) }
+        TrafficList(flows: sniffer.flows, sessionID: nil)
+            .navigationTitle(sniffer.running ? "Recording" : "Recorded")
+            .navigationBarTitleDisplayMode(.inline)
+            .summaryButton(isShown: !sniffer.flows.isEmpty,
+                           subject: { .traffic },
+                           prepare: { captures.keep(traffic: sniffer.flows, name: sniffer.running ? "recording in progress" : "current recording") })
+            .shareSheet(item: $exportItem)
+            .toolbar {
+                if !sniffer.flows.isEmpty {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        HarExportButton(flows: sniffer.flows, sessionID: nil, item: $exportItem)
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(sniffer.running ? "Stop recording" : "Record traffic",
+                           systemImage: sniffer.running ? "stop.circle.fill" : "record.circle") {
+                        Task { sniffer.running ? sniffer.stop() : await sniffer.start() }
+                    }
                 }
             }
-        } else {
-            let rows = requests
-            let refused = flows.filter(\.refused).count
+    }
+}
+
+/// A recording as a list of requests, newest first, or of the connections under them, each with its own filters.
+private struct TrafficList: View {
+    let flows: [TrafficFlow]
+    let sessionID: String?
+    @AppStorage("trafficShowsConnections") private var showsConnections = false
+    @State private var filter = RequestFilter()
+    @State private var connection: ConnectionFilter?
+
+    var body: some View {
+        List {
             Section {
-                if rows.isEmpty {
-                    Text("No requests read yet.").foregroundStyle(.secondary).font(.footnote)
+                Picker("List", selection: $showsConnections) {
+                    Text("Requests").tag(false)
+                    Text("Connections").tag(true)
                 }
-                ForEach(rows) { hit in
-                    NavigationLink {
-                        ExchangeDetailView(flow: hit.flow, index: hit.index, sessionID: sessionID)
-                    } label: { RequestRow(hit: hit) }
-                }
-            } header: {
-                Text("Requests: \(rows.count)")
-            } footer: {
-                if refused > 0 { Text("Connections that refused the certificate and went through unread: \(refused).") }
+                .pickerStyle(.segmented)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
+            .listSectionSpacing(.compact)
+            Section {
+                FilterChipRow {
+                    if showsConnections { connectionChips } else { requestChips }
+                }
+            }
+            .listSectionSpacing(.compact)
+            if showsConnections { connectionRows } else { requestRows }
+        }
+        .searchable(text: $filter.query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Host or request")
+    }
+
+    @ViewBuilder
+    private var requestChips: some View {
+        ForEach(RequestFilter.methods(in: flows), id: \.self) { method in
+            FilterChip(title: LocalizedStringKey(method), isOn: filter.methods.contains(method)) {
+                if filter.methods.remove(method) == nil { filter.methods.insert(method) }
+            }
+        }
+        FilterChip(title: "Errors", systemImage: "exclamationmark.triangle", isOn: filter.failedOnly) { filter.failedOnly.toggle() }
+        if filter.webSocketOnly || flows.contains(where: { $0.exchanges.contains { !$0.messages.isEmpty } }) {
+            FilterChip(title: "WebSocket", isOn: filter.webSocketOnly) { filter.webSocketOnly.toggle() }
+        }
+    }
+
+    @ViewBuilder
+    private var connectionChips: some View {
+        ForEach(ConnectionFilter.allCases, id: \.self) { kind in
+            FilterChip(title: LocalizedStringKey(kind.title), count: flows.count(where: kind.passes), isOn: connection == kind) {
+                connection = connection == kind ? nil : kind
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var requestRows: some View {
+        let filter = filter
+        let all = flows.flatMap { flow in flow.exchanges.indices.map { RequestHit(flow: flow, index: $0) } }
+        let rows = all.filter { filter.passes($0.exchange, of: $0.flow) }.sorted { $0.at > $1.at }
+        let refused = flows.filter(\.refused).count
+        Section {
+            if rows.isEmpty {
+                Text(all.isEmpty ? "No requests read yet." : "Nothing matches the filter.")
+                    .foregroundStyle(.secondary).font(.footnote)
+            }
+            ForEach(rows) { hit in
+                NavigationLink {
+                    ExchangeDetailView(flow: hit.flow, index: hit.index, sessionID: sessionID)
+                } label: { RequestRow(hit: hit) }
+            }
+        } header: {
+            if rows.count == all.count {
+                Text("Requests: \(rows.count)")
+            } else {
+                Text("Requests: \(rows.count) of \(all.count)")
+            }
+        } footer: {
+            if refused > 0 { Text("Connections that refused the certificate and went through unread: \(refused).") }
+        }
+    }
+
+    @ViewBuilder
+    private var connectionRows: some View {
+        let rows = flows.filter {
+            ConnectionFilter.passes(connection, $0) && RequestFilter.matches(filter.query, $0.title, $0.request)
+        }
+        Section {
+            if rows.isEmpty { Text("Nothing matches the filter.").foregroundStyle(.secondary).font(.footnote) }
+            ForEach(rows) { flow in
+                NavigationLink { FlowDetailView(flow: flow, sessionID: sessionID) } label: { FlowRow(flow: flow) }
+            }
+        } header: {
+            Text("Connections: \(rows.count) of \(flows.count)")
+        } footer: {
+            if connection == nil { Text("DNS lookups are left out until their filter is on.") }
         }
     }
 }
@@ -306,7 +359,7 @@ private struct FlowRow: View {
                 Text(request).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             if let first = flow.exchanges.first, let line = exchangeLine(first) {
-                Text(flow.exchanges.count > 1 ? "\(line) · \(flow.exchanges.count) requests" : line)
+                Text(verbatim: flow.exchanges.count > 1 ? "\(line) · " + String(localized: "requests: \(flow.exchanges.count)") : line)
                     .font(.caption2).foregroundStyle(.secondary)
             }
             Text("↑\(bytes(flow.sent)) ↓\(bytes(flow.received))").font(.caption2).foregroundStyle(.tertiary)
@@ -402,12 +455,12 @@ struct ExchangeDetailView: View {
             if !exchange.requestHeaders.isEmpty { fields("Request headers", exchange.requestHeaders) }
             if exchange.requestBodyStored || (exchange.requestBodyBytes ?? 0) > 0 {
                 Section("Request body") {
-                    BodySection(flow: flow, index: index, sessionID: sessionID, request: true, full: false)
+                    BodySection(flow: flow, index: index, sessionID: sessionID, request: true)
                 }
             }
             if !exchange.responseHeaders.isEmpty { fields("Response headers", exchange.responseHeaders) }
             Section("Response") {
-                BodySection(flow: flow, index: index, sessionID: sessionID, request: false, full: false)
+                BodySection(flow: flow, index: index, sessionID: sessionID, request: false)
             }
             if !exchange.messages.isEmpty {
                 Section {
@@ -480,13 +533,13 @@ struct ExchangeDetailView: View {
 }
 
 /// One side's body: a picture, formatted JSON, text, or the bytes in hex, with a note when it was cut or not
-/// kept. `full` shows all of it; otherwise a start, with a link to the rest.
+/// kept. A start of it, with a link to the rest; `full` is that rest for a picture or bytes.
 private struct BodySection: View {
     let flow: TrafficFlow
     let index: Int
     let sessionID: String?
     let request: Bool
-    let full: Bool
+    var full = false
     @Environment(TrafficSniffer.self) private var sniffer
     @State private var loaded: Loaded?
 
@@ -496,6 +549,7 @@ private struct BodySection: View {
     }
 
     private var exchange: HttpExchange { flow.exchanges[index] }
+    private var title: LocalizedStringKey { request ? "Request body" : "Response" }
     private var stored: Bool { request ? exchange.requestBodyStored : exchange.responseBodyStored }
 
     var body: some View {
@@ -509,7 +563,7 @@ private struct BodySection: View {
                     .font(.footnote).foregroundStyle(.orange)
             }
             if !stored, let legacy {
-                MonoText(text: legacy, full: full) { BodyFullView(flow: flow, index: index, sessionID: sessionID, request: request) }
+                BodyTextPreview(text: legacy, title: title)
             } else if !stored && wire > 0 {
                 Label("This body was not kept: the recording reached its limit for stored bodies.", systemImage: "exclamationmark.triangle")
                     .font(.footnote).foregroundStyle(.orange)
@@ -554,7 +608,7 @@ private struct BodySection: View {
                 Text("Image, \(bytes(Int64(data.count))). This phone cannot draw this format.")
             }
         case .json(let text), .text(let text):
-            MonoText(text: text, full: full) { BodyFullView(flow: flow, index: index, sessionID: sessionID, request: request) }
+            BodyTextPreview(text: text, title: title)
         case .binary(let size, let hex):
             if let encoding = exchange.header("Content-Encoding", response: !request), !encoding.isEmpty {
                 Text("The body is encoded as \(encoding) and is not text.")
@@ -644,7 +698,7 @@ private struct MessageDetailView: View {
                 case nil:
                     ProgressView()
                 case .json(let text)?, .text(let text)?:
-                    MonoText(text: text, full: true) { EmptyView() }
+                    BodyTextPreview(text: text, title: "Message")
                 case .binary(_, let hex)?:
                     Text(hex).font(.caption2.monospaced()).textSelection(.enabled)
                 case .image(let data)?:
@@ -669,36 +723,7 @@ private struct MessageDetailView: View {
     }
 }
 
-/// Monospaced text: a start of it, or as much as a screen can carry.
-private struct MonoText<Destination: View>: View {
-    let text: String
-    let full: Bool
-    @ViewBuilder let destination: () -> Destination
-    @State private var copied = 0
-
-    private static var previewLimit: Int { 3_000 }
-    private static var fullLimit: Int { 400_000 }
-
-    var body: some View {
-        let limit = full ? Self.fullLimit : Self.previewLimit
-        Text(text.count > limit ? String(text.prefix(limit)) : text)
-            .font(.caption.monospaced())
-            .textSelection(.enabled)
-        if !full && text.count > limit {
-            NavigationLink("Show all", destination: destination)
-        }
-        if full && text.count > limit {
-            Text("The first \(String(localized: "\(limit) characters")) are shown.").font(.caption).foregroundStyle(.secondary)
-        }
-        Button("Copy") {
-            UIPasteboard.general.string = text
-            copied += 1
-        }
-        .sensoryFeedback(.success, trigger: copied)
-    }
-}
-
-/// The whole of one body on its own screen.
+/// The whole of a picture or of binary data on its own screen.
 private struct BodyFullView: View {
     let flow: TrafficFlow
     let index: Int
@@ -866,7 +891,7 @@ struct RepeatView: View {
                         let type = result.headers.first { $0.name.lowercased() == "content-type" }?.value
                         switch BodyPreview.of(result.body, contentType: type) {
                         case .json(let text), .text(let text):
-                            MonoText(text: text, full: true) { EmptyView() }
+                            BodyTextPreview(text: text, title: "Response body")
                         case .binary(_, let hex):
                             Text(hex).font(.caption2.monospaced()).textSelection(.enabled)
                         case .image(let data):
@@ -1134,7 +1159,8 @@ struct SavedSessionsView: View {
                                 Text("This recording").font(.caption).foregroundStyle(.green)
                             }
                         }
-                        Text("\(session.flows.count) connections").font(.caption).foregroundStyle(.secondary)
+                        Text("Requests: \(session.flows.reduce(0) { $0 + $1.exchanges.count }) · connections: \(session.flows.count)")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -1150,12 +1176,8 @@ struct SavedSessionView: View {
     let session: TrafficSession
     @Environment(CaptureShelf.self) private var captures
     @State private var exportItem: ShareItem?
-    @State private var search = ""
     var body: some View {
-        List {
-            TrafficListSections(flows: session.flows, sessionID: session.id, search: search, kind: nil)
-        }
-        .searchable(text: $search, prompt: "Host or request")
+        TrafficList(flows: session.flows, sessionID: session.id)
         .navigationTitle("Session")
         .navigationBarTitleDisplayMode(.inline)
         .summaryButton(isShown: !session.flows.isEmpty,

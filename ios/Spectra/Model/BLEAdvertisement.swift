@@ -54,7 +54,7 @@ nonisolated enum AppleAdvertisement: Equatable, Sendable {
         case .airPrint: String(localized: "AirPrint")
         case .iBeacon: String(localized: "iBeacon")
         case .airDrop: String(localized: "AirDrop")
-        case .homeKit(let category): category ?? String(localized: "HomeKit")
+        case .homeKit(let category): category.map(linkText) ?? String(localized: "HomeKit")
         case .proximity(let pairing): pairing.modelName ?? String(localized: "Apple audio")
         case .heySiri(let device): device ?? String(localized: "Hey Siri")
         case .airPlayTarget, .airPlaySource: String(localized: "AirPlay")
@@ -106,7 +106,7 @@ nonisolated enum AppleAdvertisement: Equatable, Sendable {
         case .airPrint: String(localized: "AirPrint")
         case .iBeacon: String(localized: "iBeacon")
         case .airDrop: String(localized: "AirDrop")
-        case .homeKit(let category): category ?? String(localized: "HomeKit")
+        case .homeKit(let category): category.map(linkText) ?? String(localized: "HomeKit")
         case .proximity(let pairing): pairing.modelLabel
         case .heySiri(let device): device ?? String(localized: "Hey Siri")
         case .airPlayTarget: String(localized: "AirPlay target")

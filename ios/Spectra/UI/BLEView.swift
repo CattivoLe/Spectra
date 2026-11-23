@@ -6,7 +6,8 @@ struct BLEView: View {
     @State private var search = ""
     @State private var showHistory = false
     @AppStorage("bleSort") private var sort: Sort = .signal
-    @AppStorage("bleScope") private var scope: Scope = .all
+    @AppStorage("bleNamedOnly") private var namedOnly = false
+    @AppStorage("bleConnectableOnly") private var connectableOnly = false
     @AppStorage("bleShowOutOfRange") private var showOutOfRange = false
     @AppStorage("autosaveHistory") private var autosave = true
     @Environment(HistoryStore.self) private var history
@@ -24,22 +25,12 @@ struct BLEView: View {
         }
     }
 
-    enum Scope: String, CaseIterable, Identifiable {
-        case all, named, connectable
-        var id: Self { self }
-
-        var label: LocalizedStringKey {
-            switch self {
-            case .all: "All devices"
-            case .named: "With a name"
-            case .connectable: "Connectable"
-            }
-        }
-    }
-
     var body: some View {
         NavigationStack {
-            BLEDeviceList(search: $search, sort: sort, scope: scope, showOutOfRange: showOutOfRange)
+            BLEDeviceList(
+                search: $search, namedOnly: $namedOnly, connectableOnly: $connectableOnly,
+                sort: sort, showOutOfRange: showOutOfRange
+            )
             .navigationTitle("Bluetooth")
             .navigationDestination(for: UUID.self) { id in
                 BLEDeviceDetailView(id: id)
@@ -66,7 +57,7 @@ struct BLEView: View {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    BLEOptionsMenu(sort: $sort, scope: $scope, showOutOfRange: $showOutOfRange)
+                    BLEOptionsMenu(sort: $sort, showOutOfRange: $showOutOfRange)
                 }
             }
         }
@@ -89,8 +80,9 @@ private struct BLEDeviceList: View {
     @Environment(BLEScanner.self) private var scanner
     @Environment(WatchList.self) private var watchList
     @Binding var search: String
+    @Binding var namedOnly: Bool
+    @Binding var connectableOnly: Bool
     var sort: BLEView.Sort
-    var scope: BLEView.Scope
     var showOutOfRange: Bool
     /// The Trackers section, folded to the tags that need a look; open, it lists every tag heard.
     @State private var trackersOpen = false
@@ -201,6 +193,15 @@ private struct BLEDeviceList: View {
                         .font(.subheadline.weight(.semibold))
                 }
             }
+            if !scanner.devices.isEmpty {
+                Section {
+                    FilterChipRow {
+                        FilterChip(title: "With a name", systemImage: "character.cursor.ibeam", isOn: namedOnly) { namedOnly.toggle() }
+                        FilterChip(title: "Connectable", systemImage: "link", isOn: connectableOnly) { connectableOnly.toggle() }
+                    }
+                }
+                .listSectionSpacing(.compact)
+            }
             if !visible.isEmpty {
                 Section {
                     ForEach(visible) { device in
@@ -209,7 +210,12 @@ private struct BLEDeviceList: View {
                         }
                     }
                 } header: {
-                    Text("\(scanner.nearbyCount) nearby")
+                    // With a filter on, the count is of what is listed.
+                    if namedOnly || connectableOnly {
+                        Text("\(visible.count) of \(scanner.nearbyCount) nearby")
+                    } else {
+                        Text("\(scanner.nearbyCount) nearby")
+                    }
                 } footer: {
                     Text("iOS hears Bluetooth Low Energy advertisements only and hides the hardware address. It also withholds Apple's own advertisement data from apps, so AirTags show up as unknown devices; iOS itself warns when an AirTag that is not yours travels with you.")
                 }
@@ -221,11 +227,18 @@ private struct BLEDeviceList: View {
             } else if visible.isEmpty, !search.isEmpty {
                 ContentUnavailableView.search(text: search)
             } else if visible.isEmpty {
-                ContentUnavailableView(
-                    "No devices",
-                    systemImage: "wave.3.right",
-                    description: Text("Nothing in this filter is nearby.")
-                )
+                ContentUnavailableView {
+                    Label("Nothing in this filter", systemImage: "line.3.horizontal.decrease.circle")
+                } description: {
+                    Text("Nothing in this filter is nearby.")
+                } actions: {
+                    if namedOnly || connectableOnly {
+                        Button("Show all") {
+                            namedOnly = false
+                            connectableOnly = false
+                        }
+                    }
+                }
             }
         }
         .searchable(text: $search, prompt: Text("Name, company or service"))
@@ -236,11 +249,7 @@ private struct BLEDeviceList: View {
     }
 
     private func matches(_ device: BLEDevice) -> Bool {
-        switch scope {
-        case .all: true
-        case .named: device.hasOwnName
-        case .connectable: device.isConnectable == true
-        }
+        (!namedOnly || device.hasOwnName) && (!connectableOnly || device.isConnectable == true)
     }
 
     @ViewBuilder private var emptyState: some View {
@@ -295,12 +304,11 @@ private struct BLEDeviceList: View {
     }
 }
 
-/// Sort, filters and scan controls. Reads only values that stay still during
+/// Sort order and scan controls; the filters are chips over the list. Reads only values that stay still during
 /// a scan, so an open menu is not rebuilt on every advertisement.
 private struct BLEOptionsMenu: View {
     @Environment(BLEScanner.self) private var scanner
     @Binding var sort: BLEView.Sort
-    @Binding var scope: BLEView.Scope
     @Binding var showOutOfRange: Bool
 
     var body: some View {
@@ -309,10 +317,6 @@ private struct BLEOptionsMenu: View {
             // not push its title sideways.
             Picker("Sort by", selection: $sort) {
                 ForEach(BLEView.Sort.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.inline)
-            Picker("Show", selection: $scope) {
-                ForEach(BLEView.Scope.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.inline)
             Toggle("Show out of range", isOn: $showOutOfRange)

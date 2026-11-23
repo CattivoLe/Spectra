@@ -79,7 +79,7 @@ final class AssistantModel {
         } catch {
             // Last resort: the database file is damaged or unreachable.
             store = (try? ChatStore()) ?? { fatalError("Could not even create a temporary store") }()
-            storageWarning = String(localized: "Could not open the saved chats: \(error.localizedDescription). New chats will not be saved.")
+            storageWarning = String(localized: "Could not open the saved summaries: \(error.localizedDescription). New ones will not be saved.")
         }
         selectedModel = UserDefaults.standard.string(forKey: Self.selectedModelKey)
 

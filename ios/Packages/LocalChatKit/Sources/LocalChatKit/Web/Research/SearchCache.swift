@@ -95,12 +95,76 @@ extension ChatStore {
         }
     }
 
-    public func searchCacheCount() async throws -> Int {
-        try await database.read { try CachedSearch.fetchCount($0) }
+    /// Every search: what went out, and what it brought back while that is still kept. Newest first.
+    public func searches(now: Date = Date()) async throws -> [PastSearch] {
+        try await database.read { db in
+            let log = try SearchLogEntry.order(Column("date").desc).limit(200).fetchAll(db)
+            let kept = try CachedSearch
+                .filter(Column("date") > now.addingTimeInterval(-SearchCache.lifetime))
+                .order(Column("date").desc)
+                .fetchAll(db)
+            return PastSearch.joined(log: log, kept: kept)
+        }
     }
 
-    public func clearSearchCache() async throws {
-        try await database.write { _ = try CachedSearch.deleteAll($0) }
+    /// Forgets one search: the record that it went out and what it found.
+    public func deleteSearch(_ search: PastSearch) async throws {
+        try await database.write { db in
+            if let id = search.logID { _ = try SearchLogEntry.deleteOne(db, key: id) }
+            if let id = search.keptID { _ = try CachedSearch.deleteOne(db, key: id) }
+        }
+    }
+
+    /// Forgets every search: the records and what they found.
+    public func clearSearches() async throws {
+        try await database.write { db in
+            _ = try SearchLogEntry.deleteAll(db)
+            _ = try CachedSearch.deleteAll(db)
+        }
         try await database.vacuum()
+    }
+}
+
+/// One search for the list of searches: that it was sent, and what came back while it is kept for reuse.
+public struct PastSearch: Identifiable, Sendable {
+    public var date: Date
+    public var provider: String
+    public var query: String
+    public var succeeded: Bool
+    /// What it found; empty once the kept copy is gone.
+    public var results: [SearchResult]
+    /// Until when a similar query is answered from the kept copy.
+    public var keptUntil: Date?
+    var logID: Int64?
+    var keptID: Int64?
+
+    public var id: String { "\(logID ?? -1)-\(keptID ?? -1)" }
+
+    /// Each kept copy belongs to the newest logged search with the same words and service. One whose log record was
+    /// deleted still gets a row: it is on the phone and is used.
+    static func joined(log: [SearchLogEntry], kept: [CachedSearch]) -> [PastSearch] {
+        var left = kept
+        var searches = log.map { entry -> PastSearch in
+            var search = PastSearch(date: entry.date, provider: entry.provider, query: entry.query, succeeded: entry.succeeded,
+                                    results: [], keptUntil: nil, logID: entry.id, keptID: nil)
+            guard entry.succeeded, let index = left.firstIndex(where: {
+                $0.provider == entry.provider && $0.terms == SearchCache.key(entry.query)
+            }) else { return search }
+            search.keep(left.remove(at: index))
+            return search
+        }
+        searches += left.map { row in
+            var search = PastSearch(date: row.date, provider: row.provider, query: row.query, succeeded: true,
+                                    results: [], keptUntil: nil, logID: nil, keptID: nil)
+            search.keep(row)
+            return search
+        }
+        return searches.sorted { $0.date > $1.date }
+    }
+
+    private mutating func keep(_ row: CachedSearch) {
+        keptID = row.id
+        keptUntil = row.date.addingTimeInterval(SearchCache.lifetime)
+        results = (try? JSONDecoder().decode(WebResearch.Gathered.self, from: row.gathered))?.results ?? []
     }
 }

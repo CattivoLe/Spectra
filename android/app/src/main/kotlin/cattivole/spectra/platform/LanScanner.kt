@@ -70,6 +70,10 @@ class LanScanner(
     /** The user's names and verdicts for hosts. */
     val labels: cattivole.spectra.core.DeviceLabels = cattivole.spectra.core.DeviceLabels(),
 ) {
+    /** What the last scan calls the device with this address. Android hides LAN addresses, so it is often null. */
+    fun nameOf(address: cattivole.spectra.core.MacAddress): String? =
+        devices.firstOrNull { it.macAddress == address }?.knownName
+
     /** What the last finished scan learned about new hosts on this network. */
     var lastVerdict: cattivole.spectra.core.KnownHosts.Verdict? = null
         private set

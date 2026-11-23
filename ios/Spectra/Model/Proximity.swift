@@ -13,7 +13,7 @@ enum Proximity {
             switch self {
             case .here: String(localized: "Right here")
             case .close: String(localized: "Very close")
-            case .near: String(localized: "Close")
+            case .near: String(localized: "Close by")
             case .far: String(localized: "Nearby")
             case .veryFar: String(localized: "Far")
             }

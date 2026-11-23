@@ -2,12 +2,24 @@ import Foundation
 
 /// Live security findings computed from the latest Wi-Fi scan: a deauth attack,
 /// a possible evil twin (one network name on several access points), or a
-/// device generating steady traffic (a camera or microphone streaming). Pure,
-/// so the rules can be checked by tests.
+/// device that keeps sending (a camera or microphone streaming). Pure, so the
+/// rules can be checked by tests.
 enum Threats {
-    /// Bytes seen for one AP during the ~3 s sniff window that suggest a
-    /// continuous stream rather than idle beacons.
-    static let streamingByteThreshold: UInt32 = 120_000
+    /// Bytes heard for one AP in a sweep that look like a stream: about 320 kbit/s over the time the sensor spends on
+    /// its channel. The bar used to be 120 000, meant for three seconds of listening; the sensor stays a quarter of a
+    /// second on a channel, so only a feed of 4 Mbit/s and more was ever noticed.
+    static let streamingByteThreshold: UInt32 = 10_000
+    /// Sweeps it has to keep up. One busy sweep is a page being opened; a camera is there in every one.
+    nonisolated static let streamingScans = 3
+    /// How many sweeps are remembered, so a feed that stops is dropped within a few of them.
+    nonisolated static let streamingScansKept = 4
+
+    // The rule for one client, used when the sensor counts by client (firmware 0.11+). Same numbers as `Stream.h`,
+    // where each is explained. Not calibrated on a real camera yet.
+    nonisolated static let clientMinBytesPerSecond = 8_000
+    nonisolated static let clientMinFrameBytes = 200
+    nonisolated static let clientUpOverDown = 2
+    nonisolated static let clientBusyPercent = 60
 
     enum Severity: Int, Comparable {
         case warning, critical
@@ -26,15 +38,20 @@ enum Threats {
         var networks: [BSSID] = []
         /// The frames behind a deauth finding.
         var deauth: DeauthEvent?
+        /// The device that keeps sending, when the sensor can tell which one it is.
+        var sender: ClientTraffic?
     }
 
     /// Networks that dropped out of range no longer count, so a finding goes
     /// away once later scans stop hearing what raised it.
-    static func assess(networks: [TrackedNetwork], deauths: [DeauthEvent]) -> [Finding] {
+    /// `lanName` gives the name a LAN scan knows a device by.
+    static func assess(networks: [TrackedNetwork], deauths: [DeauthEvent], senders: [TrackedSender] = [],
+                       lanName: (BSSID) -> String? = { _ in nil }) -> [Finding] {
         let present = networks.filter(\.isInRange)
         var findings: [Finding] = []
         findings += deauthFindings(deauths)
         findings += evilTwinFindings(present)
+        findings += senderFindings(senders, networks: networks, lanName: lanName)
         findings += streamingFindings(present)
         return findings.sorted { $0.severity > $1.severity }
     }
@@ -87,9 +104,38 @@ enum Threats {
         return findings
     }
 
+    private static func senderFindings(_ senders: [TrackedSender], networks: [TrackedNetwork], lanName: (BSSID) -> String?) -> [Finding] {
+        senders.filter(\.isSteady).map { sender in
+            let traffic = sender.traffic
+            let network = networks.first { $0.id == traffic.bssid }
+            let name = network.flatMap { $0.revealedSSID ?? $0.latest.ssid } ?? traffic.bssid.description
+            return Finding(
+                id: "sender-\(traffic.mac)",
+                kind: .streaming,
+                severity: .warning,
+                title: String(localized: "A device keeps sending data"),
+                detail: String(
+                    format: String(localized: "%@ sends about %@ through %@ without pausing — it may be a camera or a microphone."),
+                    senderName(traffic, lanName: lanName), Bitrate.text(bytesPerSecond: traffic.upBytesPerSecond), name
+                ),
+                networks: [traffic.bssid],
+                sender: traffic
+            )
+        }
+    }
+
+    /// "Front door (Hikvision, 44:19:B6:10:20:30)", with the parts that are known.
+    static func senderName(_ traffic: ClientTraffic, lanName: (BSSID) -> String?) -> String {
+        let address = traffic.mac.description
+        let named = lanName(traffic.mac)
+        guard let title = named ?? traffic.maker else { return address }
+        let rest = [named == nil || traffic.maker == named ? nil : traffic.maker, address].compactMap { $0 }
+        return "\(title) (\(rest.joined(separator: ", ")))"
+    }
+
     private static func streamingFindings(_ networks: [TrackedNetwork]) -> [Finding] {
         networks.compactMap { network in
-            guard let traffic = network.traffic, traffic.bytes >= streamingByteThreshold else { return nil }
+            guard network.movesDataSteadily else { return nil }
             let name = network.revealedSSID ?? network.latest.ssid ?? network.latest.bssid.description
             return Finding(
                 id: "stream-\(network.latest.bssid)",

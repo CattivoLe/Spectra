@@ -258,10 +258,10 @@ nonisolated enum SiteProbe {
         request.setValue("application/rdap+json", forHTTPHeaderField: "Accept")
         do {
             let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse else { return .failed("no answer") }
+            guard let http = response as? HTTPURLResponse else { return .failed(String(localized: "no answer")) }
             switch http.statusCode {
             case 200:
-                return parseRDAP(data, domain: domain).map { .found($0) } ?? .failed("unreadable answer")
+                return parseRDAP(data, domain: domain).map { .found($0) } ?? .failed(String(localized: "unreadable answer"))
             case 404:
                 return .notRegistered(domain)
             default:

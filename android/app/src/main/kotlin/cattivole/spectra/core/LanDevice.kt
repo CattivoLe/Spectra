@@ -215,6 +215,9 @@ class LanDevice(
                 ?: if (identity.operatingSystem == "Android") "Android" else ipAddress
         }
 
+    /** [displayName], unless all there is is the address. */
+    val knownName: String? get() = displayName.takeUnless { it == ipAddress }
+
     val notable: NotableDevice?
         get() = NotableDevice.classify(
             manufacturer = manufacturer,

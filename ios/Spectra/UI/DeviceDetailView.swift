@@ -15,7 +15,6 @@ struct DeviceDetailView: View {
     }
 
     @Environment(LANScanner.self) private var scanner
-    @Environment(KnownHosts.self) private var knownHosts
     @State private var editingLabel = false
     @Environment(\.openURL) private var openURL
     /// A stream address no app on this iPhone would open.
@@ -142,7 +141,7 @@ struct DeviceDetailView: View {
                     }
                     ForEach(Array(device.services.enumerated()), id: \.offset) { _, service in
                         let parts = serviceParts(service)
-                        ServiceBlock(title: Text(service.kind), lines: parts.lines, identifier: parts.identifier)
+                        ServiceBlock(title: Text(linkText(service.kind)), lines: parts.lines, identifier: parts.identifier)
                     }
                     if let windows = device.profile.windows {
                         let name = windows.computerName?.trimmingCharacters(in: .whitespaces)
@@ -237,9 +236,6 @@ struct DeviceDetailView: View {
                 InfoRow("Last seen") { Text(device.lastSeen, style: .relative) }
                 if device.isNew {
                     InfoRow("On this network") { Text("New").foregroundStyle(.purple) }
-                } else if snapshot == nil, !device.isLocalDevice, !device.isGateway,
-                          let key = scanner.networkKey, let since = knownHosts.firstSeen(device, network: key) {
-                    InfoRow("On this network") { Text("Known since \(since.formatted(date: .abbreviated, time: .omitted))") }
                 }
             }
         }
@@ -274,13 +270,13 @@ struct DeviceDetailView: View {
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
             .keyboardType(.URL)
-            Button("Open") {
+            Button("Open stream") {
                 guard let string = editableStreamURL, let url = URL(string: string) else { return }
                 openURL(url) { accepted in
                     if !accepted { unopenedStream = string }
                 }
             }
-            Button("Copy", role: .destructive) { UIPasteboard.general.string = editableStreamURL }
+            Button("Copy") { UIPasteboard.general.string = editableStreamURL }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Edit the path if the camera needs one (e.g. /cam, /live).")
@@ -315,7 +311,7 @@ struct DeviceDetailView: View {
             Image(systemName: "circle.fill")
                 .font(.system(size: 8))
                 .foregroundStyle(risk.map { $0 >= .low ? $0.color : Color.green } ?? .green)
-                .accessibilityLabel(Text(risk?.label ?? String(localized: "Open")))
+                .accessibilityLabel(Text(risk?.label ?? String(localized: "port.open", defaultValue: "Open", comment: "A port that answers")))
         }
         .contentShape(Rectangle())
     }

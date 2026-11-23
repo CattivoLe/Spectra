@@ -11,7 +11,7 @@ enum HistoryGrouping: String, CaseIterable, Identifiable {
 }
 
 /// One tab's saved sessions: only the records of `area`, each session cut down to them. Pushed from the tab's
-/// clock button; every tab has its own.
+/// clock button; every tab has its own. A session is a section that opens onto its records, with no page between.
 struct HistoryView: View {
     var area: HistoryArea
     @Environment(HistoryStore.self) private var history
@@ -19,8 +19,9 @@ struct HistoryView: View {
     @AppStorage("autosaveHistory") private var autosave = true
     @State private var confirmClear = false
     @State private var showSettings = false
-    /// Expanded group keys. Today starts open; every other group stays folded until tapped.
-    @State private var expanded: Set<String> = [Self.dateGroupID(Calendar.current.startOfDay(for: .now))]
+    /// The sessions open in the list. The newest starts open; every other stays folded until tapped.
+    @State private var expanded: Set<UUID> = []
+    @State private var openedNewest = false
     /// A session opened from the map.
     @State private var opened: UUID?
     @State private var selectedPin: HistoryPin?
@@ -44,24 +45,13 @@ struct HistoryView: View {
         return all.filter { ($0.importedFrom != nil) == imported }
     }
 
-    /// One collapsible group of sessions: a day, or a place.
-    private struct Group: Identifiable {
-        var id: String
-        var label: String
-        var entries: [HistoryEntry]
-        /// Which scan types this group holds, for the icon row on the header.
-        var symbols: [String] {
-            var seen: Set<String> = []
-            return entries.compactMap { seen.insert($0.rowSystemImage).inserted ? $0.rowSystemImage : nil }
-        }
-        var itemCount: Int { entries.reduce(0) { $0 + $1.itemCount } }
-    }
-
-    private var groups: [Group] {
-        switch grouping {
-        case .date: return byDate()
-        case .place: return byPlace()
-        }
+    /// The sessions in the order they are listed: newest first, or place by place.
+    private var ordered: [HistoryEntry] {
+        let newest = shown.sorted { $0.savedAt > $1.savedAt }
+        guard grouping == .place else { return newest }
+        var places: [String] = []
+        for entry in newest where !places.contains(entry.placeName) { places.append(entry.placeName) }
+        return places.flatMap { place in newest.filter { $0.placeName == place } }
     }
 
     /// Saved scans that carry a fix, one point per place (~55 m).
@@ -225,36 +215,32 @@ struct HistoryView: View {
 
     private var sessionList: some View {
         List {
-            ForEach(groups) { group in
-                let isExpanded = expanded.contains(group.id)
+            ForEach(ordered) { entry in
+                let isExpanded = expanded.contains(entry.id)
                 Section {
-                    if isExpanded {
-                        ForEach(group.entries) { entry in
-                            NavigationLink {
-                                HistoryDetailView(id: entry.id, area: area)
-                            } label: {
-                                EntryRow(entry: entry, showPlace: grouping == .date)
-                            }
-                            .swipeActions {
-                                Button("Delete", role: .destructive) {
-                                    history.delete(entry.id, area: area)
-                                }
-                            }
-                        }
-                    }
+                    if isExpanded { HistoryRows(entry: entry) }
                 } header: {
-                    GroupHeader(
-                        label: group.label,
-                        symbols: group.symbols,
-                        count: group.itemCount,
-                        isExpanded: isExpanded
+                    SessionHeader(
+                        entry: entry,
+                        placeFirst: grouping == .place,
+                        isExpanded: isExpanded,
+                        shareItem: $shareItem,
+                        openPlace: entry.hasFix ? { opened = entry.id } : nil,
+                        delete: { history.delete(entry.id, area: area) }
                     ) {
                         withAnimation(.easeInOut(duration: 0.2)) {
-                            if isExpanded { expanded.remove(group.id) } else { expanded.insert(group.id) }
+                            if isExpanded { expanded.remove(entry.id) } else { expanded.insert(entry.id) }
                         }
                     }
+                } footer: {
+                    if isExpanded { Text(entry.savedLine) }
                 }
             }
+        }
+        .onAppear {
+            guard !openedNewest else { return }
+            openedNewest = true
+            if let newest = ordered.first { expanded.insert(newest.id) }
         }
         .overlay {
             if shown.isEmpty {
@@ -307,49 +293,13 @@ struct HistoryView: View {
                     showUnlocated = false
                     opened = entry.id
                 } label: {
-                    EntryRow(entry: entry, showPlace: false)
+                    EntryRow(entry: entry)
                 }
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDetents([.medium, .large])
-    }
-
-    private func byDate() -> [Group] {
-        let calendar = Calendar.current
-        let buckets = Dictionary(grouping: shown) { calendar.startOfDay(for: $0.savedAt) }
-        return buckets.keys.sorted(by: >).map { day in
-            Group(
-                id: Self.dateGroupID(day),
-                label: Self.dayLabel(day),
-                entries: (buckets[day] ?? []).sorted { $0.savedAt > $1.savedAt }
-            )
-        }
-    }
-
-    private func byPlace() -> [Group] {
-        let buckets = Dictionary(grouping: shown) { entry in
-            entry.placeLabel ?? entry.placeKey ?? ""
-        }
-        return buckets
-            .map { label, entries in
-                Group(
-                    id: "place:\(label)",
-                    label: label.isEmpty ? String(localized: "No location") : label,
-                    entries: entries.sorted { $0.savedAt > $1.savedAt }
-                )
-            }
-            .sorted { ($0.entries.first?.savedAt ?? .distantPast) > ($1.entries.first?.savedAt ?? .distantPast) }
-    }
-
-    private static func dateGroupID(_ day: Date) -> String { "date:\(day.timeIntervalSince1970)" }
-
-    private static func dayLabel(_ day: Date) -> String {
-        let calendar = Calendar.current
-        if calendar.isDateInToday(day) { return String(localized: "Today") }
-        if calendar.isDateInYesterday(day) { return String(localized: "Yesterday") }
-        return day.formatted(.dateTime.weekday(.wide).month().day())
     }
 }
 
@@ -429,65 +379,103 @@ private struct HistoryMapPin: View {
     }
 }
 
-/// A collapsible section header with the group's name and the icons of the scan
-/// types inside it.
-private struct GroupHeader: View {
-    var label: String
-    var symbols: [String]
-    var count: Int
-    var isExpanded: Bool
-    var toggle: () -> Void
+extension HistoryEntry {
+    /// The place's name; empty when the session has none.
+    fileprivate var placeName: String { placeLabel ?? "" }
 
-    var body: some View {
-        Button(action: toggle) {
-            HStack(spacing: 8) {
-                Text(label)
-                HStack(spacing: 4) {
-                    ForEach(symbols, id: \.self) { symbol in
-                        Image(systemName: symbol)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-                Text("\(count)")
-                    .foregroundStyle(.secondary)
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+    fileprivate var hasFix: Bool { latitude != nil && longitude != nil }
+
+    fileprivate var hasRecords: Bool {
+        !networks.isEmpty || !probes.isEmpty || !deauths.isEmpty || !lan.isEmpty || !bluetooth.isEmpty || !connections.isEmpty
+    }
+
+    /// The phone's own scans are stored with an English name, the same in every language.
+    private var sourceName: String {
+        source == "This iPhone" ? String(localized: "This iPhone") : source
+    }
+
+    fileprivate var dayName: String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(savedAt) { return String(localized: "Today") }
+        if calendar.isDateInYesterday(savedAt) { return String(localized: "Yesterday") }
+        return savedAt.formatted(.dateTime.weekday(.wide).month().day())
+    }
+
+    fileprivate var savedLine: String {
+        "\(sourceName) · \(savedAt.formatted(date: .abbreviated, time: .shortened))"
     }
 }
 
-/// One saved session row.
-private struct EntryRow: View {
+/// A session in the list: its day and place, how many records it holds, and what can be done with it.
+private struct SessionHeader: View {
     var entry: HistoryEntry
-    var showPlace: Bool
+    var placeFirst: Bool
+    var isExpanded: Bool
+    @Binding var shareItem: ShareItem?
+    /// Shows where the session was saved, when it carries a fix.
+    var openPlace: (() -> Void)?
+    var delete: () -> Void
+    var toggle: () -> Void
+
+    private var place: String { entry.placeName.isEmpty ? String(localized: "No location") : entry.placeName }
+    private var time: String { entry.savedAt.formatted(date: .omitted, time: .shortened) }
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: entry.rowSystemImage)
-                .font(.title3)
-                .frame(width: 26)
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(entry.rowTitle) · \(entry.itemCount)")
-                    .font(.body.weight(.semibold))
-                HStack(spacing: 4) {
-                    Text(entry.savedAt, style: .relative)
-                    if showPlace, let place = entry.placeLabel {
-                        Text("· \(place)")
-                    } else {
-                        Text("· \(entry.source)")
+            Button(action: toggle) {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(placeFirst ? place : entry.dayName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text(verbatim: placeFirst ? "\(entry.dayName), \(time)" : entry.placeName.isEmpty ? time : "\(time) · \(entry.placeName)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
+                    Spacer(minLength: 8)
+                    Text("\(entry.itemCount)")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Menu {
+                if let openPlace {
+                    Button("Show where it was saved", systemImage: "map", action: openPlace)
+                }
+                HistoryExportMenu(entries: [entry], shareItem: $shareItem)
+                Divider()
+                Button("Delete", systemImage: "trash", role: .destructive, action: delete)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("More")
+        }
+        .textCase(nil)
+    }
+}
+
+/// One session of a place, as the map's sheet lists them.
+private struct EntryRow: View {
+    var entry: HistoryEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(entry.dayName) · \(entry.itemCount)")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.primary)
+            Text(entry.savedLine)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            }
         }
     }
 }
@@ -531,36 +519,15 @@ struct HistoryDetailView: View {
         List {
             if let entry {
                 locationSection(entry)
-                if entry.networks.isEmpty && entry.probes.isEmpty && entry.deauths.isEmpty
-                    && entry.lan.isEmpty && entry.bluetooth.isEmpty && entry.connections.isEmpty {
-                    Section {
-                        ForEach(entry.lines) { line in
-                            HStack(alignment: .firstTextBaseline) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(line.title)
-                                    if !line.detail.isEmpty {
-                                        Text(line.detail)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                Spacer(minLength: 8)
-                                if !line.trailing.isEmpty {
-                                    Text(line.trailing)
-                                        .font(.body.monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    } footer: {
-                        savedFooter(entry)
-                    }
-                } else {
-                    savedRecords(entry)
+                Section {
+                    HistoryRows(entry: entry)
+                } footer: {
+                    Text(entry.savedLine)
                 }
             }
         }
-        .navigationTitle(entry?.rowTitle ?? String(localized: "History"))
+        .navigationTitle(entry?.dayName ?? String(localized: "History"))
+        .navigationBarTitleDisplayMode(.inline)
         .shareSheet(item: $shareItem)
         .toolbar {
             if let entry {
@@ -604,111 +571,85 @@ struct HistoryDetailView: View {
             }
         }
     }
+}
 
-    @ViewBuilder
-    private func savedRecords(_ entry: HistoryEntry) -> some View {
-        if !entry.deauths.isEmpty {
-            Section {
-                ForEach(entry.deauths) { event in
-                    DeauthRow(event: event)
-                }
-            } header: {
-                Label("Deauth detected", systemImage: "exclamationmark.shield.fill")
-                    .foregroundStyle(.red)
-                    .font(.subheadline.weight(.semibold))
-            } footer: {
-                if entry.networks.isEmpty && entry.probes.isEmpty {
-                    savedFooter(entry)
-                }
-            }
+/// Every record of a session, as rows that open the same cards as the live lists.
+private struct HistoryRows: View {
+    var entry: HistoryEntry
+
+    var body: some View {
+        ForEach(entry.deauths) { event in
+            DeauthRow(event: event)
         }
-        if !entry.networks.isEmpty {
-            Section {
-                ForEach(entry.networks) { network in
-                    NavigationLink {
-                        NetworkDetailView(network: network)
-                    } label: {
-                        NetworkRow(network: network)
-                    }
-                }
-            } footer: {
-                if entry.probes.isEmpty && entry.lan.isEmpty && entry.bluetooth.isEmpty {
-                    savedFooter(entry)
-                }
+        ForEach(entry.networks) { network in
+            NavigationLink {
+                NetworkDetailView(network: network)
+            } label: {
+                NetworkRow(network: network)
             }
         }
         if !entry.probes.isEmpty {
-            Section {
-                ForEach(entry.probes) { probe in
-                    NavigationLink {
-                        ClientDetailView(
-                            client: WiFiClient(mac: probe.mac, apBSSID: nil, rssi: probe.rssi, isAssociated: false),
-                            savedProbe: probe
-                        )
-                    } label: {
-                        ProbeDeviceRow(device: probe)
-                    }
-                }
-            } header: {
-                Text("\(entry.probes.count) probing")
-            } footer: {
-                savedFooter(entry)
+            Text("\(entry.probes.count) probing")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        ForEach(entry.probes) { probe in
+            NavigationLink {
+                ClientDetailView(
+                    client: WiFiClient(mac: probe.mac, apBSSID: nil, rssi: probe.rssi, isAssociated: false),
+                    savedProbe: probe
+                )
+            } label: {
+                ProbeDeviceRow(device: probe)
             }
         }
-        if !entry.connections.isEmpty {
-            Section {
-                ForEach(entry.connections) { saved in
-                    NavigationLink {
-                        LinkView(saved: saved)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(statusLabel(saved.snapshot.status))
-                            Text(snapshotDetail(saved.snapshot, viaVpn: saved.viaVpn))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            } header: {
-                Text("Connection")
-            } footer: {
-                if entry.lan.isEmpty && entry.bluetooth.isEmpty && entry.networks.isEmpty && entry.probes.isEmpty && entry.deauths.isEmpty {
-                    savedFooter(entry)
+        ForEach(entry.connections) { saved in
+            NavigationLink {
+                LinkView(saved: saved)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(statusLabel(saved.snapshot.status))
+                    Text(snapshotDetail(saved.snapshot, viaVpn: saved.viaVpn))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
-        if !entry.lan.isEmpty {
-            Section {
-                ForEach(entry.lan) { saved in
-                    let device = saved.device()
-                    NavigationLink {
-                        DeviceDetailView(device: device)
-                    } label: {
-                        DeviceRow(device: device)
-                    }
-                }
-            } footer: {
-                savedFooter(entry)
+        ForEach(entry.lan) { saved in
+            let device = saved.device()
+            NavigationLink {
+                DeviceDetailView(device: device)
+            } label: {
+                DeviceRow(device: device)
             }
         }
-        if !entry.bluetooth.isEmpty {
-            Section {
-                ForEach(entry.bluetooth) { saved in
-                    let device = saved.device()
-                    NavigationLink {
-                        BLEDeviceDetailView(device: device)
-                    } label: {
-                        BLEDeviceRow(device: device, now: device.lastSeen)
-                    }
-                }
-            } footer: {
-                savedFooter(entry)
+        ForEach(entry.bluetooth) { saved in
+            let device = saved.device()
+            NavigationLink {
+                BLEDeviceDetailView(device: device)
+            } label: {
+                BLEDeviceRow(device: device, now: device.lastSeen)
             }
         }
-    }
-
-    private func savedFooter(_ entry: HistoryEntry) -> some View {
-        Text("\(entry.source) · \(entry.savedAt.formatted(date: .abbreviated, time: .shortened))")
+        // A capture from the Cardputer stores summary lines, not the records.
+        ForEach(entry.hasRecords ? [] : entry.lines) { line in
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(line.title)
+                    if !line.detail.isEmpty {
+                        Text(line.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                if !line.trailing.isEmpty {
+                    Text(line.trailing)
+                        .font(.body.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }
 

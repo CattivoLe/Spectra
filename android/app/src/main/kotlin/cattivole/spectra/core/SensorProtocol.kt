@@ -43,7 +43,7 @@ data class LoraDevice(
 }
 
 object SensorProtocol {
-    const val VERSION = 9
+    const val VERSION = 10
 
     val SERVICE: UUID = UUID.fromString("53500001-8f2d-4b6a-9c1e-737065637472")
     val INFO: UUID = UUID.fromString("53500002-8f2d-4b6a-9c1e-737065637472")
@@ -145,12 +145,15 @@ object SensorProtocol {
             val durationMs: Int,
             val stationCount: Int,
             val probeCount: Int,
+            /** How many [ClientTraffic] records came with the scan, null from a sensor that sends none. */
+            val clientCount: Int? = null,
         ) : Message()
         data class Station(val scanId: Int, val client: WifiClient) : Message()
         data class ProbeReq(val scanId: Int, val probe: ProbeRequest) : Message()
         data class Deauth(val scanId: Int, val event: DeauthEvent) : Message()
         data class SsidReveal(val scanId: Int, val bssid: MacAddress, val rssi: Int, val ssid: String) : Message()
         data class Traffic(val scanId: Int, val bssid: MacAddress, val bytes: Long, val packets: Int) : Message()
+        data class ClientSent(val scanId: Int, val traffic: ClientTraffic) : Message()
         data class VendorIe(val scanId: Int, val bssid: MacAddress, val deviceName: String, val manufacturer: String) : Message()
         data class Battery(val scanId: Int, val level: Int, val isCharging: Boolean) : Message()
         data class Lora(val scanId: Int, val device: LoraDevice) : Message()
@@ -235,6 +238,7 @@ object SensorProtocol {
         LORA_PROGRESS(0x22),
         KNOWN_WIFI(0x23),
         RAW_FRAME(0x24),
+        CLIENT_TRAFFIC(0x25),
         ;
 
         companion object {
@@ -262,7 +266,8 @@ object SensorProtocol {
                 if (data.size < 7) return null
                 val stations = if (data.size >= 9) data.u16le(7) else 0
                 val probes = if (data.size >= 11) data.u16le(9) else 0
-                Message.ScanFinished(scanId, data.u16le(3), data.u16le(5), stations, probes)
+                val clients = if (data.size >= 13) data.u16le(11) else null
+                Message.ScanFinished(scanId, data.u16le(3), data.u16le(5), stations, probes, clients)
             }
             MessageType.ACCESS_POINT -> decodeAccessPoint(data, scanId)
             MessageType.STATION -> decodeStation(data, scanId)
@@ -270,6 +275,7 @@ object SensorProtocol {
             MessageType.DEAUTH -> decodeDeauth(data, scanId)
             MessageType.SSID_REVEAL -> decodeReveal(data, scanId)
             MessageType.TRAFFIC -> decodeTraffic(data, scanId)
+            MessageType.CLIENT_TRAFFIC -> decodeClientTraffic(data, scanId)
             MessageType.VENDOR_IE -> decodeVendor(data, scanId)
             MessageType.BATTERY -> {
                 if (data.size < 5) return null
@@ -451,6 +457,22 @@ object SensorProtocol {
                 out.u16(message.durationMs)
                 out.u16(message.stationCount)
                 out.u16(message.probeCount)
+                message.clientCount?.let { out.u16(it) }
+            }
+            is Message.ClientSent -> {
+                val traffic = message.traffic
+                out.u8(MessageType.CLIENT_TRAFFIC.raw)
+                out.u16(message.scanId)
+                out.bytes(traffic.mac.bytes)
+                out.bytes(traffic.bssid.bytes)
+                out.u8(traffic.channel)
+                out.i8(traffic.rssi)
+                out.u16(traffic.listenMs)
+                out.u32(traffic.upBytes)
+                out.u16(traffic.upFrames)
+                out.u32(traffic.downBytes)
+                out.u16(traffic.downFrames)
+                out.u8(traffic.busySlots)
             }
             is Message.AccessPoint -> encodeAccessPoint(out, message)
             is Message.Station -> {
@@ -689,6 +711,25 @@ object SensorProtocol {
             MacAddress(data.copyOfRange(3, 9)),
             data.u32le(9),
             data.u16le(13),
+        )
+    }
+
+    private fun decodeClientTraffic(data: ByteArray, scanId: Int): Message.ClientSent? {
+        if (data.size < 32) return null
+        return Message.ClientSent(
+            scanId,
+            ClientTraffic(
+                mac = MacAddress(data.copyOfRange(3, 9)),
+                bssid = MacAddress(data.copyOfRange(9, 15)),
+                channel = data.u8(15),
+                rssi = data.i8(16),
+                listenMs = data.u16le(17),
+                upBytes = data.u32le(19),
+                upFrames = data.u16le(23),
+                downBytes = data.u32le(25),
+                downFrames = data.u16le(29),
+                busySlots = data.u8(31),
+            ),
         )
     }
 

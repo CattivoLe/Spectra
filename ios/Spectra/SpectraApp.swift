@@ -7,9 +7,9 @@ struct SpectraApp: App {
     @State private var store: NetworkStore
     @State private var history: HistoryStore
     @State private var link: SensorLink
-    @State private var lanScanner = LANScanner()
+    @State private var lanScanner: LANScanner
     @State private var linkProbe = LinkProbe()
-    @State private var bleScanner = BLEScanner()
+    @State private var bleScanner: BLEScanner
     @State private var location = LocationService()
     @State private var watchList = WatchList()
     @State private var joiner = WiFiJoiner()
@@ -25,6 +25,14 @@ struct SpectraApp: App {
     init() {
         let store = NetworkStore()
         let history = HistoryStore()
+        let lanScanner = LANScanner()
+        let bleScanner = BLEScanner()
+        // Here rather than in a view's task: the lists may start filling before any view appears.
+        store.earlier = { [weak history] in history?.sightings.first($0) }
+        bleScanner.earlier = { [weak history] in history?.sightings.first(bluetooth: $0) }
+        lanScanner.earlier = { [weak history] in history?.sightings.first($0, networks: $1) }
+        _lanScanner = State(initialValue: lanScanner)
+        _bleScanner = State(initialValue: bleScanner)
         _store = State(initialValue: store)
         _history = State(initialValue: history)
         _link = State(initialValue: SensorLink(store: store, history: history))

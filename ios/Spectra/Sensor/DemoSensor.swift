@@ -70,8 +70,8 @@ final class DemoSensor {
             ])
             let base: UInt32 = switch index {
             case 0: 185_000  // Home — active
-            case 7: 420_000  // Hidden cam — suspicious streaming
-            default: UInt32.random(in: 200...15_000)
+            case 7: 42_000  // Hidden cam
+            default: UInt32.random(in: 200...6_000)
             }
             let jitter = Int32.random(in: -Int32(base / 5)...Int32(base / 5))
             let bytes = UInt32(clamping: Int64(base) + Int64(jitter))
@@ -80,6 +80,11 @@ final class DemoSensor {
                 scanID: scanID, bssid: bssid, bytes: bytes, packets: packets
             )))
         }
+        // What each client sends. Two keep a feed going: the camera of the LAN demo, and one on the hidden network.
+        let senders = DemoSensor.makeSenders()
+        for sender in senders {
+            emit(SensorProtocol.encode(.clientTraffic(scanID: scanID, traffic: sender)))
+        }
         emitVendorInfo()
         demoBattery = min(100, max(8, demoBattery + Int.random(in: -1...1)))
         emit(SensorProtocol.encode(.battery(scanID: scanID, level: demoBattery, isCharging: demoBattery < 25)))
@@ -87,7 +92,8 @@ final class DemoSensor {
             scanID: scanID, count: apSent,
             duration: .milliseconds(4800),
             stationCount: staSent,
-            probeCount: probeSent
+            probeCount: probeSent,
+            clientCount: senders.count
         )))
     }
 
@@ -194,6 +200,23 @@ final class DemoSensor {
         ]
     }
 
+    private static func makeSenders() -> [ClientTraffic] {
+        let home = BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x00, 0xA0])
+        let hidden = BSSID(bytes: [0x50, 0xC7, 0xBF, 0x1E, 0x77, 0xA7])
+        func sender(_ mac: [UInt8], _ bssid: BSSID, channel: Int, rssi: Int, up: ClosedRange<UInt32>, frame: UInt32, down: UInt32, busy: Int) -> ClientTraffic {
+            let bytes = UInt32.random(in: up)
+            return ClientTraffic(mac: BSSID(bytes: mac), bssid: bssid, channel: channel, rssi: rssi + Int.random(in: -3...3),
+                                 listenMs: 1250, upBytes: bytes, upFrames: Int(bytes / frame), downBytes: down,
+                                 downFrames: Int(down / 120), busySlots: busy)
+        }
+        return [
+            sender([0x44, 0x19, 0xB6, 0x10, 0x20, 0x30], home, channel: 6, rssi: -57, up: 180_000...260_000, frame: 1300, down: 9_000, busy: 13),
+            sender([0x30, 0xAE, 0xA4, 0x66, 0x01, 0x7C], hidden, channel: 11, rssi: -71, up: 60_000...90_000, frame: 1300, down: 4_000, busy: 12),
+            // A phone loading pages: acknowledgements up, the pages down.
+            sender([0xF0, 0x18, 0x98, 0x01, 0x02, 0x03], home, channel: 6, rssi: -38, up: 6_000...12_000, frame: 100, down: 140_000, busy: 8),
+        ]
+    }
+
     private static func makeProbes() -> [ProbeRequest] {
         let mac1 = BSSID(bytes: [0x7A, 0x55, 0x66, 0x1F, 0x20, 0x21])
         let mac2 = BSSID(bytes: [0x7E, 0x77, 0x88, 0x22, 0x23, 0x24])
@@ -231,6 +254,7 @@ final class DemoSensor {
             WiFiClient(mac: BSSID(bytes: [0x3C, 0x22, 0xFB, 0x04, 0x05, 0x06]), apBSSID: homeBSSID, rssi: -51, isAssociated: true),  // Apple device
             WiFiClient(mac: BSSID(bytes: [0x48, 0xD6, 0xD5, 0x07, 0x08, 0x09]), apBSSID: homeBSSID, rssi: -62, isAssociated: true),  // Google
             WiFiClient(mac: BSSID(bytes: [0x08, 0x08, 0xC2, 0x0A, 0x0B, 0x0C]), apBSSID: homeBSSID, rssi: -55, isAssociated: true),  // Samsung
+            WiFiClient(mac: BSSID(bytes: [0x44, 0x19, 0xB6, 0x10, 0x20, 0x30]), apBSSID: homeBSSID, rssi: -57, isAssociated: true),  // Hikvision camera
             // Connected to Home-Guest
             WiFiClient(mac: BSSID(bytes: [0x7A, 0x12, 0x34, 0x0D, 0x0E, 0x0F]), apBSSID: guestBSSID, rssi: -48, isAssociated: true),  // randomised
             // Connected to Keenetic

@@ -13,6 +13,12 @@ final class WiFiInfo: NSObject, CLLocationManagerDelegate {
         var bssid: String?
         /// False on a network without a password.
         var isSecure: Bool
+
+        /// Whether to warn about it. iOS's word is not enough: a password kept for the network, or the sensor hearing
+        /// it protected, says otherwise, and a false warning is worse than none.
+        func isOpen(savedPassword: String?, heard: [AuthMode.Strength]) -> Bool {
+            !isSecure && (savedPassword ?? "").isEmpty && heard.allSatisfy { $0 == .none }
+        }
     }
 
     private(set) var current: Network?

@@ -7,6 +7,7 @@ struct NetworksView: View {
     @Environment(SensorLink.self) private var link
     @Environment(WatchList.self) private var watchList
     @Environment(WiFiJoiner.self) private var joiner
+    @Environment(LANScanner.self) private var scanner
     @Environment(\.scenePhase) private var scenePhase
     @State private var search = ""
     @State private var showChannels = false
@@ -35,7 +36,7 @@ struct NetworksView: View {
     }
 
     private var threats: [Threats.Finding] {
-        Threats.assess(networks: Array(store.networks.values), deauths: store.deauthEvents)
+        Threats.assess(networks: Array(store.networks.values), deauths: store.deauthEvents, senders: store.steadySenders, lanName: scanner.name(of:))
     }
 
     private func isCurrent(_ network: TrackedNetwork) -> Bool {
@@ -93,23 +94,18 @@ struct NetworksView: View {
     /// Open, Known and the bands, as on the Android list. A chip narrows the
     /// networks; probing devices stay only when the filter can apply to them.
     private var filterChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                FilterChip(title: "Open", systemImage: "lock.open", isOn: openOnly) { openOnly.toggle() }
-                if hasKnown {
-                    FilterChip(title: "Known", systemImage: "key", isOn: knownOnly) { knownOnly.toggle() }
-                }
-                if bands.count > 1 {
-                    ForEach(bands, id: \.self) { shown in
-                        FilterChip(title: LocalizedStringKey(shown.rawValue), systemImage: nil, isOn: band == shown) {
-                            band = band == shown ? nil : shown
-                        }
+        FilterChipRow {
+            FilterChip(title: "Open", systemImage: "lock.open", isOn: openOnly) { openOnly.toggle() }
+            if hasKnown {
+                FilterChip(title: "Known", systemImage: "key", isOn: knownOnly) { knownOnly.toggle() }
+            }
+            if bands.count > 1 {
+                ForEach(bands, id: \.self) { shown in
+                    FilterChip(title: LocalizedStringKey(shown.rawValue), systemImage: nil, isOn: band == shown) {
+                        band = band == shown ? nil : shown
                     }
                 }
-                FilterChip(title: "Out of range", systemImage: nil, isOn: showOutOfRange) { showOutOfRange.toggle() }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 2)
         }
     }
 
@@ -131,6 +127,14 @@ struct NetworksView: View {
                             if open {
                                 if let event = finding.deauth {
                                     DeauthRow(event: event)
+                                }
+                                if let sender = finding.sender {
+                                    let client = WiFiClient(mac: sender.mac, apBSSID: sender.bssid, rssi: sender.rssi, isAssociated: true)
+                                    NavigationLink {
+                                        ClientDetailView(client: client)
+                                    } label: {
+                                        ClientRow(client: client)
+                                    }
                                 }
                                 ForEach(finding.networks.compactMap { store.networks[$0] }) { network in
                                     NavigationLink(value: network.id) {
@@ -172,12 +176,8 @@ struct NetworksView: View {
                     }
                 }
                 if !store.networks.isEmpty {
-                    Section {
-                        filterChips
-                            .listRowInsets(EdgeInsets())
-                            .listRowBackground(Color.clear)
-                    }
-                    .listSectionSpacing(.compact)
+                    Section { filterChips }
+                        .listSectionSpacing(.compact)
                 }
                 if !visible.isEmpty {
                     Section {
@@ -477,6 +477,8 @@ struct ThreatRow: View {
             "Someone is sending frames that throw devices off the network. It is how handshakes are captured for password cracking and how devices are pushed toward a fake access point. The frames are listed below."
         case .evilTwin:
             "Copies of one network that differ in security or maker can be an impostor waiting for devices that join by name. Compare the access points below and avoid the one you do not recognise."
+        case .streaming where finding.sender != nil:
+            "The sensor heard this device send far more than it receives, in sweep after sweep, the way a camera or a microphone does. A backup or a live broadcast looks the same. The device and its network are below."
         case .streaming:
             "A network that moves data the whole time may be carrying a camera or microphone feed. Open it below to see which devices are connected."
         }
@@ -612,10 +614,28 @@ struct NetworkRow: View {
     }
 }
 
+/// A list's filters as one scrolling row: the first chip stands at the edge of the cards below, and the row
+/// scrolls out to the edge of the screen. Goes straight into a `Section`.
+struct FilterChipRow<Chips: View>: View {
+    @ViewBuilder var chips: Chips
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) { chips }
+                .padding(.vertical, 2)
+        }
+        .scrollClipDisabled()
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
+    }
+}
+
 /// One toggle in the row of list filters.
 struct FilterChip: View {
     var title: LocalizedStringKey
     var systemImage: String?
+    /// How many rows the chip leaves, when the list says.
+    var count: Int?
     var isOn: Bool
     var action: () -> Void
 
@@ -630,6 +650,11 @@ struct FilterChip: View {
                 }
                 Text(title)
                     .font(.subheadline.weight(.medium))
+                if let count {
+                    Text(verbatim: "\(count)")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(isOn ? AnyShapeStyle(.white.opacity(0.75)) : AnyShapeStyle(.secondary))
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
