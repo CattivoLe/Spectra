@@ -3,7 +3,7 @@ package cattivole.spectra.core
 /**
  * Live security findings from the latest Wi-Fi scan: a deauth attack, a
  * possible evil twin (one network name on several access points), or a device
- * generating steady traffic (a camera or microphone). Pure and UI-free so the
+ * that keeps sending (a camera or microphone). Pure and UI-free so the
  * rules can be checked by tests; the screen formats the text.
  */
 object Threats {
@@ -16,6 +16,13 @@ object Threats {
     const val STREAMING_SCANS = 3
     /** How many sweeps are remembered, so a feed that stops is dropped within a few of them. */
     const val STREAMING_SCANS_KEPT = 4
+
+    // The rule for one client, used when the sensor counts by client (firmware 0.11+). Same numbers as `Stream.h`,
+    // where each is explained. Not calibrated on a real camera yet.
+    const val CLIENT_MIN_BYTES_PER_SECOND = 8_000L
+    const val CLIENT_MIN_FRAME_BYTES = 200L
+    const val CLIENT_UP_OVER_DOWN = 2
+    const val CLIENT_BUSY_PERCENT = 60
 
     enum class Severity { WARNING, CRITICAL }
 
@@ -37,17 +44,28 @@ object Threats {
         val networks: List<MacAddress> = emptyList(),
         /** The frames behind a deauth finding. */
         val deauth: DeauthEvent? = null,
+        /** The device that keeps sending, when the sensor can tell which one it is; [name] is then its network. */
+        val sender: ClientTraffic? = null,
+        /** [sender] as it is called to the reader: "Front door (Hikvision, 44:19:B6:10:20:30)". */
+        val senderName: String? = null,
     )
 
     /**
      * Networks that dropped out of range no longer count, so a finding goes
      * away once later scans stop hearing what raised it.
      */
-    fun assess(networks: List<TrackedNetwork>, deauths: List<DeauthEvent>): List<Finding> {
+    fun assess(
+        networks: List<TrackedNetwork>,
+        deauths: List<DeauthEvent>,
+        senders: List<TrackedSender> = emptyList(),
+        /** The name a LAN scan knows a device by. */
+        lanName: (MacAddress) -> String? = { null },
+    ): List<Finding> {
         val present = networks.filter { it.isInRange }
         val findings = mutableListOf<Finding>()
         findings += deauthFindings(deauths)
         findings += evilTwinFindings(present)
+        findings += senderFindings(senders, networks, lanName)
         findings += streamingFindings(present)
         return findings.sortedByDescending { it.severity }
     }
@@ -93,6 +111,34 @@ object Threats {
                     networks = members.sortedByDescending { it.latest.rssi }.map { it.id },
                 )
             }
+    }
+
+    private fun senderFindings(
+        senders: List<TrackedSender>,
+        networks: List<TrackedNetwork>,
+        lanName: (MacAddress) -> String?,
+    ): List<Finding> = senders.filter { it.isSteady }.map { sender ->
+        val traffic = sender.traffic
+        val network = networks.firstOrNull { it.id == traffic.bssid }
+        Finding(
+            id = "sender-${traffic.mac.text}",
+            kind = Kind.STREAMING,
+            severity = Severity.WARNING,
+            name = network?.revealedSsid ?: network?.latest?.ssid ?: traffic.bssid.text,
+            networks = listOf(traffic.bssid),
+            sender = traffic,
+            senderName = senderName(traffic, lanName),
+        )
+    }
+
+    /** "Front door (Hikvision, 44:19:B6:10:20:30)", with the parts that are known. */
+    fun senderName(traffic: ClientTraffic, lanName: (MacAddress) -> String?): String {
+        val address = traffic.mac.text
+        val maker = traffic.mac.vendor()
+        val named = lanName(traffic.mac)
+        val title = named ?: maker ?: return address
+        val rest = listOfNotNull(maker.takeIf { named != null && it != named }, address)
+        return "$title (${rest.joinToString(", ")})"
     }
 
     private fun streamingFindings(networks: List<TrackedNetwork>): List<Finding> =

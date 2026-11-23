@@ -34,6 +34,7 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf) {
 
     fun snapshot(now: Long = System.currentTimeMillis()): AssistantSnapshot {
         val networks = model.store.networks().values.toList()
+        val senders = model.store.steadySenders
         val wifi = networks.map { network ->
             val reading = network.latest
             val name = network.revealedSsid ?: reading.ssid
@@ -49,16 +50,18 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf) {
                 isHidden = name.isNullOrEmpty(),
                 inRange = network.isInRange,
                 clients = network.clients.size,
-                streaming = network.movesDataSteadily,
+                streaming = network.movesDataSteadily || senders.any { it.traffic.bssid == network.id },
             )
         }
-        val findings = Threats.assess(networks, model.store.deauthEvents).map { finding ->
+        val findings = Threats.assess(networks, model.store.deauthEvents, senders, model.lan::nameOf).map { finding ->
             val (title, detail) = when (finding.kind) {
                 Threats.Kind.DEAUTH_ATTACK -> "Deauthentication attack" to
                     "${finding.frames} deauth frames on channel ${finding.channel}${if (finding.broadcast) " sent to everyone" else ""}${finding.name?.let { " against \"$it\"" } ?: ""}"
                 Threats.Kind.EVIL_TWIN -> "Possible evil twin" to
                     "\"${finding.ssid ?: "?"}\" is broadcast by ${finding.apCount} access points${if (finding.differByAuth) " with different security" else ""}"
-                Threats.Kind.STREAMING -> "Steady data stream" to
+                Threats.Kind.STREAMING -> if (finding.sender != null) "A device keeps sending data" to
+                    "${finding.senderName} sends data the whole time through \"${finding.name}\", as a camera or microphone would"
+                else "Steady data stream" to
                     "\"${finding.name ?: finding.ssid ?: "a network"}\" moves data the whole time, as a camera or microphone feed would"
             }
             AssistantSnapshot.Finding(

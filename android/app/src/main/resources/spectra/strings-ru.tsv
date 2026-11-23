@@ -724,6 +724,11 @@ Hides the details	Скрывает подробности
 Shows the details	Показывает подробности
 Someone is sending frames that throw devices off the network. It is how handshakes are captured for password cracking and how devices are pushed toward a fake access point. The frames are listed below.	Кто-то рассылает кадры, которые выбрасывают устройства из сети. Так перехватывают рукопожатия для подбора пароля и подталкивают устройства к поддельной точке доступа. Кадры перечислены ниже.
 Copies of one network that differ in security or maker can be an impostor waiting for devices that join by name. Compare the access points below and avoid the one you do not recognise.	Копии одной сети с разной защитой или производителем могут оказаться подделкой, которая ждёт устройства, подключающиеся по имени. Сравните точки доступа ниже и не подключайтесь к незнакомой.
+Sends	Отдаёт
+Receives	Получает
+A device keeps sending data	Устройство постоянно передаёт данные
+%s sends about %s through %s without pausing — it may be a camera or a microphone.	%s без пауз отправляет около %s через %s — возможно, это камера или микрофон.
+The sensor heard this device send far more than it receives, in sweep after sweep, the way a camera or a microphone does. A backup or a live broadcast looks the same. The device and its network are below.	Сенсор проход за проходом слышит, что устройство отдаёт намного больше, чем получает: так работают камеры и микрофоны. Резервное копирование и прямой эфир выглядят так же. Устройство и его сеть — ниже.
 A network that moves data the whole time may be carrying a camera or microphone feed. Open it below to see which devices are connected.	Сеть, по которой постоянно идут данные, может передавать поток с камеры или микрофона. Откройте её ниже, чтобы увидеть подключённые устройства.
 Check through VPN	Проверять через VPN
 Speed, external address and countries are measured through the VPN tunnel.	Скорость, внешний адрес и страны измеряются через туннель VPN.

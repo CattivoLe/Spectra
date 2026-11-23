@@ -349,8 +349,16 @@ class TrackedNetwork(
     /** Data in nearly every recent sweep, as a camera's or microphone's feed would leave. */
     val movesDataSteadily: Boolean get() = steadyScans >= Threats.STREAMING_SCANS
 
-    fun noteTraffic(snapshot: TrafficSnapshot?) {
+    /**
+     * [judged] is false when the sensor says what each client sends: then the clients are judged, and a busy network
+     * alone (someone watching a film) says nothing.
+     */
+    fun noteTraffic(snapshot: TrafficSnapshot?, judged: Boolean = true) {
         traffic = snapshot
+        if (!judged) {
+            steadyScans = 0
+            return
+        }
         val busy = (snapshot?.bytes ?: 0L) >= Threats.STREAMING_BYTE_THRESHOLD
         steadyScans = (steadyScans + if (busy) 1 else -1).coerceIn(0, Threats.STREAMING_SCANS_KEPT)
     }
