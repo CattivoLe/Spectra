@@ -155,10 +155,7 @@ class NetworkStore {
             aggregateProbes()
             deauthEvents = pendingDeauths.sortedByDescending { it.count }
             pendingDeauths.clear()
-            for ((bssid, snapshot) in pendingTraffic) sensor[bssid]?.traffic = snapshot
-            for (id in sensor.keys) {
-                if (id !in pendingTraffic) sensor[id]?.traffic = null
-            }
+            for ((id, network) in sensor) network.noteTraffic(pendingTraffic[id])
             pendingTraffic.clear()
         }
         currentScanId = null

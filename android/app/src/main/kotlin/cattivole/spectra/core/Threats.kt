@@ -7,8 +7,15 @@ package cattivole.spectra.core
  * rules can be checked by tests; the screen formats the text.
  */
 object Threats {
-    /** Bytes for one AP during the ~3 s sniff window that look like a stream. */
-    const val STREAMING_BYTE_THRESHOLD = 120_000L
+    /**
+     * Bytes heard for one AP in a sweep that look like a stream: about 320 kbit/s over the quarter of a second they
+     * stand for. The bar used to be 120 000, meant for three seconds of listening.
+     */
+    const val STREAMING_BYTE_THRESHOLD = 10_000L
+    /** Sweeps it has to keep up. One busy sweep is a page being opened; a camera is there in every one. */
+    const val STREAMING_SCANS = 3
+    /** How many sweeps are remembered, so a feed that stops is dropped within a few of them. */
+    const val STREAMING_SCANS_KEPT = 4
 
     enum class Severity { WARNING, CRITICAL }
 
@@ -90,8 +97,7 @@ object Threats {
 
     private fun streamingFindings(networks: List<TrackedNetwork>): List<Finding> =
         networks.mapNotNull { net ->
-            val traffic = net.traffic ?: return@mapNotNull null
-            if (traffic.bytes < STREAMING_BYTE_THRESHOLD) return@mapNotNull null
+            if (!net.movesDataSteadily) return@mapNotNull null
             Finding(
                 id = "stream-${net.latest.bssid.text}",
                 kind = Kind.STREAMING,

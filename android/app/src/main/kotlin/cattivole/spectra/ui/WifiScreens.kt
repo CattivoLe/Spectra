@@ -935,7 +935,7 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
                 rows = buildList {
                     add { InfoRow(tr("Volume"), byteSize(traffic.bytes)) }
                     add { InfoRow(tr("Packets"), "${traffic.packets}") }
-                    if (!snapshot) model.store.lastScanDurationMs?.let { bitrate(traffic.bytes, it) }?.let { add { InfoRow(tr("Est. bitrate"), it) } }
+                    bitrate(traffic.bytes, cattivole.spectra.core.TrafficSnapshot.WINDOW_MS)?.let { add { InfoRow(tr("Est. bitrate"), it) } }
                 },
             )
         }
