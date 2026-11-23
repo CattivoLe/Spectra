@@ -29,7 +29,9 @@ class ThreatsTest {
         return TrackedNetwork(
             reading, 0, 0, mutableListOf(),
             source = RadioSource.SENSOR,
-        ).apply { bytes?.let { heard -> repeat(Threats.STREAMING_SCANS) { noteTraffic(TrafficSnapshot(heard, 10)) } } }
+        ).apply {
+            bytes?.let { heard -> repeat(Threats.STREAMING_SCANS) { noteTraffic(TrafficSnapshot(heard, 10)) } }
+        }
     }
 
     @Test
@@ -83,6 +85,26 @@ class ThreatsTest {
         assertEquals(Threats.Severity.CRITICAL, findings.first().severity)
     }
 
+    /** A camera at about a megabit: 31 KB in a quarter of a second. */
+    @Test
+    fun aCameraIsFlaggedOnceItKeepsGoing() {
+        val camera = net(byteArrayOf(2, 0, 0, 0, 0, 2), "Camera", AuthMode.WPA2_PSK)
+        val feed = TrafficSnapshot(31_000, 40)
+        fun flagged() = Threats.assess(listOf(camera), emptyList()).isNotEmpty()
+        repeat(Threats.STREAMING_SCANS - 1) {
+            camera.noteTraffic(feed)
+            assertFalse(flagged())
+        }
+        camera.noteTraffic(feed)
+        assertTrue(flagged())
+        // One sweep that missed it changes nothing; a feed that stopped goes away.
+        camera.noteTraffic(feed)
+        camera.noteTraffic(null)
+        assertTrue(flagged())
+        camera.noteTraffic(null)
+        assertFalse(flagged())
+    }
+
     @Test
     fun heavyTrafficIsFlagged() {
         val networks = listOf(
@@ -95,25 +117,6 @@ class ThreatsTest {
     }
 
     private fun flagged(network: TrackedNetwork) = Threats.assess(listOf(network), emptyList()).any { it.kind == Threats.Kind.STREAMING }
-
-    /** A camera at about a megabit: 31 KB in the quarter of a second the sensor spends on its channel. */
-    @Test
-    fun aCameraIsFlaggedOnceItKeepsGoing() {
-        val camera = net(byteArrayOf(2, 0, 0, 0, 0, 2), "Camera", AuthMode.WPA2_PSK)
-        val feed = TrafficSnapshot(31_000, 40)
-        repeat(Threats.STREAMING_SCANS - 1) {
-            camera.noteTraffic(feed)
-            assertFalse(flagged(camera))
-        }
-        camera.noteTraffic(feed)
-        assertTrue(flagged(camera))
-        // One sweep that missed it changes nothing; a feed that stopped goes away.
-        camera.noteTraffic(feed)
-        camera.noteTraffic(null)
-        assertTrue(flagged(camera))
-        camera.noteTraffic(null)
-        assertFalse(flagged(camera))
-    }
 
     @Test
     fun aSingleBusySweepIsNotAStream() {

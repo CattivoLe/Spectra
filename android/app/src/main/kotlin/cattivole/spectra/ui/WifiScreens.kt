@@ -177,7 +177,7 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
     }.sortedForWifi(sort)
     val probes = store.probingDevices.filter { it.passesWifiFilter(openOnly, band, needle, filterKnown) }
     val bands = all.map { it.latest.band }.toSet()
-    val threats = Threats.assess(all.toList(), store.deauthEvents)
+    val threats = Threats.assess(all.toList(), store.deauthEvents, store.steadySenders, model.lan::nameOf)
     val watching = WatchList.presentNetworks(model.watchedIds, all)
     val refreshing = store.isScanning || model.phone.status == PhoneWifiScanner.Status.SCANNING
     SpectraScreen(
@@ -304,12 +304,19 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
                 })
                 if (open) {
                     Text(
-                        threatExplanation(finding.kind),
+                        threatExplanation(finding),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(start = 70.dp, end = 16.dp, bottom = 8.dp),
                     )
                     finding.deauth?.let { DeauthRow(it) }
+                    finding.sender?.let { sender ->
+                        ClientRow(
+                            WifiClient(sender.mac, sender.bssid, sender.rssi, isAssociated = true),
+                            lanHost(model, sender.mac),
+                            onClick = { nav.client(sender.mac) },
+                        )
+                    }
                     for (id in finding.networks) {
                         val network = store.network(id) ?: continue
                         NetworkRow(
@@ -581,13 +588,16 @@ fun NetworkRow(
     }
 }
 
-internal fun threatExplanation(kind: Threats.Kind): String = when (kind) {
+internal fun threatExplanation(finding: Threats.Finding): String = when (finding.kind) {
     Threats.Kind.DEAUTH_ATTACK ->
         tr("Someone is sending frames that throw devices off the network. It is how handshakes are captured for password cracking and how devices are pushed toward a fake access point. The frames are listed below.")
     Threats.Kind.EVIL_TWIN ->
         tr("Copies of one network that differ in security or maker can be an impostor waiting for devices that join by name. Compare the access points below and avoid the one you do not recognise.")
-    Threats.Kind.STREAMING ->
+    Threats.Kind.STREAMING -> if (finding.sender != null) {
+        tr("The sensor heard this device send far more than it receives, in sweep after sweep, the way a camera or a microphone does. A backup or a live broadcast looks the same. The device and its network are below.")
+    } else {
         tr("A network that moves data the whole time may be carrying a camera or microphone feed. Open it below to see which devices are connected.")
+    }
 }
 
 @Composable
@@ -601,7 +611,7 @@ fun ThreatRow(finding: Threats.Finding, expanded: Boolean = false, onClick: (() 
     val title = when (finding.kind) {
         Threats.Kind.DEAUTH_ATTACK -> if (finding.broadcast) tr("Deauth attack") else tr("Deauth frames")
         Threats.Kind.EVIL_TWIN -> tr("Possible evil twin")
-        Threats.Kind.STREAMING -> tr("Steady traffic")
+        Threats.Kind.STREAMING -> if (finding.sender != null) tr("A device keeps sending data") else tr("Steady traffic")
     }
     val detail = when (finding.kind) {
         Threats.Kind.DEAUTH_ATTACK ->
@@ -612,8 +622,12 @@ fun ThreatRow(finding: Threats.Finding, expanded: Boolean = false, onClick: (() 
             } else {
                 tr("“%s” is on %d access points with different makers.", finding.ssid ?: "", finding.apCount)
             }
-        Threats.Kind.STREAMING ->
-            tr("%s is moving data continuously — a camera or microphone may be streaming.", finding.name ?: "")
+        Threats.Kind.STREAMING -> finding.sender?.let { sender ->
+            tr(
+                "%s sends about %s through %s without pausing — it may be a camera or a microphone.",
+                finding.senderName, bitrate(sender.upBytes, sender.listenMs), finding.name,
+            )
+        } ?: tr("%s is moving data continuously — a camera or microphone may be streaming.", finding.name ?: "")
     }
     ListRow(
         title = title,
@@ -1168,6 +1182,7 @@ fun ClientDetail(model: SpectraModel, nav: Navigator, mac: MacAddress?, entryId:
         networks.firstNotNullOfOrNull { network -> network.clients.firstOrNull { it.mac == target } }
             ?: (if (entryId == null) model.store.clients.firstOrNull { it.mac == target } else null)
             ?: probe?.let { WifiClient(it.mac, null, it.rssi, false) }
+            ?: (if (entryId == null) model.store.senders[target]?.traffic?.let { WifiClient(it.mac, it.bssid, it.rssi, true) } else null)
     }
     if (client == null) {
         SpectraScreen(tr("Device"), onBack = nav::back, overlay = {
@@ -1207,6 +1222,12 @@ fun ClientDetail(model: SpectraModel, nav: Navigator, mac: MacAddress?, entryId:
                     add { InfoRow(tr("Address type"), tr("Randomised")) }
                 } else {
                     client.manufacturer?.let { add { InfoRow(tr("Maker"), it) } }
+                }
+                if (entryId == null) {
+                    model.store.clientTraffic.filter { it.mac == client.mac }.maxByOrNull { it.upBytes }?.let { sent ->
+                        add { InfoRow(tr("Sends"), bitrate(sent.upBytes, sent.listenMs) ?: "") }
+                        add { InfoRow(tr("Receives"), bitrate(sent.downBytes, sent.listenMs) ?: "") }
+                    }
                 }
                 add { InfoRow(tr("Associated"), if (client.isAssociated) tr("Yes") else tr("Probe only")) }
                 if (ap != null) {

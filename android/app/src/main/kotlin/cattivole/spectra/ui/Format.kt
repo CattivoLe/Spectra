@@ -78,6 +78,9 @@ fun byteSize(bytes: Long): String = when {
 }
 
 /** Bits per second over a capture window, in the reader's units. */
+/** Null when nothing was listened to. */
+fun bitrate(bytes: Long, durationMs: Int): String? = if (durationMs <= 0) null else bitrate(bytes * 8.0 / (durationMs / 1000.0))
+
 fun bitrate(bits: Double): String = when {
     bits >= 1_000_000 -> tr("%.1f Mbit/s", bits / 1_000_000)
     bits >= 1_000 -> tr("%.0f kbit/s", bits / 1_000)

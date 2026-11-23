@@ -27,6 +27,18 @@ class NetworkStore {
     var deauthEvents: List<DeauthEvent> = emptyList()
         private set
 
+    /** What each client sent in the latest scan. Empty with a sensor that does not count by client. */
+    var clientTraffic: List<ClientTraffic> = emptyList()
+        private set
+
+    /** Clients that sent like a camera or a microphone in recent scans, steady or not yet. */
+    var senders: Map<MacAddress, TrackedSender> = emptyMap()
+        private set
+
+    /** Those that kept it up, busiest first. */
+    val steadySenders: List<TrackedSender>
+        get() = senders.values.filter { it.isSteady }.sortedByDescending { it.traffic.upBytesPerSecond }
+
     val probingClients: List<WifiClient> get() = clients.filter { !it.isAssociated }
     val deauthAlert: Boolean get() = deauthEvents.any { it.severity >= DeauthEvent.Severity.WARNING }
 
@@ -36,6 +48,7 @@ class NetworkStore {
     private val pendingProbes = mutableListOf<ProbeRequest>()
     private val pendingDeauths = mutableListOf<DeauthEvent>()
     private val pendingTraffic = linkedMapOf<MacAddress, TrafficSnapshot>()
+    private val pendingClientTraffic = mutableListOf<ClientTraffic>()
 
     private val listeners = mutableListOf<() -> Unit>()
 
@@ -88,6 +101,7 @@ class NetworkStore {
                 pendingProbes.clear()
                 pendingDeauths.clear()
                 pendingTraffic.clear()
+                pendingClientTraffic.clear()
                 isScanning = true
             }
             is SensorProtocol.Message.AccessPoint -> record(sensor, message.reading, at, RadioSource.SENSOR)
@@ -103,6 +117,7 @@ class NetworkStore {
             is SensorProtocol.Message.Traffic -> {
                 pendingTraffic[message.bssid] = TrafficSnapshot(message.bytes, message.packets)
             }
+            is SensorProtocol.Message.ClientSent -> pendingClientTraffic.add(message.traffic)
             is SensorProtocol.Message.Battery, is SensorProtocol.Message.Saved,
             is SensorProtocol.Message.Lora, is SensorProtocol.Message.LoraScan,
             is SensorProtocol.Message.LoraProgress,
@@ -145,6 +160,8 @@ class NetworkStore {
         clients = emptyList()
         probingDevices = emptyList()
         deauthEvents = emptyList()
+        clientTraffic = emptyList()
+        senders = emptyMap()
         lastScanFinished = null
         lastScanDurationMs = null
         scanCount = 0
@@ -167,8 +184,11 @@ class NetworkStore {
             aggregateProbes()
             deauthEvents = pendingDeauths.sortedByDescending { it.count }
             pendingDeauths.clear()
-            for ((id, network) in sensor) network.noteTraffic(pendingTraffic[id])
+            for ((id, network) in sensor) network.noteTraffic(pendingTraffic[id], judged = message.clientCount == null)
             pendingTraffic.clear()
+            clientTraffic = pendingClientTraffic.toList()
+            senders = if (message.clientCount == null) emptyMap() else TrackedSender.next(senders, clientTraffic)
+            pendingClientTraffic.clear()
         }
         currentScanId = null
         isScanning = false

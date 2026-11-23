@@ -309,11 +309,11 @@ data class DeauthEvent(
 data class VendorDeviceInfo(val deviceName: String, val manufacturer: String)
 
 data class TrafficSnapshot(val bytes: Long, val packets: Int) {
-    val estimatedBitsPerSecond: Double get() = bytes * 8 / SECONDS_PER_CHANNEL
+    val estimatedBitsPerSecond: Double get() = bytes * 8 / (WINDOW_MS / 1000.0)
 
     companion object {
-        /** How long a sweep listens on one channel (`kSniffMsPerChannel` in the firmware): the time these bytes took. */
-        const val SECONDS_PER_CHANNEL = 0.25
+        /** The time these bytes stand for: what the sensor listens on one channel, or is scaled back to. */
+        const val WINDOW_MS = 250
     }
 }
 
@@ -331,17 +331,24 @@ class TrackedNetwork(
     /** Goes up with each sweep that hears a stream's worth of data, down with each that does not. */
     var steadyScans: Int = 0,
 ) {
-    data class Sample(val date: Long, val rssi: Int)
-
     /** Data in nearly every recent sweep, as a camera's or microphone's feed would leave. */
     val movesDataSteadily: Boolean get() = steadyScans >= Threats.STREAMING_SCANS
 
-    /** What the sweep that just ended heard of this network's data; null when nothing. */
-    fun noteTraffic(snapshot: TrafficSnapshot?) {
+    /**
+     * [judged] is false when the sensor says what each client sends: then the clients are judged, and a busy network
+     * alone (someone watching a film) says nothing.
+     */
+    fun noteTraffic(snapshot: TrafficSnapshot?, judged: Boolean = true) {
         traffic = snapshot
+        if (!judged) {
+            steadyScans = 0
+            return
+        }
         val busy = (snapshot?.bytes ?: 0L) >= Threats.STREAMING_BYTE_THRESHOLD
         steadyScans = (steadyScans + if (busy) 1 else -1).coerceIn(0, Threats.STREAMING_SCANS_KEPT)
     }
+
+    data class Sample(val date: Long, val rssi: Int)
 
     val id: MacAddress get() = latest.bssid
     val wasInLastScan: Boolean get() = missedScans == 0

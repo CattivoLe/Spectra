@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-inline constexpr uint8_t kProtocolVersion = 9;
+inline constexpr uint8_t kProtocolVersion = 10;
 
 // All UUIDs share one base; only the first group differs.
 inline constexpr char kServiceUuid[] = "53500001-8F2D-4B6A-9C1E-737065637472";
@@ -77,6 +77,9 @@ inline constexpr uint8_t kMsgKnownWifi = 0x23;
 // One captured raw Wi-Fi frame, possibly split across several notifications
 // to fit the ATT MTU (v8).
 inline constexpr uint8_t kMsgRawFrame = 0x24;
+// What one client sent and received while the sensor was on its channel, and
+// for how long it listened (v10). See Stream.h.
+inline constexpr uint8_t kMsgClientTraffic = 0x25;
 inline constexpr uint8_t kMsgSavedLora = 0x20;
 inline constexpr uint8_t kMsgGps = 0x21;
 inline constexpr uint8_t kMsgUpdate = 0x30;

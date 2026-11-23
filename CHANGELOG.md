@@ -41,6 +41,18 @@ iPhone app, brought level with Android 1.1.0 (its version is now 1.1.0 too).
 - Bluetooth filters are chips on the screen; the search log and the saved
   searches are one list; texts and translations were checked throughout.
 
+Sensor firmware 0.11.0 (protocol 10), with both apps:
+
+- A stream is traced to the device that sends it. The sensor counts what each
+  client sends and receives, says for how long it listened, and stays longer on
+  channels with access points. A device that keeps sending like a camera or a
+  microphone for three sweeps is named with its maker, address and LAN name.
+  With an older sensor the network is judged, as before.
+- The sensor's own alert uses the same rule and sounds once per device; its old
+  bar was out of reach. The limits are not calibrated on a real camera yet.
+- Android: the network rule is the iPhone's (about 320 kbit/s kept up for three
+  sweeps), and so is the estimated bitrate.
+
 Android app.
 
 - Assistant: the old chats are gone. The assistant has worked through summary
@@ -70,9 +82,6 @@ Android app.
   shown once it is there. "Out of range" moved from the chips to the menu. No
   "Open Wi‑Fi" warning when a password is saved for the network or another
   reading of it is protected.
-- A camera's steady stream is noticed at about 320 kbit/s kept up for three
-  sweeps; before, only a feed of 4 Mbit/s was. The estimated bitrate is counted
-  over the time the sensor listens on the channel.
 - Bluetooth filters are chips on the screen, sorting is in the menu; the search
   log and the saved searches are one list with what each search found; texts
   and translations were checked throughout.

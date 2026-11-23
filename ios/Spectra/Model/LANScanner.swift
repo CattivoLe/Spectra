@@ -656,6 +656,13 @@ final class LANScanner {
 
     var gateway: LANDevice? { devices.values.first { $0.isGateway } }
 
+    /// What the last scan calls the device with this address. iOS rarely shows LAN addresses to apps, so it is often nil.
+    func name(of address: BSSID) -> String? {
+        guard let device = devices.values.first(where: { $0.macAddress?.bytes == address.bytes }) else { return nil }
+        // Without a name of its own a host is called by its IP, which says less than the maker does.
+        return device.displayName == device.ipAddress ? nil : device.displayName
+    }
+
     var isScanning: Bool {
         if case .scanning = state { return true }
         return false
