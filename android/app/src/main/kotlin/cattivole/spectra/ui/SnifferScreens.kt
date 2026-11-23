@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.OutlinedTextField
@@ -182,10 +183,14 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
         val exchange = hit.index?.let { hit.flow.exchanges.getOrNull(it) }
         if (trafficKey(scope, hit) == focus) return@filter true
         if (method != null && !method.equals(exchange?.method, ignoreCase = true)) return@filter false
+        // DNS lookups outnumber everything else and say little: listed only when the filter asks for them.
+        if (kind == null && hit.flow.kind() == TrafficKind.DNS) return@filter false
         if (kind != null && hit.flow.kind() != kind) return@filter false
         hit.matches(needle)
     }.sortedWith(
         compareByDescending<TrafficHit> { trafficKey(scope, it) == focus }
+            // Requests that were read come before connections nothing could be read from.
+            .thenByDescending { it.index != null }
             .thenBy { it.flow.closed }
             .thenByDescending { it.flow.lastAt },
     )
@@ -433,6 +438,8 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
                         }
                     }
                     traffic.certificateFingerprint()?.let { digest ->
+                        if (traffic.decryptTls) add { CertificateState(traffic, digest) }
+                        add { InstallCertificateRow(traffic) }
                         add { InfoRow(tr("Fingerprint"), digest, mono = true, copyable = true) }
                     }
                 },
@@ -805,6 +812,51 @@ private fun FlowRow(
             dimmed = flow.closed,
             onClick = onClick,
             onLongClick = open,
+        )
+    }
+}
+
+/** Whether this phone has the certificate installed at all: read from the system store while the screen is open. */
+@Composable
+private fun CertificateState(traffic: TrafficSniffer, fingerprint: String) {
+    val installed by androidx.compose.runtime.produceState<Boolean?>(null, fingerprint) {
+        while (true) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { traffic.certificateInstalled() }
+            kotlinx.coroutines.delay(2_000)
+        }
+    }
+    when (installed) {
+        true -> NoteRow(tr("The certificate is installed. Apps that trust user certificates can be read; most others refuse it."), warning = false)
+        false -> NoteRow(tr("The certificate is not installed on this phone yet: nothing can be decrypted."), warning = true)
+        null -> Unit
+    }
+}
+
+/** Saves the certificate to Downloads and says where in Settings to install it. */
+@Composable
+private fun InstallCertificateRow(traffic: TrafficSniffer) {
+    val context = LocalContext.current
+    val notify = LocalNotify.current
+    val scope = rememberCoroutineScope()
+    var steps by rememberSaveable { mutableStateOf(false) }
+    ActionRow(tr("Install certificate"), Icons.Rounded.Download, onClick = {
+        scope.launch {
+            val saved = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { traffic.saveCertificate() }
+            if (saved) steps = true else notify(tr("The certificate could not be saved."))
+        }
+    })
+    if (steps) {
+        AlertDialog(
+            onDismissRequest = { steps = false },
+            title = { Text(tr("Install the certificate in Settings")) },
+            text = { Text(tr("Android lets no app install a CA certificate, so spectra-ca.crt was saved to Downloads.\n\n1. In Settings search for “CA certificate”. On Samsung: Security and privacy → More security settings → Install from phone storage → CA certificate.\n2. Choose “Install anyway” and pick spectra-ca.crt in Downloads.\n3. Restart the app you want to read.")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    steps = false
+                    runCatching { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)) }
+                }) { Text(tr("Open Settings")) }
+            },
+            dismissButton = { TextButton(onClick = { steps = false }) { Text(tr("Done")) } },
         )
     }
 }

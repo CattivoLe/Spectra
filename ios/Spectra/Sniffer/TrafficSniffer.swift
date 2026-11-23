@@ -39,6 +39,8 @@ final class TrafficSniffer {
     private(set) var startedAt: Int64 = 0
     private(set) var error: String?
     private(set) var caFingerprint: String?
+    /// Whether the phone trusts the certificate, asked of the system itself; nil until checked.
+    private(set) var caTrusted: Bool?
     var decryptTLS: Bool {
         didSet { defaults?.set(decryptTLS, forKey: Self.tlsKey) }
     }
@@ -190,9 +192,11 @@ final class TrafficSniffer {
     }
 
     private func readLiveSnapshot() {
-        if defaults?.string(forKey: Self.tlsNoticeKey) != nil {
+        if let notice = defaults?.string(forKey: Self.tlsNoticeKey) {
             defaults?.removeObject(forKey: Self.tlsNoticeKey)
-            error = String(localized: "Apps keep refusing Spectra's certificate, and none has accepted it yet: it is probably not trusted. Connections that refused go through unread.")
+            error = notice == "noca"
+                ? String(localized: "Spectra's certificate could not be opened, so nothing is decrypted. Unlock the phone and start the recording again.")
+                : String(localized: "Apps keep refusing Spectra's certificate, and none has accepted it yet: it is probably not trusted. Connections that refused go through unread.")
         }
         guard let url = containerURL()?.appendingPathComponent("live.json"),
               let data = try? Data(contentsOf: url),
@@ -291,6 +295,25 @@ final class TrafficSniffer {
     private func refreshCA() {
         guard let dir = caDir() else { return }
         caFingerprint = (try? LocalCertificateAuthority.open(dir, guard: LocalCertificateAuthority.deviceGuard(appGroup: Self.appGroup)))?.fingerprint()
+    }
+
+    /// Asks the system whether it trusts a leaf of this CA for TLS, which it does only once the certificate is
+    /// installed and fully trusted. The answer an app's connection would get, without guessing from refusals.
+    func checkTrust() async {
+        guard let dir = caDir(),
+              let ca = try? LocalCertificateAuthority.open(dir, guard: LocalCertificateAuthority.deviceGuard(appGroup: Self.appGroup)) else {
+            caTrusted = nil
+            return
+        }
+        let host = "trust-check.spectra.app"
+        let leaf = Data(ca.leafDER(for: host)), root = Data(ca.certificateDER)
+        caTrusted = await Task.detached {
+            guard let leaf = SecCertificateCreateWithData(nil, leaf as CFData),
+                  let root = SecCertificateCreateWithData(nil, root as CFData) else { return false }
+            var trust: SecTrust?
+            SecTrustCreateWithCertificates([leaf, root] as CFArray, SecPolicyCreateSSL(true, host as CFString), &trust)
+            return trust.map { SecTrustEvaluateWithError($0, nil) } ?? false
+        }.value
     }
 
     /// The CA certificate in DER, to export for the user to install + trust.

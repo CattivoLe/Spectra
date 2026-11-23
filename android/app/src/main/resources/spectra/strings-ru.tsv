@@ -1715,3 +1715,6 @@ The body is binary, %s, and is sent as recorded.	Тело двоичное, %s, 
 Throttling	Ограничение скорости
 Upload, kbit/s	Отдача, кбит/с
 unlimited	без ограничения
+The certificate is installed. Apps that trust user certificates can be read; most others refuse it.	Сертификат установлен. Читаются приложения, которые доверяют пользовательским сертификатам; большинство остальных его отвергает.
+The certificate is not installed on this phone yet: nothing can be decrypted.	Сертификат ещё не установлен на этот телефон: расшифровать ничего нельзя.
+Android lets no app install a CA certificate, so spectra-ca.crt was saved to Downloads.\n\n1. In Settings search for “CA certificate”. On Samsung: Security and privacy → More security settings → Install from phone storage → CA certificate.\n2. Choose “Install anyway” and pick spectra-ca.crt in Downloads.\n3. Restart the app you want to read.	Android не даёт приложению самому установить сертификат ЦС, поэтому spectra-ca.crt сохранён в «Загрузки».\n\n1. В настройках найдите «Сертификат ЦС». На Samsung: «Безопасность и конфиденциальность» → «Другие параметры безопасности» → «Установка из памяти телефона» → «Сертификат ЦС».\n2. Выберите «Всё равно установить» и укажите spectra-ca.crt в «Загрузках».\n3. Перезапустите приложение, которое хотите читать.

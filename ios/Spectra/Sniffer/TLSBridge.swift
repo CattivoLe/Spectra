@@ -274,8 +274,12 @@ nonisolated final class TLSBridge {
     private func fail() {
         if dead { return }
         dead = true
-        _ = try? phoneSide?.finish()
-        _ = try? originSide.finish()
+        // Never `EmbeddedChannel.finish()`: it waits for the channel to close, and NIOSSL closes only after a
+        // shutdown exchange that needs this very thread. One refused certificate then froze the proxy's loop, and
+        // every connection on the phone with it. Advancing the clock fires NIOSSL's shutdown timeouts instead.
+        phoneSide?.close(mode: .all, promise: nil)
+        originSide.close(mode: .all, promise: nil)
+        loop.advanceTime(by: .minutes(1))
     }
 }
 

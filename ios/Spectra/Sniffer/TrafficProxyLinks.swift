@@ -34,7 +34,6 @@ final class TCPLink {
     private var upQueue: [[UInt8]] = []
     /// The phone finished sending while `upQueue` still held data: the FIN goes after it.
     private var finPending = false
-    private var unackedBytes = 0
     private var prelude: [UInt8] = []
     /// HTTP/1.1 until a decrypted connection turns out to speak HTTP/2.
     private lazy var http: HttpStream = HttpAssembler(sink: bodySink(), messageSink: { [weak self] index, number, body in
@@ -61,9 +60,9 @@ final class TCPLink {
     }
 
     func start() {
-        let host = NWEndpoint.Host(IPCodec.text(dst))
-        guard let port = NWEndpoint.Port(rawValue: UInt16(dstPort)) else { return }
-        let conn = NWConnection(host: host, port: port, using: .tcp)
+        let target = proxy.redirect?(IPCodec.text(dst), dstPort) ?? (host: IPCodec.text(dst), port: dstPort)
+        guard let port = NWEndpoint.Port(rawValue: UInt16(target.port)) else { return }
+        let conn = NWConnection(host: NWEndpoint.Host(target.host), port: port, using: .tcp)
         connection = conn
         conn.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
@@ -333,7 +332,9 @@ final class TCPLink {
 
     private func pumpToClient() {
         if flow.closed { return }
-        var room = clientWindow - unackedBytes
+        // In flight: sent and not acknowledged yet, straight from the sequence numbers. A counter that only grew
+        // used to stop every connection after one window, about 64 KB.
+        var room = clientWindow - Int(ourSeq &- theirAcked)
         let now = TrafficProxyNow()
         let limit = proxy.throttle
         while room > 0 && !inbound.isEmpty {
@@ -349,7 +350,6 @@ final class TCPLink {
                 inboundReady.insert(ready, at: 0)
             }
             emit(seq: ourSeq, flags: IPCodec.ACK | IPCodec.PSH, payload: piece, advance: true)
-            unackedBytes += size
             room -= size
             _ = chunk
         }

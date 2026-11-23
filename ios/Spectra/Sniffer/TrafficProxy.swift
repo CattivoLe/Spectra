@@ -29,6 +29,8 @@ nonisolated final class TrafficProxy {
     private let hostFilter: () -> TlsHostFilter
     private let throttleSettings: () -> ThrottleSettings
     let mapRules: () -> [MapRule]
+    /// Tests only: where a destination really is. Nil connects to the packet's own address.
+    nonisolated(unsafe) var redirect: ((String, Int) -> (host: String, port: Int))?
     /// The buckets for the settings in force; rebuilt when the settings change. Loop only.
     private(set) var throttle: Throttle?
     private var throttleFor: ThrottleSettings?

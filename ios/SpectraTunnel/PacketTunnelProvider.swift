@@ -45,6 +45,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let filter = TlsHostFilter.load(UserDefaults(suiteName: Self.appGroup))
         hostFilter.withLock { $0 = filter }
         readTools()
+        if decrypt, loadCA() == nil {
+            tunnelLog.error("the certificate authority could not be opened: nothing will be decrypted")
+            UserDefaults(suiteName: Self.appGroup)?.set("noca", forKey: Self.tlsNoticeKey)
+        }
         // A new run starts with no bodies: what is left belongs to the previous recording.
         let bodies = container().map { TrafficBodies(dir: $0.appendingPathComponent(PacketTunnelBodies.folder, isDirectory: true)) }
         bodies?.clear()

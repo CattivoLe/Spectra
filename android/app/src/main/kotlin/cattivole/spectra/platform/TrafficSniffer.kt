@@ -264,6 +264,46 @@ class TrafficSniffer(context: Context) {
 
     fun certificateFingerprint(): String? = CaptureBus.authority?.fingerprint()
 
+    /**
+     * Whether the phone has this very certificate among its user-installed authorities. Reads the system store.
+     * Null when the store could not be read. Apps that ignore user certificates refuse it all the same.
+     */
+    fun certificateInstalled(): Boolean? {
+        val wanted = CaptureBus.authority?.certificateDer() ?: return null
+        return runCatching {
+            val store = java.security.KeyStore.getInstance("AndroidCAStore").apply { load(null) }
+            store.aliases().toList().any { alias -> store.getCertificate(alias)?.encoded?.contentEquals(wanted) == true }
+        }.getOrNull()
+    }
+
+    /** Writes the certificate to Downloads for the user to install: Android lets no app install an authority itself. */
+    fun saveCertificate(): Boolean {
+        val der = CaptureBus.authority?.certificateDer() ?: return false
+        val pem = "-----BEGIN CERTIFICATE-----\n" +
+            android.util.Base64.encodeToString(der, android.util.Base64.NO_WRAP).chunked(64).joinToString("\n") +
+            "\n-----END CERTIFICATE-----\n"
+        return runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                val resolver = app.contentResolver
+                val downloads = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                // Saved before by this app: replaced, so there is one file to pick rather than "spectra-ca (2).crt".
+                resolver.delete(downloads, "${android.provider.MediaStore.Downloads.DISPLAY_NAME} = ?", arrayOf(CERTIFICATE_FILE))
+                val uri = resolver.insert(
+                    downloads,
+                    android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.Downloads.DISPLAY_NAME, CERTIFICATE_FILE)
+                        put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/x-x509-ca-cert")
+                    },
+                ) ?: error("no uri")
+                resolver.openOutputStream(uri)!!.use { it.write(pem.toByteArray()) }
+            } else {
+                @Suppress("DEPRECATION")
+                val folder = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                File(folder, CERTIFICATE_FILE).writeText(pem)
+            }
+        }.isSuccess
+    }
+
     fun start() {
         error = null
         currentSessionId = null
@@ -342,6 +382,7 @@ class TrafficSniffer(context: Context) {
 
     private companion object {
         const val KEEP = 30
+        const val CERTIFICATE_FILE = "spectra-ca.crt"
         const val KEY_TLS = "traffic_decrypt_tls"
         const val KEY_TLS_MODE = "traffic_tls_mode"
         const val KEY_TLS_ONLY = "traffic_tls_only"

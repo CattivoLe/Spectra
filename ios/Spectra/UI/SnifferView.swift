@@ -9,19 +9,10 @@ struct SnifferView: View {
     @Environment(TrafficSniffer.self) private var sniffer
     @Environment(CaptureShelf.self) private var captures
     @State private var exportItem: ShareItem?
+    @Environment(\.scenePhase) private var scenePhase
     @State private var kindFilter: TrafficKind?
     @State private var search = ""
     @State private var saves = 0
-
-    /// Flows after the protocol filter and the host/request search.
-    private var filtered: [TrafficFlow] {
-        sniffer.flows.filter { flow in
-            (kindFilter == nil || flow.kind == kindFilter)
-                && (search.isEmpty
-                    || flow.title.localizedCaseInsensitiveContains(search)
-                    || (flow.request ?? "").localizedCaseInsensitiveContains(search))
-        }
-    }
 
     var body: some View {
         @Bindable var sniffer = sniffer
@@ -62,16 +53,15 @@ struct SnifferView: View {
                     }
                     if let fingerprint = sniffer.caFingerprint {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Install & trust Spectra's certificate to read HTTPS.")
-                                .font(.footnote).foregroundStyle(.secondary)
+                            trustState
                             Text(fingerprint).font(.caption2.monospaced()).foregroundStyle(.secondary)
                             Button("Export certificate") { exportItem = writeCertificate() }
                         }
                     }
                 }
             } footer: {
-                if sniffer.decryptTLS {
-                    Text("After installing, enable full trust in Settings → General → VPN & Device Management → Certificate Trust Settings.")
+                if sniffer.decryptTLS, sniffer.caTrusted != true {
+                    Text("1. Export certificate → Save to Files.\n2. Open the saved file in Files, then Settings → Profile Downloaded → Install.\n3. Settings → General → About → Certificate Trust Settings → turn on Spectra.")
                 }
             }
 
@@ -91,20 +81,11 @@ struct SnifferView: View {
             }
 
             if !sniffer.flows.isEmpty {
-                Section(filtered.count == sniffer.flows.count
-                        ? "\(sniffer.flows.count) connections"
-                        : "\(filtered.count) of \(sniffer.flows.count) connections") {
-                    if filtered.isEmpty {
-                        Text("Nothing matches the filter.").foregroundStyle(.secondary).font(.footnote)
-                    }
-                    ForEach(filtered) { flow in
-                        NavigationLink { FlowDetailView(flow: flow, sessionID: nil) } label: { FlowRow(flow: flow) }
-                    }
-                }
+                TrafficListSections(flows: sniffer.flows, sessionID: nil, search: search, kind: kindFilter)
             }
-
         }
         .navigationTitle("Traffic")
+        .task(id: scenePhase) { if scenePhase == .active { await sniffer.checkTrust() } }
         .sensoryFeedback(.success, trigger: saves)
         .searchable(text: $search, prompt: "Host or request")
         .summaryButton(isShown: !sniffer.flows.isEmpty,
@@ -131,6 +112,22 @@ struct SnifferView: View {
                     HarExportButton(flows: sniffer.flows, sessionID: nil, item: $exportItem)
                 }
             }
+        }
+    }
+
+    /// Whether apps can accept the certificate at all, as the system itself answers.
+    @ViewBuilder
+    private var trustState: some View {
+        switch sniffer.caTrusted {
+        case true?:
+            Label("This iPhone trusts Spectra's certificate.", systemImage: "checkmark.seal.fill")
+                .font(.footnote).foregroundStyle(.green)
+        case false?:
+            Label("This iPhone does not trust Spectra's certificate yet: nothing can be decrypted.", systemImage: "xmark.seal.fill")
+                .font(.footnote).foregroundStyle(.orange)
+        case nil:
+            Text("Install & trust Spectra's certificate to read HTTPS.")
+                .font(.footnote).foregroundStyle(.secondary)
         }
     }
 
@@ -192,6 +189,106 @@ private struct HarExportButton: View {
             if busy { ProgressView() } else { Label(label, systemImage: "doc.badge.arrow.up") }
         }
         .disabled(busy)
+    }
+}
+
+/// One HTTP request of a connection, as a row of its own.
+private struct RequestHit: Identifiable {
+    let flow: TrafficFlow
+    let index: Int
+    var id: String { "\(flow.id)-\(index)" }
+    var exchange: HttpExchange { flow.exchanges[index] }
+    var at: Int64 { exchange.startedAt ?? flow.lastAt }
+}
+
+/// The recording as a list of requests, newest first, or of the connections under them. DNS lookups outnumber
+/// everything else and say little, so they show only when asked for.
+private struct TrafficListSections: View {
+    let flows: [TrafficFlow]
+    let sessionID: String?
+    let search: String
+    let kind: TrafficKind?
+    @AppStorage("trafficShowsConnections") private var showsConnections = false
+
+    private func matches(_ texts: String?...) -> Bool {
+        search.isEmpty || texts.contains { $0?.localizedCaseInsensitiveContains(search) == true }
+    }
+
+    private var requests: [RequestHit] {
+        flows.flatMap { flow in flow.exchanges.indices.map { RequestHit(flow: flow, index: $0) } }
+            .filter { matches($0.flow.title, $0.exchange.summary) }
+            .sorted { $0.at > $1.at }
+    }
+
+    private var connections: [TrafficFlow] {
+        flows.filter { (kind == nil ? $0.kind != .dns : $0.kind == kind) && matches($0.title, $0.request) }
+    }
+
+    var body: some View {
+        Section {
+            Picker("List", selection: $showsConnections) {
+                Text("Requests").tag(false)
+                Text("Connections").tag(true)
+            }
+            .pickerStyle(.segmented)
+        }
+        // A protocol picked in the filter is a question about connections.
+        if showsConnections || kind != nil {
+            let rows = connections
+            Section("\(rows.count) of \(flows.count) connections") {
+                if rows.isEmpty { Text("Nothing matches the filter.").foregroundStyle(.secondary).font(.footnote) }
+                ForEach(rows) { flow in
+                    NavigationLink { FlowDetailView(flow: flow, sessionID: sessionID) } label: { FlowRow(flow: flow) }
+                }
+            }
+        } else {
+            let rows = requests
+            let refused = flows.filter(\.refused).count
+            Section {
+                if rows.isEmpty {
+                    Text("No requests read yet.").foregroundStyle(.secondary).font(.footnote)
+                }
+                ForEach(rows) { hit in
+                    NavigationLink {
+                        ExchangeDetailView(flow: hit.flow, index: hit.index, sessionID: sessionID)
+                    } label: { RequestRow(hit: hit) }
+                }
+            } header: {
+                Text("Requests: \(rows.count)")
+            } footer: {
+                if refused > 0 { Text("Connections that refused the certificate and went through unread: \(refused).") }
+            }
+        }
+    }
+}
+
+private struct RequestRow: View {
+    let hit: RequestHit
+
+    private var statusColor: Color {
+        switch hit.exchange.status ?? 0 {
+        case 200..<300: .green
+        case 300..<400: .blue
+        case 400...: .red
+        default: .secondary
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(verbatim: hit.exchange.method).font(.caption.weight(.semibold).monospaced()).foregroundStyle(.tint)
+                if hit.exchange.httpVersion == Http2Assembler.version { Badge(text: "H2") }
+                if !hit.exchange.messages.isEmpty { Badge(text: "WS") }
+                Text(verbatim: hit.exchange.path).font(.callout).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                Text(verbatim: hit.exchange.status.map(String.init) ?? "…")
+                    .font(.caption.weight(.semibold).monospacedDigit()).foregroundStyle(statusColor)
+            }
+            Text(verbatim: ([hit.flow.title, hit.exchange.header("content-type", response: true)?.split(separator: ";").first.map(String.init)]
+                .compactMap { $0 } + [exchangeLine(hit.exchange)].compactMap { $0 }).joined(separator: " · "))
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
     }
 }
 
@@ -1053,10 +1150,12 @@ struct SavedSessionView: View {
     let session: TrafficSession
     @Environment(CaptureShelf.self) private var captures
     @State private var exportItem: ShareItem?
+    @State private var search = ""
     var body: some View {
-        List(session.flows) { flow in
-            NavigationLink { FlowDetailView(flow: flow, sessionID: session.id) } label: { FlowRow(flow: flow) }
+        List {
+            TrafficListSections(flows: session.flows, sessionID: session.id, search: search, kind: nil)
         }
+        .searchable(text: $search, prompt: "Host or request")
         .navigationTitle("Session")
         .navigationBarTitleDisplayMode(.inline)
         .summaryButton(isShown: !session.flows.isEmpty,

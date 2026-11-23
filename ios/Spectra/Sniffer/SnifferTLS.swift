@@ -23,15 +23,18 @@ extension LocalCertificateAuthority {
 
     /// A TLS **client** context for the real origin leg of a MITM.
     ///
-    /// Verification is **disabled**: swift-nio-ssl on Apple platforms does not
-    /// pick up the system trust store, so `.fullVerification` stalls/fails the
-    /// origin handshake (no trusted roots) — the response never comes back. For
-    /// a local debugging sniffer on the user's own device this is an acceptable
-    /// trade-off (the same as a proxy's "don't verify upstream" option); the
-    /// phone still verifies *our* leaf against the installed CA.
+    /// Verification is **disabled**. With the default trust roots swift-nio-ssl on
+    /// Apple platforms asks Security.framework, whatever `certificateVerification`
+    /// says, and gets the answer on another thread: the `EmbeddedEventLoop` of
+    /// `TLSBridge` is touched off its thread, nothing drains it afterwards, and the
+    /// origin's handshake never ends. So the roots are an empty list, not the
+    /// default. For a local debugging sniffer on the user's own device not verifying
+    /// the origin is an acceptable trade-off (the same as a proxy's "don't verify
+    /// upstream" option); the phone still verifies *our* leaf against the installed CA.
     static func makeSystemClientContext(protocols: [String] = ["http/1.1"]) throws -> NIOSSLContext {
         var config = TLSConfiguration.makeClientConfiguration()
         config.certificateVerification = .none
+        config.trustRoots = .certificates([])
         config.applicationProtocols = protocols
         return try NIOSSLContext(configuration: config)
     }
