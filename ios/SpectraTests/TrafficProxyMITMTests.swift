@@ -1,6 +1,7 @@
 import Foundation
 import NIOCore
 import NIOEmbedded
+import NIOPosix
 import NIOSSL
 import os
 import Testing
@@ -37,14 +38,22 @@ struct TrafficProxyMITMTests {
         let proxy = TrafficProxy(writer: { packet, _ in written.withLock { $0.append([UInt8](packet)) } },
                                  decryptTLS: { true }, certificate: { ca }, onFlows: { _ in })
         defer { proxy.stop() }
+        // Something has to accept the connection: the app is answered only after the server.
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer { try? group.syncShutdownGracefully() }
+        let server = try ServerBootstrap(group: group).bind(host: "127.0.0.1", port: 0).wait()
+        defer { try? server.close().wait() }
+        let origin = try #require(server.localAddress?.port)
+        proxy.redirect = { _, _ in ("127.0.0.1", origin) }
 
         let hello = try Self.clientHello()
         #expect(hello.first == 22)
         let port = 50123
         proxy.handle(Data(IPCodec.tcpPacket(src: Self.phone, dst: Self.server, srcPort: port, dstPort: 443,
                                             seq: 1000, ack: 0, flags: IPCodec.SYN, window: 65535, payload: [], mss: 1360)))
-        try proxy.loop.submit {}.wait()
-        let synAck = try #require(written.withLock { $0.last }.flatMap(IPCodec.parse).flatMap { IPCodec.parseTCP($0.payload) })
+        let answered = Date().addingTimeInterval(10)
+        while written.withLock({ $0.isEmpty }), Date() < answered { Thread.sleep(forTimeInterval: 0.01) }
+        let synAck = try #require(written.withLock { $0.first }.flatMap(IPCodec.parse).flatMap { IPCodec.parseTCP($0.payload) })
         proxy.handle(Data(IPCodec.tcpPacket(src: Self.phone, dst: Self.server, srcPort: port, dstPort: 443,
                                             seq: 1001, ack: synAck.seq &+ 1, flags: IPCodec.ACK, window: 65535, payload: [])))
         proxy.handle(Data(IPCodec.tcpPacket(src: Self.phone, dst: Self.server, srcPort: port, dstPort: 443,

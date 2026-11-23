@@ -102,13 +102,18 @@ fun TrafficListScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
                             kind = null
                         },
                     )
-                    session == null && traffic.running -> EmptyState(
+                    session == null && traffic.running && (connections || flows.none { it.refused }) -> EmptyState(
                         Icons.Rounded.WifiTethering,
                         tr("Recording…"),
                         tr("Connections show up here as this phone opens them."),
                         busy = true,
                     )
                     connections -> EmptyState(Icons.Rounded.WifiTethering, tr("No connections yet"), tr("Only DNS lookups so far. Turn their filter on to see them."))
+                    flows.any { it.refused } -> EmptyState(
+                        Icons.Rounded.WifiTethering,
+                        tr("No requests read yet"),
+                        tr("The apps used so far refuse the certificate. Open a site in Chrome to check that decryption works."),
+                    )
                     else -> EmptyState(Icons.Rounded.WifiTethering, tr("No requests read yet"), tr("Requests inside encrypted connections show up only when TLS is decrypted."))
                 }
             }

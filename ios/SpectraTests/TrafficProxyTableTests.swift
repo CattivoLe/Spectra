@@ -14,11 +14,15 @@ struct TrafficProxyTableTests {
 
     private final class Sink: @unchecked Sendable {
         let packets = OSAllocatedUnfairLock<[[UInt8]]>(initialState: [])
-        var resets: Int {
+        var resets: Int { count(IPCodec.RST) }
+        /// SYN-ACKs: connections accepted on the server's behalf.
+        var answers: Int { count(IPCodec.SYN) }
+
+        private func count(_ flag: Int) -> Int {
             packets.withLock { list in
                 list.filter { raw in
                     guard let ip = IPCodec.parse(raw), let tcp = IPCodec.parseTCP(ip.payload) else { return false }
-                    return tcp.flags & IPCodec.RST != 0
+                    return tcp.flags & flag != 0
                 }.count
             }
         }
@@ -73,6 +77,32 @@ struct TrafficProxyTableTests {
         // DNS goes after `dnsIdle`; a server that never accepted the connection after `connectTimeout`.
         let later = now + Int64((TrafficProxy.connectTimeout + 1) * 1000)
         try proxy.loop.submit { proxy.sweep(now: later) }.wait()
+        #expect(try proxy.loop.submit { proxy.linkCount }.wait() == 0)
+    }
+
+    /// A server that does not answer must look that way to the app: it then tries its next address. Answered at once,
+    /// an app on a network with dead IPv6 held a connection that led nowhere and never came to IPv4.
+    @Test func anAppIsAnsweredOnlyAfterTheServer() throws {
+        let (proxy, sink) = makeProxy()
+        defer { proxy.stop() }
+        proxy.handle(syn(fromPort: 42000))
+        proxy.handle(syn(fromPort: 42000)) // the app's own retransmission
+        Thread.sleep(forTimeInterval: 0.5)
+        try proxy.loop.submit {}.wait()
+        #expect(sink.answers == 0)
+        #expect(try proxy.loop.submit { proxy.linkCount }.wait() == 1)
+    }
+
+    /// Nothing listens there: the app is refused at once instead of waiting for the network to change.
+    @Test func aRefusedConnectionIsResetAtOnce() throws {
+        let (proxy, sink) = makeProxy()
+        defer { proxy.stop() }
+        proxy.redirect = { _, _ in ("127.0.0.1", 1) }
+        proxy.handle(syn(fromPort: 43000))
+        let deadline = Date().addingTimeInterval(5)
+        while sink.resets == 0, Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
+        #expect(sink.resets == 1)
+        #expect(sink.answers == 0)
         #expect(try proxy.loop.submit { proxy.linkCount }.wait() == 0)
     }
 

@@ -207,8 +207,13 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator) {
         }
         if (traffic.refusedCertificate && traffic.decryptTls) {
             card(key = "refused", rows = listOf {
+                // Installed is all Android needs: then it is the apps, and there is nothing to switch on.
                 NoteRow(
-                    tr("Apps keep refusing Spectra's certificate, and none has accepted it yet: it is probably not trusted. Connections that refused go through unread."),
+                    if (rememberCertificateInstalled(traffic) == true) {
+                        tr("The apps used so far refuse every certificate installed by the user, and no setting changes that. They go through unread. Open a site in Chrome to check that decryption works.")
+                    } else {
+                        tr("Apps keep refusing Spectra's certificate, and none has accepted it yet: it is probably not installed. Connections that refused go through unread.")
+                    },
                     warning = true,
                 )
             })
@@ -228,7 +233,7 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator) {
                     }
                 }
                 traffic.certificateFingerprint()?.let { digest ->
-                    if (traffic.decryptTls) add { CertificateState(traffic, digest) }
+                    if (traffic.decryptTls) add { CertificateState(traffic) }
                     add { InstallCertificateRow(traffic) }
                     add { InfoRow(tr("Fingerprint"), digest, mono = true, copyable = true) }
                 }
@@ -746,15 +751,20 @@ internal fun FlowRow(
 
 /** Whether this phone has the certificate installed at all: read from the system store while the screen is open. */
 @Composable
-private fun CertificateState(traffic: TrafficSniffer, fingerprint: String) {
-    val installed by androidx.compose.runtime.produceState<Boolean?>(null, fingerprint) {
+private fun rememberCertificateInstalled(traffic: TrafficSniffer): Boolean? {
+    val installed by androidx.compose.runtime.produceState<Boolean?>(null, traffic.certificateFingerprint()) {
         while (true) {
             value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { traffic.certificateInstalled() }
             kotlinx.coroutines.delay(2_000)
         }
     }
-    when (installed) {
-        true -> NoteRow(tr("The certificate is installed. Apps that trust user certificates can be read; most others refuse it."), warning = false)
+    return installed
+}
+
+@Composable
+private fun CertificateState(traffic: TrafficSniffer) {
+    when (rememberCertificateInstalled(traffic)) {
+        true -> NoteRow(tr("The certificate is installed, and nothing else has to be turned on. Apps that accept user certificates can be read, such as Chrome; most others refuse it."), warning = false)
         false -> NoteRow(tr("The certificate is not installed on this phone yet: nothing can be decrypted."), warning = true)
         null -> Unit
     }

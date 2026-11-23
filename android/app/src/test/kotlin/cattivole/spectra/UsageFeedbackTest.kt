@@ -15,6 +15,7 @@ import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.NetworkStore
 import cattivole.spectra.core.PhoneWifi
 import cattivole.spectra.core.RadioSource
+import cattivole.spectra.core.RefusedHosts
 import cattivole.spectra.core.RequestFilter
 import cattivole.spectra.core.SecondaryChannel
 import cattivole.spectra.core.Sightings
@@ -339,5 +340,18 @@ class BodyTextTest {
         assertEquals(listOf(JsonSyntax.Kind.STRING), body.syntax(body.rows[1]).map { it.kind })
         assertEquals(listOf(JsonSyntax.Kind.KEY, JsonSyntax.Kind.NUMBER), body.syntax(body.rows[2]).map { it.kind })
         assertTrue(BodyText("plain \"text\"").syntax.isEmpty())
+    }
+
+    /** Google's services refuse the certificate for a host the browser accepts it for: one must not speak for the other. */
+    @Test
+    fun oneAppsRefusalLeavesOthersReadable() {
+        val refused = RefusedHosts()
+        refused.add("Google Play services", "www.Google.com")
+        assertTrue(refused.contains("Google Play services", "www.google.com"))
+        assertFalse(refused.contains("Chrome", "www.google.com"))
+        assertFalse(refused.contains(null, "www.google.com"))
+        assertFalse(refused.contains("Google Play services", "mail.google.com"))
+        refused.add(null, "pinned.example.com")
+        assertTrue(refused.contains(null, "pinned.example.com"))
     }
 }

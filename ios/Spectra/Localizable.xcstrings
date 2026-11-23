@@ -18952,6 +18952,26 @@
           }
         }
       }
+    },
+    "This iPhone trusts Spectra's certificate, but the apps used so far accept only their own. They go through unread. Open a site in Safari to check that decryption works.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот iPhone доверяет сертификату Spectra, но приложения, которыми вы пользовались, принимают только свой. Они идут без расшифровки. Чтобы проверить расшифровку, откройте сайт в Safari."
+          }
+        }
+      }
+    },
+    "No requests read yet. The apps used so far refuse the certificate: open a site in Safari to check that decryption works.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пока не прочитано ни одного запроса. Приложения, которыми вы пользовались, отвергают сертификат: чтобы проверить расшифровку, откройте сайт в Safari."
+          }
+        }
+      }
     }
   },
   "version": "1.1"
