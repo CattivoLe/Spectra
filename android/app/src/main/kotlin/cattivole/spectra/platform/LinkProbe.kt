@@ -58,7 +58,8 @@ import kotlin.coroutines.coroutineContext
  * that public address answers from other countries, and a traceroute.
  *
  * With [viaVpn] off, probes are pinned to Wi-Fi or Ethernet, so a VPN is
- * not what gets measured. With it on, they follow the system route and a
+ * not what gets measured; a VPN that does not allow that is reported as
+ * such instead of being measured in its place. With it on, they follow the system route and a
  * connected VPN is included. The traceroute shells out to `ping`; without
  * the VPN it tries to leave from the LAN interface.
  *
@@ -107,7 +108,46 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
         }
 
     /** The network the route setting asks for, for the other checks that share it. */
-    suspend fun currentNetwork(): Network? = probeNetwork()?.network
+    suspend fun currentNetwork(): RouteAnswer = when (val found = probeNetwork()) {
+        is Found.Open -> RouteAnswer.Open(found.route.network)
+        Found.Missing -> RouteAnswer.Missing
+        Found.HeldByVpn -> RouteAnswer.HeldByVpn
+    }
+
+    /** The VPN that is on keeps Wi-Fi and the mobile network to itself, so neither can be measured on its own. */
+    var heldByVpn: Boolean = false
+        private set
+
+    private var watching: ConnectivityManager.NetworkCallback? = null
+
+    /** Follows the VPN being turned on and off, so the screen says in time what can be checked. */
+    fun watch() {
+        if (watching != null) return
+        val manager = app.getSystemService(ConnectivityManager::class.java) ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = lookAtVpn()
+            override fun onLinkPropertiesChanged(network: Network, properties: android.net.LinkProperties) = lookAtVpn()
+            override fun onLost(network: Network) = lookAtVpn()
+        }
+        if (runCatching { manager.registerDefaultNetworkCallback(callback) }.isSuccess) watching = callback
+        lookAtVpn()
+    }
+
+    fun unwatch() {
+        val manager = app.getSystemService(ConnectivityManager::class.java)
+        watching?.let { callback -> runCatching { manager?.unregisterNetworkCallback(callback) } }
+        watching = null
+    }
+
+    private fun lookAtVpn() {
+        scope.launch {
+            val held = withContext(Dispatchers.IO) { guard.holdsInternet() }
+            if (held != heldByVpn) {
+                heldByVpn = held
+                publish()
+            }
+        }
+    }
 
     // The person's own sites
 
@@ -144,11 +184,14 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
         checkingResources = checkingResources + host
         publish()
         scope.launch {
-            val reach = withContext(Dispatchers.IO) {
-                probeNetwork()?.let { reach(it.network, host) } ?: ResourceReach(host, false, null)
+            val reach = when (val found = probeNetwork()) {
+                is Found.Open -> withContext(Dispatchers.IO) { reach(found.route.network, host) }
+                Found.Missing -> ResourceReach(host, false, null)
+                // Nothing was asked: not the same as a site that does not open.
+                Found.HeldByVpn -> null
             }
             checkingResources = checkingResources - host
-            if (host in resources) resourceResults = resourceResults + (host to reach)
+            if (host in resources) resourceResults = if (reach != null) resourceResults + (host to reach) else resourceResults - host
             publish()
         }
     }
@@ -195,6 +238,7 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
 
     private val app = context.applicationContext
     private val cellular = CellularRoute(app)
+    private val guard = VpnGuard(app)
 
     init {
         resources = AccessCheck.parseList(app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(RESOURCES, null))
@@ -253,12 +297,13 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
         recheckingRegions = recheckingRegions + code
         publish()
         recheckJobs[code] = scope.launch {
-            val reach = withContext(Dispatchers.IO) {
-                val route = probeNetwork()
-                if (route == null) RegionReach(code, host, false, null) else probeRegion(route.network, code, host)
+            val reach = when (val found = probeNetwork()) {
+                is Found.Open -> withContext(Dispatchers.IO) { probeRegion(found.route.network, code, host) }
+                Found.Missing -> RegionReach(code, host, false, null)
+                Found.HeldByVpn -> null
             }
             report?.let { current ->
-                current.regions = current.regions.map { if (it.code == code) reach else it }
+                if (reach != null) current.regions = current.regions.map { if (it.code == code) reach else it }
             }
             recheckingRegions = recheckingRegions - code
             recheckJobs.remove(code)
@@ -299,7 +344,7 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
         publish()
         exposureJob = scope.launch {
             try {
-                val route = probeNetwork() ?: return@launch
+                val route = routeOrNull() ?: return@launch
                 var result = probeExposure(route.network, ip, ports)
                 val current = report ?: return@launch
                 if (current.external?.ip != ip) return@launch
@@ -470,10 +515,16 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
         publish()
         routeJob = scope.launch {
             try {
-                val route = probeNetwork()
-                if (route == null) {
-                    routeFailure = "There is no network for the chosen connection."
-                    return@launch
+                val route = when (val found = probeNetwork()) {
+                    is Found.Open -> found.route
+                    Found.Missing -> {
+                        routeFailure = "There is no network for the chosen connection."
+                        return@launch
+                    }
+                    Found.HeldByVpn -> {
+                        routeFailure = HELD_BY_VPN
+                        return@launch
+                    }
                 }
                 val manager = app.getSystemService(ConnectivityManager::class.java)
                 val iface = route.interfaceName ?: manager?.getLinkProperties(route.network)?.interfaceName
@@ -532,18 +583,26 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
         val current = report ?: return
         suspend fun live() = token == mine && coroutineContext.isActive
         val throughVpn = viaVpn
-        val route = probeNetwork()
-        if (route == null) {
-            current.status = LinkStatus.NO_NETWORK
-            current.detail = if (throughVpn) {
-                "There is no network connection to check."
-            } else if (viaCellular) {
-                "There is no mobile network to check."
-            } else {
-                "Connect to a Wi-Fi or Ethernet network first."
+        val route = when (val found = probeNetwork()) {
+            is Found.Open -> found.route
+            Found.Missing -> {
+                current.status = LinkStatus.NO_NETWORK
+                current.detail = if (throughVpn) {
+                    "There is no network connection to check."
+                } else if (viaCellular) {
+                    "There is no mobile network to check."
+                } else {
+                    "Connect to a Wi-Fi or Ethernet network first."
+                }
+                publish()
+                return
             }
-            publish()
-            return
+            Found.HeldByVpn -> {
+                current.status = LinkStatus.VPN_ONLY
+                current.detail = HELD_BY_VPN
+                publish()
+                return
+            }
         }
         val network = route.network
         stage("Checking the gateway", 0.12f)
@@ -642,29 +701,37 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
         else -> emptyList<RemoteTrace>() to RemoteNote.NONE
     }
 
+    private suspend fun routeOrNull(): ProbeNetwork? = (probeNetwork() as? Found.Open)?.route
+
     /** Wi-Fi or Ethernet when the VPN is skipped; the system default route when it is not. */
-    private suspend fun probeNetwork(): ProbeNetwork? {
-        val throughVpn = viaVpn
-        if (!throughVpn && viaCellular) {
-            // No gateway to ask and no interface to trace from: the Wi-Fi router is not on this path.
-            return cellular.acquire()?.let { ProbeNetwork(it, null, false, null) }
+    private suspend fun probeNetwork(): Found {
+        if (!viaVpn) {
+            val wanted = if (viaCellular) {
+                // No gateway to ask and no interface to trace from: the Wi-Fi router is not on this path.
+                cellular.acquire()?.let { ProbeNetwork(it, null, false, null) }
+            } else {
+                lan.lanRoute()?.let { ProbeNetwork(it.network, it.subnet.gateway, it.captive, it.subnet.interfaceName) }
+            } ?: return Found.Missing
+            return when (val path = withContext(Dispatchers.IO) { guard.toInternet(wanted.network) }) {
+                VpnGuard.Path.Bound -> Found.Open(wanted)
+                is VpnGuard.Path.Around -> Found.Open(wanted.copy(network = path.vpn))
+                VpnGuard.Path.Held -> Found.HeldByVpn
+            }
         }
-        if (!throughVpn) {
-            val route = lan.lanRoute() ?: return null
-            return ProbeNetwork(route.network, route.subnet.gateway, route.captive, route.subnet.interfaceName)
-        }
-        val manager = app.getSystemService(ConnectivityManager::class.java) ?: return null
-        val network = manager.activeNetwork ?: return null
-        val caps = manager.getNetworkCapabilities(network) ?: return null
+        val manager = app.getSystemService(ConnectivityManager::class.java) ?: return Found.Missing
+        val network = manager.activeNetwork ?: return Found.Missing
+        val caps = manager.getNetworkCapabilities(network) ?: return Found.Missing
         val gateway = manager.getLinkProperties(network)?.routes
             ?.firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }
             ?.gateway?.hostAddress
             ?.takeIf { it != "0.0.0.0" }
-        return ProbeNetwork(
-            network,
-            gateway,
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL),
-            null,
+        return Found.Open(
+            ProbeNetwork(
+                network,
+                gateway,
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL),
+                null,
+            ),
         )
     }
 
@@ -970,12 +1037,20 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
             output.contains("cannot assign requested address", ignoreCase = true) ||
             (output.contains("bind", ignoreCase = true) && output.contains("not permitted", ignoreCase = true))
 
-    private companion object {
-        const val PREFS = "spectra"
-        const val VIA_VPN = "probeViaVpn"
-        const val VIA_CELLULAR = "probeCellular"
-        const val RESOURCES = "watchedResources"
-        const val DNS_NAME = "one.one.one.one"
+    companion object {
+        private const val PREFS = "spectra"
+        private const val VIA_VPN = "probeViaVpn"
+        private const val VIA_CELLULAR = "probeCellular"
+        private const val RESOURCES = "watchedResources"
+        private const val DNS_NAME = "one.one.one.one"
+
+        const val HELD_BY_VPN = "The VPN that is on does not let apps go around it, so Wi-Fi and the mobile network cannot be checked on their own. Turn the VPN off, or leave Spectra out of it in the VPN app (split tunneling)."
+
+        private sealed interface Found {
+            data class Open(val route: ProbeNetwork) : Found
+            data object Missing : Found
+            data object HeldByVpn : Found
+        }
 
         private data class ProbeNetwork(
             val network: Network,
@@ -984,7 +1059,7 @@ class LinkProbe(context: Context, private val lan: LanScanner) {
             val interfaceName: String?,
         )
 
-        val REGION_HOSTS = listOf(
+        private val REGION_HOSTS = listOf(
             "US" to "www.usa.gov",
             "DE" to "www.denic.de",
             "NL" to "www.ripe.net",

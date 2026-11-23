@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.WifiTethering
+import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.LockOpen
@@ -148,57 +149,134 @@ fun LazyListScope.trafficEntry(model: SpectraModel, nav: Navigator) {
 }
 
 @Composable
-fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
+fun SnifferScreen(model: SpectraModel, nav: Navigator) {
     model.generation
     val traffic = model.traffic
-    val session = sessionId?.let { traffic.session(it) }
-    if (sessionId != null && session == null) {
-        SpectraScreen(tr("Traffic"), onBack = nav::back, overlay = {
-            EmptyState(Icons.Rounded.WifiTethering, tr("Gone"), tr("This saved recording is no longer here."))
-        }) {}
-        return
+    val flows = traffic.flows
+    val begin = rememberTrafficRecord(traffic)
+    SpectraScreen(
+        title = tr("Traffic"),
+        subtitle = when {
+            traffic.running -> tr("Recording…")
+            traffic.startedAt > 0 -> dateTime(traffic.startedAt)
+            else -> null
+        },
+        onBack = nav::back,
+        actions = { TrafficActions(model, nav, session = null) },
+        overlay = {
+            if (flows.isEmpty() && !traffic.running) {
+                EmptyState(
+                    Icons.Rounded.WifiTethering,
+                    tr("No connections yet"),
+                    tr("Start a recording to list the connections this phone opens."),
+                    action = tr("Start recording"),
+                    onAction = begin,
+                )
+            }
+        },
+    ) {
+        val rows = buildList<@Composable () -> Unit> {
+            if (traffic.running || flows.isNotEmpty()) {
+                add {
+                    ListRow(
+                        title = tr("Requests and connections"),
+                        subtitle = trafficCounts(flows),
+                        leading = {
+                            IconTile(
+                                Icons.AutoMirrored.Rounded.ViewList,
+                                if (traffic.running) Spectra.colors.danger else MaterialTheme.colorScheme.primary,
+                            )
+                        },
+                        onClick = nav::trafficList,
+                    )
+                }
+            }
+            if (traffic.saved.isNotEmpty()) {
+                add {
+                    ListRow(
+                        title = tr("Saved recordings (%d)", traffic.saved.size),
+                        leading = { IconTile(Icons.Rounded.History, MaterialTheme.colorScheme.secondary) },
+                        onClick = nav::savedTrafficList,
+                    )
+                }
+            }
+        }
+        if (rows.isNotEmpty()) card(key = "recording", dividerInset = 70.dp, rows = rows)
+        traffic.error?.let { message ->
+            card(key = "error", rows = listOf { NoteRow(tr(message), warning = true) })
+        }
+        if (traffic.refusedCertificate && traffic.decryptTls) {
+            card(key = "refused", rows = listOf {
+                NoteRow(
+                    tr("Apps keep refusing Spectra's certificate, and none has accepted it yet: it is probably not trusted. Connections that refused go through unread."),
+                    warning = true,
+                )
+            })
+        }
+        card(
+            key = "tls",
+            rows = buildList {
+                add { TlsSwitch(traffic) }
+                if (traffic.decryptTls) {
+                    add {
+                        ListRow(
+                            title = tr("Hosts to decrypt"),
+                            subtitle = hostFilterSummary(traffic.hostFilter),
+                            leading = { IconTile(Icons.Rounded.Tune, MaterialTheme.colorScheme.primary) },
+                            onClick = nav::trafficHosts,
+                        )
+                    }
+                }
+                traffic.certificateFingerprint()?.let { digest ->
+                    if (traffic.decryptTls) add { CertificateState(traffic, digest) }
+                    add { InstallCertificateRow(traffic) }
+                    add { InfoRow(tr("Fingerprint"), digest, mono = true, copyable = true) }
+                }
+            },
+        )
+        card(
+            key = "tools",
+            rows = listOf(
+                {
+                    ListRow(
+                        title = tr("Throttling"),
+                        subtitle = throttleSummary(traffic.throttle),
+                        leading = { IconTile(Icons.Rounded.Speed, if (traffic.throttle.enabled) Spectra.colors.warning else MaterialTheme.colorScheme.secondary) },
+                        onClick = nav::trafficThrottle,
+                    )
+                },
+                {
+                    ListRow(
+                        title = tr("Map Local"),
+                        subtitle = mapLocalSummary(traffic),
+                        leading = { IconTile(Icons.Rounded.SwapHoriz, if (traffic.mapRules.any { it.enabled }) Spectra.colors.warning else MaterialTheme.colorScheme.secondary) },
+                        onClick = nav::trafficMapLocal,
+                    )
+                },
+            ),
+        )
+        card(
+            key = "multicast",
+            rows = listOf {
+                NoteRow(tr("Multicast, including device discovery, is not forwarded while recording."), warning = false)
+            },
+        )
     }
+}
+
+/** What can be done with a recording: the one in progress or the last one, or a saved [session]. */
+@Composable
+internal fun TrafficActions(model: SpectraModel, nav: Navigator, session: TrafficSession?) {
+    val traffic = model.traffic
     val live = session == null
     val flows = session?.flows ?: traffic.flows
-    var query by rememberSaveable { mutableStateOf("") }
     var menu by rememberSaveable { mutableStateOf(false) }
     var confirmClear by rememberSaveable { mutableStateOf(false) }
     var confirmDelete by rememberSaveable { mutableStateOf(false) }
-    var confirmNew by rememberSaveable { mutableStateOf(false) }
     val notify = LocalNotify.current
     val context = LocalContext.current
-    val begin = rememberTrafficConsent(traffic)
     val coroutines = rememberCoroutineScope()
-    val listState = rememberLazyListState()
-    var kindName by rememberSaveable { mutableStateOf<String?>(null) }
-    var method by rememberSaveable { mutableStateOf<String?>(null) }
-    val kind = kindName?.let { runCatching { TrafficKind.valueOf(it) }.getOrNull() }
-    val needle = query.trim()
-    val scope = sessionId ?: "live"
-    val hits = flows.flatMap { flow ->
-        if (flow.exchanges.isEmpty()) listOf(TrafficHit(flow, null)) else flow.exchanges.indices.map { TrafficHit(flow, it) }
-    }
-    val focus = traffic.focusedKey
-    val visible = hits.filter { hit ->
-        val exchange = hit.index?.let { hit.flow.exchanges.getOrNull(it) }
-        if (trafficKey(scope, hit) == focus) return@filter true
-        if (method != null && !method.equals(exchange?.method, ignoreCase = true)) return@filter false
-        // DNS lookups outnumber everything else and say little: listed only when the filter asks for them.
-        if (kind == null && hit.flow.kind() == TrafficKind.DNS) return@filter false
-        if (kind != null && hit.flow.kind() != kind) return@filter false
-        hit.matches(needle)
-    }.sortedWith(
-        compareByDescending<TrafficHit> { trafficKey(scope, it) == focus }
-            // Requests that were read come before connections nothing could be read from.
-            .thenByDescending { it.index != null }
-            .thenBy { it.flow.closed }
-            .thenByDescending { it.flow.lastAt },
-    )
-    val methods = hits.mapNotNull { hit -> hit.index?.let { hit.flow.exchanges.getOrNull(it)?.method } }.distinct()
-        .sortedBy { METHODS.indexOf(it).let { index -> if (index < 0) METHODS.size else index } }
-    LaunchedEffect(focus) {
-        if (focus != null) listState.animateScrollToItem(0)
-    }
+    val begin = rememberTrafficRecord(traffic)
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
@@ -230,6 +308,114 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(tr("Cancel")) } },
         )
     }
+    if (flows.isNotEmpty()) {
+        AskAssistantButton(
+            model,
+            nav,
+            subject = { cattivole.spectra.assistant.CardSubject.Traffic },
+            prepare = {
+                val name = session?.let { tr("Saved session of %s", dateTime(it.stoppedAt)) }
+                    ?: if (traffic.running) tr("Recording in progress") else tr("Current recording")
+                model.captures.keep(flows, name)
+            },
+        )
+    }
+    if (live && flows.isNotEmpty()) {
+        if (traffic.isCurrentSaved) {
+            Icon(
+                Icons.Rounded.CheckCircle,
+                contentDescription = tr("Saved"),
+                tint = Spectra.colors.success,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+        } else {
+            IconButton(onClick = {
+                val updating = traffic.currentSessionId != null
+                when {
+                    traffic.save() == null -> notify(tr("Nothing to save"))
+                    updating -> notify(tr("Saved session updated"))
+                    else -> notify(tr("Recording saved"))
+                }
+            }) {
+                Icon(
+                    Icons.Rounded.Save,
+                    contentDescription = if (traffic.currentSessionId != null) tr("Update saved session") else tr("Save recording"),
+                )
+            }
+        }
+    }
+    if (live) {
+        IconButton(onClick = {
+            when {
+                traffic.running -> traffic.stop()
+                else -> begin()
+            }
+        }) {
+            Icon(
+                if (traffic.running) Icons.Rounded.Stop else Icons.Rounded.FiberManualRecord,
+                contentDescription = if (traffic.running) tr("Stop recording") else tr("Start recording"),
+            )
+        }
+    }
+    if (session != null || (live && flows.isNotEmpty())) {
+        IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(
+                text = { Text(tr("Export HAR")) },
+                leadingIcon = { Icon(Icons.Rounded.Description, null) },
+                onClick = {
+                    menu = false
+                    coroutines.launch { shareHar(context, traffic, session?.id, flows) }
+                },
+            )
+            if (session != null) {
+                DropdownMenuItem(
+                    text = { Text(tr("Share")) },
+                    leadingIcon = { Icon(Icons.Rounded.IosShare, null) },
+                    onClick = {
+                        menu = false
+                        shareTextFile(context, trafficFileName(), trafficText(session))
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(tr("Delete recording")) },
+                    leadingIcon = { Icon(Icons.Rounded.Delete, null) },
+                    onClick = {
+                        menu = false
+                        confirmDelete = true
+                    },
+                )
+            } else {
+                DropdownMenuItem(
+                    text = { Text(tr("Share")) },
+                    leadingIcon = { Icon(Icons.Rounded.IosShare, null) },
+                    onClick = {
+                        menu = false
+                        val text = trafficText(TrafficSession("live", traffic.startedAt, System.currentTimeMillis(), flows))
+                        shareTextFile(context, trafficFileName(), text)
+                    },
+                )
+                if (!traffic.running) {
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text(tr("Clear connections")) },
+                        leadingIcon = { Icon(Icons.Rounded.DeleteSweep, null) },
+                        onClick = {
+                            menu = false
+                            confirmClear = true
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Starts a recording, after asking about connections on screen that are not saved. */
+@Composable
+internal fun rememberTrafficRecord(traffic: TrafficSniffer): () -> Unit {
+    var confirmNew by rememberSaveable { mutableStateOf(false) }
+    val begin = rememberTrafficConsent(traffic)
     if (confirmNew) {
         AlertDialog(
             onDismissRequest = { confirmNew = false },
@@ -253,276 +439,12 @@ fun SnifferScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
             },
         )
     }
-    SpectraScreen(
-        title = tr("Traffic"),
-        subtitle = when {
-            session != null -> dateTime(session.startedAt)
-            traffic.running -> tr("Recording…")
-            traffic.startedAt > 0 -> dateTime(traffic.startedAt)
-            else -> null
-        },
-        onBack = nav::back,
-        actions = {
-            if (flows.isNotEmpty()) {
-                AskAssistantButton(
-                    model,
-                    nav,
-                    subject = { cattivole.spectra.assistant.CardSubject.Traffic },
-                    prepare = {
-                        val name = session?.let { tr("Saved session of %s", dateTime(it.stoppedAt)) }
-                            ?: if (traffic.running) tr("Recording in progress") else tr("Current recording")
-                        model.captures.keep(flows, name)
-                    },
-                )
-            }
-            if (live && flows.isNotEmpty()) {
-                if (traffic.isCurrentSaved) {
-                    Icon(
-                        Icons.Rounded.CheckCircle,
-                        contentDescription = tr("Saved"),
-                        tint = Spectra.colors.success,
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                    )
-                } else {
-                    IconButton(onClick = {
-                        val updating = traffic.currentSessionId != null
-                        when {
-                            traffic.save() == null -> notify(tr("Nothing to save"))
-                            updating -> notify(tr("Saved session updated"))
-                            else -> notify(tr("Recording saved"))
-                        }
-                    }) {
-                        Icon(
-                            Icons.Rounded.Save,
-                            contentDescription = if (traffic.currentSessionId != null) tr("Update saved session") else tr("Save recording"),
-                        )
-                    }
-                }
-            }
-            if (live) {
-                IconButton(onClick = {
-                    when {
-                        traffic.running -> traffic.stop()
-                        traffic.unsaved -> confirmNew = true
-                        else -> begin()
-                    }
-                }) {
-                    Icon(
-                        if (traffic.running) Icons.Rounded.Stop else Icons.Rounded.FiberManualRecord,
-                        contentDescription = if (traffic.running) tr("Stop recording") else tr("Start recording"),
-                    )
-                }
-            }
-            if (session != null || (live && flows.isNotEmpty())) {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("Options")) }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(
-                        text = { Text(tr("Export HAR")) },
-                        leadingIcon = { Icon(Icons.Rounded.Description, null) },
-                        onClick = {
-                            menu = false
-                            coroutines.launch { shareHar(context, traffic, sessionId, flows) }
-                        },
-                    )
-                    if (session != null) {
-                        DropdownMenuItem(
-                            text = { Text(tr("Share")) },
-                            leadingIcon = { Icon(Icons.Rounded.IosShare, null) },
-                            onClick = {
-                                menu = false
-                                shareTextFile(context, trafficFileName(), trafficText(session))
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(tr("Delete recording")) },
-                            leadingIcon = { Icon(Icons.Rounded.Delete, null) },
-                            onClick = {
-                                menu = false
-                                confirmDelete = true
-                            },
-                        )
-                    } else {
-                        DropdownMenuItem(
-                            text = { Text(tr("Share")) },
-                            leadingIcon = { Icon(Icons.Rounded.IosShare, null) },
-                            onClick = {
-                                menu = false
-                                val text = trafficText(TrafficSession("live", traffic.startedAt, System.currentTimeMillis(), flows))
-                                shareTextFile(context, trafficFileName(), text)
-                            },
-                        )
-                        if (!traffic.running) {
-                            HorizontalDivider()
-                            DropdownMenuItem(
-                                text = { Text(tr("Clear connections")) },
-                                leadingIcon = { Icon(Icons.Rounded.DeleteSweep, null) },
-                                onClick = {
-                                    menu = false
-                                    confirmClear = true
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        searchQuery = query.takeIf { flows.isNotEmpty() },
-        onSearchChange = if (flows.isNotEmpty()) {
-            { query = it }
-        } else {
-            null
-        },
-        searchPlaceholder = tr("Host, app or address"),
-        listState = listState,
-        overlay = {
-            when {
-                flows.isEmpty() && live && !traffic.running -> EmptyState(
-                    Icons.Rounded.WifiTethering,
-                    tr("No connections yet"),
-                    tr("Start a recording to list the connections this phone opens."),
-                    action = tr("Start recording"),
-                    onAction = { if (traffic.unsaved) confirmNew = true else begin() },
-                )
-                flows.isEmpty() && live && traffic.running -> EmptyState(
-                    Icons.Rounded.WifiTethering,
-                    tr("Recording…"),
-                    tr("Connections show up here as this phone opens them."),
-                    busy = true,
-                )
-                visible.isEmpty() && needle.isNotEmpty() -> EmptyState(
-                    Icons.Rounded.WifiTethering,
-                    tr("No results"),
-                    tr("Nothing matches “%s”.", needle),
-                )
-                visible.isEmpty() && flows.isNotEmpty() -> EmptyState(
-                    Icons.Rounded.WifiTethering,
-                    tr("Nothing in this filter"),
-                    tr("No connection matches these filters."),
-                )
-            }
-        },
-    ) {
-        if (live) {
-            if (traffic.saved.isNotEmpty()) {
-                card(key = "saved-link", rows = listOf {
-                    ListRow(
-                        title = tr("Saved recordings (%d)", traffic.saved.size),
-                        leading = { IconTile(Icons.Rounded.History, MaterialTheme.colorScheme.secondary) },
-                        onClick = nav::savedTrafficList,
-                    )
-                })
-            }
-            traffic.error?.let { message ->
-                card(key = "error", rows = listOf { NoteRow(tr(message), warning = true) })
-            }
-            if (traffic.refusedCertificate && traffic.decryptTls) {
-                card(key = "refused", rows = listOf {
-                    NoteRow(
-                        tr("Apps keep refusing Spectra's certificate, and none has accepted it yet: it is probably not trusted. Connections that refused go through unread."),
-                        warning = true,
-                    )
-                })
-            }
-            card(
-                key = "tls",
-                rows = buildList {
-                    add { TlsSwitch(traffic) }
-                    if (traffic.decryptTls) {
-                        add {
-                            ListRow(
-                                title = tr("Hosts to decrypt"),
-                                subtitle = hostFilterSummary(traffic.hostFilter),
-                                leading = { IconTile(Icons.Rounded.Tune, MaterialTheme.colorScheme.primary) },
-                                onClick = nav::trafficHosts,
-                            )
-                        }
-                    }
-                    traffic.certificateFingerprint()?.let { digest ->
-                        if (traffic.decryptTls) add { CertificateState(traffic, digest) }
-                        add { InstallCertificateRow(traffic) }
-                        add { InfoRow(tr("Fingerprint"), digest, mono = true, copyable = true) }
-                    }
-                },
-            )
-            card(
-                key = "tools",
-                rows = listOf(
-                    {
-                        ListRow(
-                            title = tr("Throttling"),
-                            subtitle = throttleSummary(traffic.throttle),
-                            leading = { IconTile(Icons.Rounded.Speed, if (traffic.throttle.enabled) Spectra.colors.warning else MaterialTheme.colorScheme.secondary) },
-                            onClick = nav::trafficThrottle,
-                        )
-                    },
-                    {
-                        ListRow(
-                            title = tr("Map Local"),
-                            subtitle = mapLocalSummary(traffic),
-                            leading = { IconTile(Icons.Rounded.SwapHoriz, if (traffic.mapRules.any { it.enabled }) Spectra.colors.warning else MaterialTheme.colorScheme.secondary) },
-                            onClick = nav::trafficMapLocal,
-                        )
-                    },
-                ),
-            )
-        }
-        if (flows.isNotEmpty()) {
-            item(key = "proto-filters") {
-                ChipRow(contentPadding = FilterChipPadding) {
-                    ToggleChip(tr("All"), kind == null, { kindName = null })
-                    TrafficKind.entries.forEach { entry ->
-                        val present = hits.any { it.flow.kind() == entry }
-                        if (!present && kind != entry) return@forEach
-                        ToggleChip(entry.name, kind == entry, {
-                            kindName = if (kind == entry) null else entry.name
-                            if (entry != TrafficKind.HTTP) method = null
-                        })
-                    }
-                }
-            }
-            if (methods.isNotEmpty()) {
-                item(key = "method-filters") {
-                    ChipRow(contentPadding = FilterChipPadding) {
-                        ToggleChip(tr("All"), method == null, { method = null })
-                        methods.forEach { name ->
-                            ToggleChip(name, method.equals(name, true), {
-                                method = if (method.equals(name, true)) null else name
-                                if (kind != null && kind != TrafficKind.HTTP) kindName = TrafficKind.HTTP.name
-                            })
-                        }
-                    }
-                }
-            }
-        }
-        cardSection(
-            visible,
-            header = if (visible.any { it.index != null }) tr("%d requests", visible.size) else tr("%d connections", visible.size),
-            key = { trafficKey(scope, it) },
-            sectionKey = "flows",
-            dividerInset = 70.dp,
-        ) { hit ->
-            val exchange = hit.index?.let { hit.flow.exchanges.getOrNull(it) }
-            FlowRow(
-                hit.flow,
-                exchange,
-                focused = trafficKey(scope, hit) == focus,
-                onFocus = { traffic.toggleFocus(trafficKey(scope, hit)) },
-                onClick = {
-                    if (session != null) nav.savedTrafficFlow(session.id, hit.flow.id, hit.index)
-                    else nav.trafficFlow(hit.flow.id, hit.index)
-                },
-            )
-        }
-        if (live) {
-            card(
-                key = "multicast",
-                rows = listOf {
-                    NoteRow(tr("Multicast, including device discovery, is not forwarded while recording."), warning = false)
-                },
-            )
-        }
-    }
+    return { if (traffic.unsaved) confirmNew = true else begin() }
 }
+
+/** How much a recording holds. */
+internal fun trafficCounts(flows: List<TrafficFlow>): String =
+    tr("Requests: %d · connections: %d", flows.sumOf { it.exchanges.size }, flows.size)
 
 /** The recordings kept on this phone, newest first, with date and time. */
 @Composable
@@ -546,7 +468,7 @@ fun SavedTrafficScreen(model: SpectraModel, nav: Navigator) {
         ) { saved ->
             ListRow(
                 title = dateTime(saved.startedAt),
-                subtitle = tr("%d connections", saved.flows.size),
+                subtitle = trafficCounts(saved.flows),
                 detail = stopwatch((saved.stoppedAt - saved.startedAt).coerceAtLeast(0)),
                 leading = {
                     IconTile(
@@ -693,6 +615,20 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
                 }
             })
         }
+        if (http == null) {
+            cardSection(
+                flow.exchanges.withIndex().toList(),
+                header = tr("Requests: %d", flow.exchanges.size),
+                key = { "exchange-${it.index}" },
+                sectionKey = "exchanges",
+            ) { (index, request) ->
+                ListRow(
+                    title = request.summary,
+                    subtitle = exchangeLine(request),
+                    onClick = { if (sessionId != null) nav.savedTrafficFlow(sessionId, flow.id, index) else nav.trafficFlow(flow.id, index) },
+                )
+            }
+        }
         if (http != null) {
             val parameters = http.query + http.parameters
             if (parameters.isNotEmpty()) {
@@ -731,13 +667,13 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
             }
             if (http.requestBodyStored || (http.requestBodyBytes ?: 0) > 0) {
                 freeCard(key = "request-body", header = tr("Request body")) {
-                    BodyContent(traffic, sessionId, flow, exchange!!, http, request = true, full = false) {
+                    BodyContent(model, nav, sessionId, flow, exchange!!, http, request = true, full = false) {
                         nav.trafficBody(flow.id, exchange, sessionId, request = true)
                     }
                 }
             }
             freeCard(key = "response-body", header = tr("Response")) {
-                BodyContent(traffic, sessionId, flow, exchange!!, http, request = false, full = false) {
+                BodyContent(model, nav, sessionId, flow, exchange!!, http, request = false, full = false) {
                     nav.trafficBody(flow.id, exchange, sessionId, request = false)
                 }
             }
@@ -765,7 +701,7 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
 }
 
 @Composable
-private fun FlowRow(
+internal fun FlowRow(
     flow: TrafficFlow,
     exchange: HttpExchange?,
     focused: Boolean,
@@ -773,9 +709,10 @@ private fun FlowRow(
     onClick: () -> Unit,
 ) {
     val subtitle = buildList {
-        add("${flow.protocol} ${flow.destinationPort}")
+        // A request's own row names the site; a connection's title already does.
+        if (exchange != null) add(flow.title) else add("${flow.protocol} ${flow.destinationPort}")
         flow.app?.let { add(it) }
-        if (flow.host != null) add(flow.destination)
+        if (exchange == null && flow.host != null) add(flow.destination)
     }.joinToString(" · ")
     WithCopyMenu(
         listOfNotNull(
@@ -788,6 +725,7 @@ private fun FlowRow(
             title = exchange?.summary ?: flow.title,
             subtitle = subtitle,
             detail = exchange?.let { exchangeLine(it) }
+                ?: tr("Requests: %d", flow.exchanges.size).takeIf { exchange == null && flow.exchanges.isNotEmpty() }
                 ?: flow.request?.takeIf { exchange == null }
                 ?: tr("This app did not trust the Spectra certificate.").takeIf { flow.refused && exchange == null },
             leading = { IconTile(flow.icon(), flow.tint()) },
@@ -914,32 +852,10 @@ private fun TrafficFlow.tint() = when {
     else -> MaterialTheme.colorScheme.secondary
 }
 
-private fun TrafficFlow.matches(needle: String): Boolean {
-    if (needle.isEmpty()) return true
-    return title.contains(needle, true) ||
-        destination.contains(needle, true) ||
-        app?.contains(needle, true) == true ||
-        request?.contains(needle, true) == true ||
-        protocol.contains(needle, true) ||
-        destinationPort.toString() == needle
-}
-
-private fun TrafficHit.matches(needle: String): Boolean {
-    if (needle.isEmpty()) return true
-    val exchange = index?.let { flow.exchanges.getOrNull(it) }
-    if (exchange != null) {
-        if (exchange.method.contains(needle, true)) return true
-        if (exchange.path.contains(needle, true)) return true
-        if (exchange.status?.toString() == needle) return true
-        if ((exchange.query + exchange.parameters).any { it.name.contains(needle, true) || it.value.contains(needle, true) }) return true
-    }
-    return flow.matches(needle)
-}
-
 private fun trafficSummary(traffic: TrafficSniffer): String = when {
     traffic.error != null && !traffic.running -> tr(traffic.error!!)
     traffic.running && traffic.flows.isEmpty() -> tr("Waiting for connections")
-    traffic.flows.isNotEmpty() -> tr("%d connections", traffic.flows.size)
+    traffic.flows.isNotEmpty() -> trafficCounts(traffic.flows)
     else -> tr("Forward this phone's connections and list them")
 }
 
@@ -1002,7 +918,7 @@ fun TrafficBodyScreen(model: SpectraModel, nav: Navigator, flowId: Long, exchang
     }
     SpectraScreen(title = title, subtitle = http.summary, onBack = nav::back) {
         freeCard("body") {
-            BodyContent(traffic, sessionId, flow, exchange, http, request = request, full = true, onOpen = null)
+            BodyContent(model, nav, sessionId, flow, exchange, http, request = request, full = true, onOpen = null)
         }
     }
 }
@@ -1012,12 +928,13 @@ private class LoadedBody(val bytes: ByteArray?, val view: BodyView?)
 
 /**
  * One side's body: a picture, formatted JSON, text, or the bytes in hex, with a
- * note when it was cut or not kept. [full] shows all of it; otherwise a start,
- * with [onOpen] leading to the rest.
+ * note when it was cut or not kept. A start of it, with a way to the rest;
+ * [full] is that rest for a picture or bytes, and [onOpen] leads there.
  */
 @Composable
 private fun BodyContent(
-    traffic: TrafficSniffer,
+    model: SpectraModel,
+    nav: Navigator,
     sessionId: String?,
     flow: TrafficFlow,
     index: Int,
@@ -1026,6 +943,8 @@ private fun BodyContent(
     full: Boolean,
     onOpen: (() -> Unit)?,
 ) {
+    val traffic = model.traffic
+    val title = if (request) tr("Request body") else tr("Response")
     val stored = if (request) http.requestBodyStored else http.responseBodyStored
     val type = http.header("Content-Type", response = !request)
     val loaded by produceState<LoadedBody?>(null, flow.id, index, request, stored, sessionId) {
@@ -1034,7 +953,6 @@ private fun BodyContent(
             LoadedBody(bytes, bytes?.let { BodyPreview.of(it, type) })
         }
     }
-    val copy = rememberCopier()
     val cut = if (request) http.requestCut else http.responseCut
     val wire = if (request) http.requestBodyBytes else http.responseBodyBytes
     val legacy = if (request) null else http.responseJson
@@ -1045,7 +963,7 @@ private fun BodyContent(
         }
         val state = loaded
         when {
-            !stored && legacy != null -> MonoText(legacy, full, onOpen, copy)
+            !stored && legacy != null -> BodyTextPreview(legacy, title, model, nav)
             !stored && (wire ?: 0) > 0 -> NoteRow(
                 tr("This body was not kept: the recording reached its limit for stored bodies."),
                 warning = true,
@@ -1072,8 +990,8 @@ private fun BodyContent(
                         Text(tr("Image, %s. This phone cannot draw this format.", byteSize(view.bytes.size.toLong())), style = MaterialTheme.typography.bodyMedium)
                     }
                 }
-                is BodyView.Json -> MonoText(view.text, full, onOpen, copy)
-                is BodyView.Text -> MonoText(view.text, full, onOpen, copy)
+                is BodyView.Json -> BodyTextPreview(view.text, title, model, nav)
+                is BodyView.Text -> BodyTextPreview(view.text, title, model, nav)
                 is BodyView.Binary -> {
                     val encoding = http.header("Content-Encoding", response = !request)
                     Text(
@@ -1094,23 +1012,6 @@ private fun BodyContent(
                 BodyView.Empty, null -> NoteRow(if (request) tr("This request has no body.") else tr("This response has no body."), warning = false)
             }
         }
-    }
-}
-
-/** Monospaced text: a start of it, or as much as a screen can carry. */
-@Composable
-private fun MonoText(text: String, full: Boolean, onOpen: (() -> Unit)?, copy: (String, String) -> Unit) {
-    val limit = if (full) FULL_TEXT else PREVIEW_TEXT
-    val shown = if (text.length > limit) text.take(limit) else text
-    SelectionContainer {
-        Text(shown, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (!full && text.length > limit && onOpen != null) TextButton(onClick = onOpen) { Text(tr("Show all")) }
-        TextButton(onClick = { copy(tr("Body"), text) }) { Text(tr("Copy")) }
-    }
-    if (full && text.length > limit) {
-        Text(tr("The first %s are shown.", tr("%d characters", limit)), style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -1184,8 +1085,8 @@ fun TrafficMessageScreen(model: SpectraModel, nav: Navigator, flowId: Long, exch
         freeCard("payload") {
             when (val view = loaded) {
                 null -> Text(tr("Loading…"), style = MaterialTheme.typography.bodyMedium)
-                is BodyView.Json -> MonoText(view.text, full = true, onOpen = null, copy = copy)
-                is BodyView.Text -> MonoText(view.text, full = true, onOpen = null, copy = copy)
+                is BodyView.Json -> BodyTextPreview(view.text, tr("Message"), model, nav)
+                is BodyView.Text -> BodyTextPreview(view.text, tr("Message"), model, nav)
                 is BodyView.Binary -> SelectionContainer {
                     Text(view.hex, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                 }
@@ -1195,9 +1096,6 @@ fun TrafficMessageScreen(model: SpectraModel, nav: Navigator, flowId: Long, exch
         }
     }
 }
-
-private const val PREVIEW_TEXT = 3_000
-private const val FULL_TEXT = 400_000
 
 /** Sends a request again, as recorded or edited, and shows what came back. */
 @Composable
@@ -1281,8 +1179,8 @@ fun TrafficRepeatScreen(model: SpectraModel, nav: Navigator) {
                     }
                     val type = answer.headers.firstOrNull { it.name.equals("Content-Type", true) }?.value
                     when (val view = remember(answer) { BodyPreview.of(answer.body, type) }) {
-                        is BodyView.Json -> MonoText(view.text, full = true, onOpen = null, copy = copy)
-                        is BodyView.Text -> MonoText(view.text, full = true, onOpen = null, copy = copy)
+                        is BodyView.Json -> BodyTextPreview(view.text, tr("Response body"), model, nav)
+                        is BodyView.Text -> BodyTextPreview(view.text, tr("Response body"), model, nav)
                         is BodyView.Binary -> SelectionContainer {
                             Text(view.hex, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                         }
@@ -1653,8 +1551,7 @@ private suspend fun shareHar(context: Context, traffic: TrafficSniffer, sessionI
     shareTextFile(context, "spectra-traffic-$stamp.har", text, mime = "application/json")
 }
 
-private data class TrafficHit(val flow: TrafficFlow, val index: Int?)
+internal data class TrafficHit(val flow: TrafficFlow, val index: Int?)
 
-private fun trafficKey(scope: String, hit: TrafficHit): String = "$scope:${hit.flow.id}:${hit.index ?: "-"}"
+internal fun trafficKey(scope: String, hit: TrafficHit): String = "$scope:${hit.flow.id}:${hit.index ?: "-"}"
 
-private val METHODS = listOf("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")

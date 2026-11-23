@@ -120,7 +120,7 @@ class BleGattClient(context: Context) {
         val parts = mutableListOf<String>()
         if (p and BluetoothGattCharacteristic.PROPERTY_READ != 0) parts.add("Read")
         if (p and BluetoothGattCharacteristic.PROPERTY_WRITE != 0) parts.add("Write")
-        if (p and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) parts.add("WriteNR")
+        if (p and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) parts.add("Write without response")
         if (p and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) parts.add("Notify")
         if (p and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0) parts.add("Indicate")
         return parts.joinToString(" · ")

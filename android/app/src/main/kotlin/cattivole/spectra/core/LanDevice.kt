@@ -141,7 +141,8 @@ class LanDevice(
     var isGateway: Boolean = false,
     var isLocalDevice: Boolean = false,
     profile: LanProfile = LanProfile(),
-    val firstSeen: Long = System.currentTimeMillis(),
+    /** May be earlier than anything found since launch: the host was met before. */
+    var firstSeen: Long = System.currentTimeMillis(),
     var lastSeen: Long = firstSeen,
 ) {
     var hostnames: List<String> = hostnames

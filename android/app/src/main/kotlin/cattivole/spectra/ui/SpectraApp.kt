@@ -124,6 +124,10 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
 
     override fun internet() = nav.navigate("assistant/internet")
 
+    override fun searches() = nav.navigate("assistant/searches")
+
+    override fun search(id: String) = nav.navigate("assistant/searches/${Uri.encode(id)}")
+
 
     /** A ✨ button: a summary card about what this screen shows — the findings at once, the model's words under them. */
     fun summary(model: cattivole.spectra.SpectraModel, subject: cattivole.spectra.assistant.CardSubject) {
@@ -149,6 +153,11 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
     fun traceRoute() = nav.navigate("trace-route")
 
     fun traffic() = nav.navigate("traffic")
+
+    fun trafficList() = nav.navigate("traffic/list")
+
+    /** The text put in `TrafficSniffer.openText`. */
+    fun trafficText() = nav.navigate("traffic/text")
 
     fun savedTraffic(id: String) = nav.navigate("traffic/saved/${Uri.encode(id)}")
 
@@ -349,9 +358,11 @@ fun SpectraApp(model: SpectraModel) {
                     composable("link-check") { LinkCheckScreen(model, navigator) }
                     composable("speed-test") { SpeedTestScreen(model, navigator) }
                     composable("trace-route") { TraceScreen(model, navigator) }
-                    composable("traffic") { SnifferScreen(model, navigator, sessionId = null) }
+                    composable("traffic") { SnifferScreen(model, navigator) }
+                    composable("traffic/list") { TrafficListScreen(model, navigator, sessionId = null) }
+                    composable("traffic/text") { BodyTextScreen(model, navigator) }
                     composable("traffic/sessions") { SavedTrafficScreen(model, navigator) }
-                    composable("traffic/saved/{id}") { SnifferScreen(model, navigator, sessionId = it.text("id")) }
+                    composable("traffic/saved/{id}") { TrafficListScreen(model, navigator, sessionId = it.text("id")) }
                     composable("traffic/hosts") { TrafficHostsScreen(model, navigator) }
                     composable("traffic/repeat") { TrafficRepeatScreen(model, navigator) }
                     composable("traffic/throttle") { TrafficThrottleScreen(model, navigator) }
@@ -433,6 +444,10 @@ fun SpectraApp(model: SpectraModel) {
                     composable(Tab.Assistant.start) { cattivole.spectra.assistant.ui.AssistantHomeScreen(model, navigator) }
                     composable("${Tab.Assistant.cardRoute}/{id}") { summaryCard(model, navigator, it) }
                     composable("assistant/models") { cattivole.spectra.assistant.ui.AssistantModelsScreen(model, navigator) }
+                    composable("assistant/searches") { cattivole.spectra.assistant.ui.AssistantSearchesScreen(model, navigator) }
+                    composable("assistant/searches/{id}") {
+                        cattivole.spectra.assistant.ui.AssistantSearchScreen(model, navigator, it.arguments?.getString("id").orEmpty())
+                    }
                     composable("assistant/internet") { cattivole.spectra.assistant.ui.AssistantInternetScreen(model, navigator) }
                 }
             }

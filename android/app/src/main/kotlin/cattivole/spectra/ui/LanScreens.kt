@@ -48,6 +48,7 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.VpnLock
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -73,6 +74,8 @@ import cattivole.spectra.core.DiscoveredPort
 import cattivole.spectra.core.LanDevice
 import cattivole.spectra.core.NotableDevice
 import cattivole.spectra.core.webAddress
+
+private const val LAN_HELD_BY_VPN = "The VPN that is on takes the local network into its tunnel and does not let apps go around it, so devices here cannot be reached. Turn the VPN off, let it bypass the local network, or leave Spectra out of it in the VPN app."
 
 @Composable
 private fun LanDevice.tint(): Color = when {
@@ -242,6 +245,13 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
                     action = tr("Try again"),
                     onAction = lan::scan,
                 )
+                lan.devices.isEmpty() && !lan.scanning && lan.heldByVpn -> EmptyState(
+                    Icons.Rounded.VpnLock,
+                    tr("Held by the VPN"),
+                    tr(LAN_HELD_BY_VPN),
+                    action = tr("Try again"),
+                    onAction = lan::scan,
+                )
                 lan.devices.isEmpty() && !lan.scanning -> EmptyState(
                     Icons.Rounded.Lan,
                     tr("Local network"),
@@ -262,6 +272,7 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
                         lan.scanning -> tr("Scanning…")
                         lan.noNetwork && lan.ipv6Only -> tr("IPv6 only")
                         lan.noNetwork -> tr("No Wi-Fi")
+                        lan.heldByVpn -> tr("Held by the VPN")
                         info != null -> info.localIp
                         else -> "LAN"
                     },
@@ -269,6 +280,7 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
                         lan.scanning -> lanPhase(lan.progress)
                         lan.noNetwork && lan.ipv6Only -> tr("No IPv4 to scan")
                         lan.noNetwork -> tr("Join a network")
+                        lan.heldByVpn -> tr("Not scanned")
                         info != null -> listOfNotNull("/${info.prefixLength}", info.gateway?.let { tr("gateway %s", it) }, lan.lastScanDate?.let { ago(it) })
                             .joinToString(" · ")
                         else -> tr("Tap to scan")
@@ -281,8 +293,10 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
         if (lan.scanning) {
             card(key = "progress", rows = listOf { ProgressRow(lanPhase(lan.progress), lan.fraction) })
         }
-        val joined = model.store.networks().values.firstOrNull { model.wifiJoiner.isCurrent(it) }
-        if (joined != null && joined.latest.auth.raw == 0) {
+        if (lan.heldByVpn && !lan.scanning && lan.devices.isNotEmpty()) {
+            card(key = "held-by-vpn", rows = listOf { NoteRow(tr(LAN_HELD_BY_VPN), warning = true) })
+        }
+        if (model.onOpenWifi) {
             card(key = "open-wifi", header = tr("Open Wi-Fi"), rows = listOf {
                 NoteRow(tr("This network has no password. Anyone nearby can join it and read traffic that is not encrypted."), warning = true)
             })
@@ -381,7 +395,7 @@ private fun StreamAddressDialog(address: String, onChange: (String) -> Unit, onD
                     notify(tr("No app here opens %s links. Install a player such as VLC; the address is copied.", address.substringBefore("://")))
                 } catch (_: Exception) {
                 }
-            }) { Text(tr("Open")) }
+            }) { Text(tr("Open stream")) }
         },
         dismissButton = {
             Row {
@@ -741,7 +755,7 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
             header = tr("Observed"),
             key = "observed",
             rows = listOf(
-                { InfoRow(tr("First seen"), clockTime(device.firstSeen)) },
+                { InfoRow(tr("First seen"), dateTime(device.firstSeen)) },
                 { InfoRow(tr("Last seen"), ago(device.lastSeen, entry?.savedAt ?: System.currentTimeMillis())) },
             ),
         )

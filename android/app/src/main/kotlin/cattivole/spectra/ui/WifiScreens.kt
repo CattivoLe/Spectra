@@ -132,8 +132,6 @@ internal fun WifiFilterRow(
     bands: Set<Band>,
     band: Band?,
     onBand: (Band?) -> Unit,
-    showOut: Boolean,
-    onShowOut: () -> Unit,
 ) {
     ChipRow(contentPadding = FilterChipPadding) {
         ToggleChip(tr("Open"), openOnly, onOpenOnly)
@@ -145,7 +143,6 @@ internal fun WifiFilterRow(
                 ToggleChip(bandLabel(shown), band == shown, { onBand(if (band == shown) null else shown) })
             }
         }
-        ToggleChip(tr("Out of range"), showOut, onShowOut)
     }
 }
 
@@ -215,6 +212,8 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
                             nav.sensorTab()
                         },
                     )
+                    HorizontalDivider()
+                    CheckedMenuItem(tr("Show out of range"), showOut) { showOut = !showOut }
                     if (all.isNotEmpty()) {
                         HorizontalDivider()
                         DropdownMenuItem(
@@ -284,8 +283,6 @@ fun NetworksScreen(model: SpectraModel, nav: Navigator) {
                 bands = bands,
                 band = band,
                 onBand = { band = it },
-                showOut = showOut,
-                onShowOut = { showOut = !showOut },
             )
         }
         phoneRadioNote(model)?.takeIf { all.isNotEmpty() }?.let { note ->
@@ -537,7 +534,7 @@ fun NetworkRow(
     val facts = when {
         network.wasInLastScan -> buildList {
             add(tr("Ch %d", reading.channel))
-            add(reading.auth.name)
+            add(reading.auth.shownName())
             Capabilities.generation(reading.capabilities, reading.phyNote).takeIf { it != "—" }?.let(::add)
         }.joinToString(" · ")
         network.isInRange -> tr("Missed scans: %d", network.missedScans)
@@ -572,7 +569,7 @@ fun NetworkRow(
                 if (current) {
                     Icon(Icons.Rounded.CheckCircle, contentDescription = tr("Connected"), tint = Spectra.colors.success, modifier = Modifier.size(16.dp))
                 }
-                Icon(lock, contentDescription = reading.auth.name, tint = lockTint, modifier = Modifier.size(15.dp))
+                Icon(lock, contentDescription = reading.auth.shownName(), tint = lockTint, modifier = Modifier.size(15.dp))
                 if (known) {
                     Icon(Icons.Rounded.Key, contentDescription = tr("Password saved"), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(15.dp))
                 }
@@ -828,7 +825,7 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
                         Pill(bandLabel(reading.band), MaterialTheme.colorScheme.secondary)
                         Pill(if (network.source == RadioSource.SENSOR) tr("Sensor") else tr("Phone"), MaterialTheme.colorScheme.primary)
                         val (_, lockTint) = securityIcon(reading)
-                        Pill(reading.auth.name, lockTint)
+                        Pill(reading.auth.shownName(), lockTint)
                     }
                 }
             }
@@ -911,7 +908,7 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
             header = tr("Security"),
             key = "security",
             rows = listOf(
-                { InfoRow(tr("Authentication"), reading.auth.name) },
+                { InfoRow(tr("Authentication"), reading.auth.shownName()) },
                 { InfoRow(tr("Pairwise cipher"), tr(reading.pairwiseCipher.name)) },
                 { InfoRow(tr("Group cipher"), tr(reading.groupCipher.name)) },
                 { InfoRow("WPS", if (reading.capabilities and Capabilities.WPS != 0) tr("On") else tr("Off")) },
@@ -949,7 +946,7 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
                 rows = buildList {
                     add { InfoRow(tr("Volume"), byteSize(traffic.bytes)) }
                     add { InfoRow(tr("Packets"), "${traffic.packets}") }
-                    bitrate(traffic.bytes, cattivole.spectra.core.TrafficSnapshot.WINDOW_MS)?.let { add { InfoRow(tr("Est. bitrate"), it) } }
+                    add { InfoRow(tr("Est. bitrate"), bitrate(traffic.estimatedBitsPerSecond)) }
                 },
             )
         }
@@ -957,9 +954,7 @@ fun NetworkDetail(model: SpectraModel, nav: Navigator, id: MacAddress?, entryId:
             header = tr("Observed"),
             key = "observed",
             rows = buildList {
-                val recorded = model.history.earliestNetworkSeen(network.id)
-                val first = if (recorded != null && recorded < network.firstSeen) recorded else network.firstSeen
-                add { InfoRow(tr("First seen"), dateTime(first)) }
+                add { InfoRow(tr("First seen"), dateTime(network.firstSeen)) }
                 add { InfoRow(tr("Last seen"), ago(network.lastSeen, if (snapshot) entry?.savedAt ?: now else now)) }
                 add { InfoRow(tr("Readings"), "${network.samples.size}") }
                 if (network.missedScans > 0) add { InfoRow(tr("Missed scans"), "${network.missedScans}") }
@@ -1032,15 +1027,12 @@ private fun LazyListScope.connectionCard(
                 add { NoteRow(tr("Saved in Android. If the phone stays on another network, pick “%s” in the Wi‑Fi list.", ssid), warning = false) }
                 add { ActionRow(tr("Open the Wi‑Fi list"), Icons.Rounded.Wifi, onClick = onOpenPanel) }
             }
-            joiner.isFor(ssid) && status is WifiJoiner.Status.Joined -> {
-                add { StatusRow(tr("Connected")) }
-            }
             joiner.isFor(ssid) && status is WifiJoiner.Status.Suggested -> {
                 add { NoteRow(tr("Added. Android joins “%s” when it is in range; it may ask you to approve Spectra once.", ssid), warning = false) }
                 add { ActionRow(tr("Forget this network"), Icons.Rounded.DeleteSweep, onClick = { joiner.forget(ssid) }, tint = Spectra.colors.danger) }
             }
-            joiner.isFor(ssid) && status is WifiJoiner.Status.Failed -> {
-                add { NoteRow(reasonText(status.reason), warning = true) }
+            joiner.failure(ssid) != null -> {
+                joiner.failure(ssid)?.let { reason -> add { NoteRow(reasonText(reason), warning = true) } }
                 addAll(connectRows)
             }
             method != AuthMode.JoinMethod.UNSUPPORTED -> addAll(connectRows)
@@ -1170,7 +1162,8 @@ private fun captureLabel(network: TrackedNetwork): String {
     return raw.replace(Regex("[^A-Za-z0-9_-]"), "-").take(24).ifEmpty { "capture" }
 }
 
-private fun reasonText(reason: WifiJoiner.Reason): String = when (reason) {
+internal fun reasonText(reason: WifiJoiner.Reason): String = when (reason) {
+    WifiJoiner.Reason.NOT_JOINED -> tr("The phone did not join. The password may be wrong, or the network too weak.")
     WifiJoiner.Reason.WEP_UNSUPPORTED -> tr("WEP networks can't be added on this version of Android.")
     WifiJoiner.Reason.ADD_FAILED -> tr("Android would not add this network.")
     WifiJoiner.Reason.PERMISSION -> tr("Spectra is not allowed to change Wi-Fi settings.")

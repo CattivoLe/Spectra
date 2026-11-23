@@ -30,7 +30,8 @@ class LinkReport {
     var access: AccessReport? = null
 }
 
-enum class LinkStatus { ONLINE, CAPTIVE, LAN, OFFLINE, NO_NETWORK }
+/** [VPN_ONLY]: the VPN does not let the check leave by the chosen network. Like [NO_NETWORK], it is never saved. */
+enum class LinkStatus { ONLINE, CAPTIVE, LAN, OFFLINE, NO_NETWORK, VPN_ONLY }
 
 /** A finished connection check, kept on the LAN history session for that network. */
 data class SavedConnection(

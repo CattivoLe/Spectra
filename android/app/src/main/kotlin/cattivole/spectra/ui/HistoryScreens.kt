@@ -2,14 +2,11 @@ package cattivole.spectra.ui
 
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -25,7 +22,6 @@ import androidx.compose.material.icons.rounded.FileOpen
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.GppBad
-import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.MyLocation
@@ -45,11 +41,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -67,6 +60,19 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.core.Band
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import cattivole.spectra.core.BleDevice
+import cattivole.spectra.core.DeauthEvent
+import cattivole.spectra.core.HistoryLine
+import cattivole.spectra.core.LanDevice
+import cattivole.spectra.core.ProbingDevice
+import cattivole.spectra.core.SavedConnection
+import cattivole.spectra.core.TrackedNetwork
+import cattivole.spectra.core.matching
 import cattivole.spectra.core.HistoryArea
 import cattivole.spectra.core.HistoryEntry
 import cattivole.spectra.core.forArea
@@ -124,23 +130,15 @@ fun HistoryButton(nav: Navigator, area: HistoryArea) {
 }
 
 /** How the saved sessions are grouped on screen. */
-private enum class Grouping { DATE, PLACE, LIST }
+private enum class Grouping { DATE, PLACE }
 
-/** Order of sessions inside a group, and of the flat list. */
+/** Order of the sessions. */
 private enum class HistorySort { NEWEST, OLDEST, NAME, COUNT }
 
-/** One collapsible group of sessions: a day, or a place. */
-private class HistoryGroup(
-    val id: String,
-    val label: String,
-    val entries: List<HistoryEntry>,
-) {
-    /** Which scan types this group holds, for the icon row on the header. */
-    val kinds: List<String> get() = entries.flatMap { it.shownKinds() }.distinct()
-    val itemCount: Int get() = entries.sumOf { it.itemCount }
-}
-
-/** One tab's saved sessions: only the records of [area], each session cut down to them. */
+/**
+ * One tab's saved sessions: only the records of [area], each session cut down to them. A session is a section that
+ * opens onto its records, with no page between.
+ */
 @Composable
 fun HistoryScreen(model: SpectraModel, nav: Navigator, area: HistoryArea) {
     model.generation
@@ -159,8 +157,8 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator, area: HistoryArea) {
     var query by rememberSaveable { mutableStateOf("") }
     var importedShelf by rememberSaveable { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
-    // Today starts open. Every other day stays folded until it is tapped.
-    var expanded by remember { mutableStateOf(setOf(todayGroupId())) }
+    // The newest session starts open. Every other stays folded until it is tapped.
+    var expanded by rememberSaveable { mutableStateOf<List<String>?>(null) }
     val context = LocalContext.current
     val notify = LocalNotify.current
     val importFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -211,11 +209,8 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator, area: HistoryArea) {
     val shown = all.filter { (it.importedFrom != null) == importedShelf }
     val needle = query.trim()
     val matched = shown.filter { it.matchesQuery(needle) }.ordered(sort)
-    val groups = when (grouping) {
-        Grouping.DATE -> byDate(matched)
-        Grouping.PLACE -> byPlace(matched)
-        Grouping.LIST -> emptyList()
-    }
+    val listed = if (grouping == Grouping.PLACE) byPlace(matched) else matched
+    val open = expanded ?: listOfNotNull(matched.maxByOrNull { it.savedAt }?.id)
     val pins = mapPins(matched)
     val showMap = grouping == Grouping.PLACE && pins.isNotEmpty()
     SpectraScreen(
@@ -308,53 +303,202 @@ fun HistoryScreen(model: SpectraModel, nav: Navigator, area: HistoryArea) {
                 }
             }
         }
-        if (!showMap && grouping == Grouping.LIST && matched.isNotEmpty()) {
-            cardSection(
-                matched,
-                header = tr("Saved: %d", matched.size),
-                headerIcon = Icons.AutoMirrored.Rounded.ViewList,
-                key = { it.id },
-                sectionKey = "list",
-                dividerInset = 70.dp,
-            ) { entry ->
-                HistoryRow(
-                    entry,
-                    showPlace = true,
-                    onOpen = { nav.history(area, entry.id) },
-                    onDelete = { history.delete(entry.id, area) },
+        if (!showMap) {
+            for (session in listed) {
+                // A search opens every session it found something in, narrowed to what it found.
+                val entry = session.matching(needle)
+                val isOpen = needle.isNotEmpty() || session.id in open
+                historySession(
+                    model, nav, entry, area,
+                    placeFirst = grouping == Grouping.PLACE,
+                    expanded = isOpen,
+                    onToggle = { expanded = if (session.id in open) open - session.id else open + session.id },
+                    onDelete = { history.delete(session.id, area) },
+                    all = session,
                 )
             }
         }
-        for (group in groups) {
-            val open = group.id in expanded
-            val toggle = { expanded = if (open) expanded - group.id else expanded + group.id }
-            val icon = if (grouping == Grouping.PLACE) Icons.Rounded.Place else Icons.Rounded.CalendarMonth
-            if (open) {
-                cardSection(
-                    group.entries,
-                    header = group.label,
-                    headerIcon = icon,
-                    headerTrailing = { GroupTrailing(group.kinds, group.itemCount, expanded = true) },
-                    onHeaderClick = toggle,
-                    key = { it.id },
-                    sectionKey = group.id,
-                    dividerInset = 70.dp,
-                ) { entry ->
-                    HistoryRow(
-                        entry,
-                        showPlace = grouping == Grouping.DATE,
-                        onOpen = { nav.history(area, entry.id) },
-                        onDelete = { history.delete(entry.id, area) },
-                    )
-                }
-            } else {
-                item(key = "head-${group.id}", contentType = "section-header") {
-                    GroupHeader(group.label, icon, group.kinds, group.itemCount, expanded = false, Modifier.animateItem(), toggle)
-                }
-            }
+    }
+}
+
+/** One session: its header, and once open every record, as rows that open the same cards as the live lists. */
+private fun LazyListScope.historySession(
+    model: SpectraModel,
+    nav: Navigator,
+    entry: HistoryEntry,
+    area: HistoryArea,
+    placeFirst: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onDelete: () -> Unit,
+    /** The session without the search narrowing it, for its export and its place. */
+    all: HistoryEntry,
+) {
+    item(key = "head-${entry.id}", contentType = "session-header") {
+        SessionHeader(entry, all, placeFirst, expanded, Modifier.animateItem(), { nav.history(area, entry.id) }, onDelete, onToggle)
+    }
+    if (!expanded) return
+    val records = entry.records()
+    itemsIndexed(records, key = { _, record -> "${entry.id}/${record.key}" }, contentType = { _, record -> record.javaClass.simpleName }) { index, record ->
+        CardCell(cardPosition(index, records.size), Modifier.animateItem(), dividerInset = record.dividerInset) {
+            HistoryRecordRow(model, nav, entry, record)
         }
-        if (shown.isNotEmpty()) {
-            item(key = "hint") { SectionFooter(tr("Swipe a saved scan to the left to delete it.")) }
+    }
+    item(key = "foot-${entry.id}", contentType = "session-footer") {
+        SectionFooter("${entry.importedFrom ?: sourceName(entry.source)} · ${dateTime(entry.savedAt)}", Modifier.animateItem())
+    }
+}
+
+/** One record of a session, as a row of its list. */
+private sealed class HistoryRecord(val key: String, val dividerInset: Dp = 70.dp) {
+    class Deauth(val event: DeauthEvent) : HistoryRecord("d-${event.id}")
+    class Network(val network: TrackedNetwork) : HistoryRecord("n-${network.id.text}")
+    class ProbeCount(val count: Int) : HistoryRecord("probes", 16.dp)
+    class Probe(val probe: ProbingDevice) : HistoryRecord("p-${probe.mac.text}")
+    class Connection(val saved: SavedConnection) : HistoryRecord("c-${saved.checkedAt}")
+    class Host(val device: LanDevice) : HistoryRecord("h-${device.ipAddress}")
+    class Ble(val device: BleDevice) : HistoryRecord("b-${device.address}")
+
+    /** A capture from the Cardputer stores summary lines, not the records. */
+    class Line(index: Int, val line: HistoryLine) : HistoryRecord("l-$index", 16.dp)
+}
+
+private fun HistoryEntry.records(): List<HistoryRecord> = buildList {
+    deauths.mapTo(this) { HistoryRecord.Deauth(it) }
+    networks.sortedForWifi(WifiSort.SIGNAL).mapTo(this) { HistoryRecord.Network(it) }
+    if (probes.isNotEmpty()) add(HistoryRecord.ProbeCount(probes.size))
+    probes.mapTo(this) { HistoryRecord.Probe(it) }
+    connections.mapTo(this) { HistoryRecord.Connection(it) }
+    lan.mapTo(this) { HistoryRecord.Host(it) }
+    bluetooth.mapTo(this) { HistoryRecord.Ble(it) }
+    if (!hasRecords) lines.forEachIndexed { index, line -> add(HistoryRecord.Line(index, line)) }
+}
+
+@Composable
+private fun HistoryRecordRow(model: SpectraModel, nav: Navigator, entry: HistoryEntry, record: HistoryRecord) {
+    when (record) {
+        is HistoryRecord.Deauth -> DeauthRow(record.event)
+        is HistoryRecord.Network -> NetworkRow(
+            record.network,
+            onClick = { nav.network(record.network.id, entry.id) },
+            now = entry.savedAt,
+            known = record.network.hasStoredPassword(model.link.knownSsids()),
+        )
+        is HistoryRecord.ProbeCount -> Text(
+            tr("Probing: %d", record.count),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        )
+        is HistoryRecord.Probe -> ProbeRow(record.probe, null, onClick = { nav.client(record.probe.mac, entry.id) })
+        is HistoryRecord.Connection -> SavedConnectionRow(record.saved) { nav.savedConnection(entry.id, record.saved.checkedAt) }
+        is HistoryRecord.Host -> DeviceRow(record.device, onClick = { nav.host(record.device.ipAddress, entry.id) })
+        is HistoryRecord.Ble -> BleRow(record.device, record.device.lastSeen, onClick = { nav.ble(record.device.address, entry.id) })
+        is HistoryRecord.Line -> HistoryLineRow(record.line)
+    }
+}
+
+@Composable
+private fun SavedConnectionRow(saved: SavedConnection, onClick: () -> Unit) {
+    ListRow(
+        title = statusLabel(saved.status),
+        subtitle = connectionSummary(saved.toReport(), saved.viaVpn),
+        leading = { IconTile(Icons.Rounded.Public, statusColor(saved.status)) },
+        trailing = {
+            Text(ago(saved.checkedAt), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        },
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun HistoryLineRow(line: HistoryLine) {
+    ListRow(
+        title = line.title,
+        subtitle = line.detail.ifEmpty { null },
+        trailing = if (line.trailing.isNotEmpty()) {
+            { Text(line.trailing, style = MaterialTheme.typography.titleMedium.merge(Tabular), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        } else {
+            null
+        },
+    )
+}
+
+/** A session in the list: its day and place, how many records it holds, and what can be done with it. */
+@Composable
+private fun SessionHeader(
+    entry: HistoryEntry,
+    all: HistoryEntry,
+    placeFirst: Boolean,
+    expanded: Boolean,
+    modifier: Modifier,
+    onOpenPlace: () -> Unit,
+    onDelete: () -> Unit,
+    onToggle: () -> Unit,
+) {
+    val context = LocalContext.current
+    var menu by remember { mutableStateOf(false) }
+    val day = dayLabel(startOfDay(entry.savedAt))
+    val time = clockTime(entry.savedAt)
+    val place = entry.placeLabel?.takeIf { it.isNotEmpty() }
+    Row(
+        modifier.fillMaxWidth().clickable(onClick = onToggle).padding(start = 32.dp, end = 12.dp, top = 14.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    if (placeFirst) place ?: tr("No location") else day,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (entry.captureId != null) Icon(Icons.Rounded.Memory, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                if (entry.deauths.isNotEmpty()) Icon(Icons.Rounded.GppBad, contentDescription = tr("Deauth detected"), tint = Spectra.colors.danger, modifier = Modifier.size(16.dp))
+            }
+            Text(
+                listOfNotNull(if (placeFirst) "$day, $time" else time, place.takeIf { !placeFirst }, entry.importedFrom).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text("${entry.itemCount}", style = MaterialTheme.typography.labelLarge.merge(Tabular), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(
+            if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Box {
+            IconButton(onClick = { menu = true }, modifier = Modifier.size(36.dp)) { Icon(Icons.Rounded.MoreVert, contentDescription = tr("More")) }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                if (all.latitude != null && all.longitude != null) {
+                    DropdownMenuItem(
+                        text = { Text(tr("Show where it was saved")) },
+                        leadingIcon = { Icon(Icons.Rounded.Place, null) },
+                        onClick = {
+                            menu = false
+                            onOpenPlace()
+                        },
+                    )
+                    HorizontalDivider()
+                }
+                ExportMenuItems(context, listOf(all)) { menu = false }
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text(tr("Delete"), color = MaterialTheme.colorScheme.error) },
+                    leadingIcon = { Icon(Icons.Rounded.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                    onClick = {
+                        menu = false
+                        onDelete()
+                    },
+                )
+            }
         }
     }
 }
@@ -381,7 +525,6 @@ private fun HistoryFilters(
             ToggleChip(tr("Imported"), imported, { onImported(true) })
             ToggleChip(tr("By date"), grouping == Grouping.DATE, { onGrouping(Grouping.DATE) }, Icons.Rounded.CalendarMonth)
             ToggleChip(tr("By place"), grouping == Grouping.PLACE, { onGrouping(Grouping.PLACE) }, Icons.Rounded.Place)
-            ToggleChip(tr("All"), grouping == Grouping.LIST, { onGrouping(Grouping.LIST) }, Icons.AutoMirrored.Rounded.ViewList)
         }
     }
 }
@@ -393,27 +536,9 @@ private fun List<HistoryEntry>.ordered(sort: HistorySort): List<HistoryEntry> = 
     HistorySort.COUNT -> sortedByDescending { it.itemCount }
 }
 
-private fun byDate(entries: List<HistoryEntry>): List<HistoryGroup> {
-    val buckets = entries.groupBy { startOfDay(it.savedAt) }
-    return buckets.entries.sortedByDescending { it.key }.map { (day, rows) ->
-        HistoryGroup("date:$day", dayLabel(day), rows)
-    }
-}
-
-private fun byPlace(entries: List<HistoryEntry>): List<HistoryGroup> {
-    val buckets = entries.groupBy { it.placeLabel ?: it.placeKey ?: "" }
-    return buckets.entries
-        .map { (label, rows) ->
-            HistoryGroup(
-                "place:$label",
-                label.ifEmpty { tr("No location") },
-                rows,
-            )
-        }
-        .sortedByDescending { it.entries.firstOrNull()?.savedAt ?: 0 }
-}
-
-private fun todayGroupId(): String = "date:${startOfDay(System.currentTimeMillis())}"
+/** The sessions place by place, each place where its first session in [entries] stands. */
+private fun byPlace(entries: List<HistoryEntry>): List<HistoryEntry> =
+    entries.groupBy { it.placeLabel ?: it.placeKey ?: "" }.values.flatten()
 
 private fun startOfDay(millis: Long): Long = Calendar.getInstance().apply {
     timeInMillis = millis
@@ -430,46 +555,6 @@ private fun dayLabel(day: Long): String {
         today - 86_400_000L -> tr("Yesterday")
         else -> SimpleDateFormat("EEEE, d MMM", Locale.getDefault()).format(Date(day))
     }
-}
-
-/** A collapsible section header, the same heading a Wi-Fi card uses, with the group's scan types. */
-@Composable
-private fun GroupHeader(
-    label: String,
-    icon: ImageVector,
-    kinds: List<String>,
-    count: Int,
-    expanded: Boolean,
-    modifier: Modifier = Modifier,
-    onToggle: () -> Unit,
-) {
-    SectionHeader(
-        label,
-        modifier = modifier.clickable(onClick = onToggle),
-        icon = icon,
-        trailing = { GroupTrailing(kinds, count, expanded) },
-    )
-}
-
-@Composable
-private fun RowScope.GroupTrailing(kinds: List<String>, count: Int, expanded: Boolean) {
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-        for (kind in kinds) {
-            Icon(kindIcon(kind), contentDescription = null, tint = kindTint(kind), modifier = Modifier.size(16.dp))
-        }
-    }
-    Text(
-        "$count",
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 6.dp),
-    )
-    Icon(
-        if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.size(20.dp),
-    )
 }
 
 @Composable
@@ -496,50 +581,6 @@ private fun HistorySettingsDialog(autosave: Boolean, onAutosave: (Boolean) -> Un
 }
 
 @Composable
-private fun HistoryRow(entry: HistoryEntry, showPlace: Boolean, onOpen: () -> Unit, onDelete: () -> Unit) {
-    val state = rememberSwipeToDismissBoxState(confirmValueChange = { value ->
-        if (value == SwipeToDismissBoxValue.EndToStart) onDelete()
-        value == SwipeToDismissBoxValue.EndToStart
-    })
-    val fromSensor = entry.captureId != null
-    val iconKind = entry.shownKinds().first()
-    SwipeToDismissBox(
-        state = state,
-        enableDismissFromStartToEnd = false,
-        backgroundContent = {
-            Box(
-                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.error).padding(horizontal = 24.dp),
-                contentAlignment = Alignment.CenterEnd,
-            ) {
-                Icon(Icons.Rounded.Delete, contentDescription = tr("Delete"), tint = MaterialTheme.colorScheme.onError)
-            }
-        },
-    ) {
-        val place = entry.placeLabel?.takeIf { showPlace }
-        val who = entry.importedFrom ?: sourceName(entry.source)
-        val line = when {
-            place != null && entry.importedFrom != null -> "${ago(entry.savedAt)} · $place · ${entry.importedFrom}"
-            else -> "${ago(entry.savedAt)} · ${place ?: who}"
-        }
-        Box(Modifier.background(MaterialTheme.colorScheme.surfaceContainer)) {
-            ListRow(
-                title = tr(entry.rowTitle),
-                subtitle = line,
-                subtitleLines = 1,
-                leading = { IconTile(if (fromSensor) Icons.Rounded.Memory else kindIcon(iconKind), kindTint(iconKind)) },
-                badges = {
-                    if (entry.deauths.isNotEmpty()) {
-                        Icon(Icons.Rounded.GppBad, contentDescription = tr("Deauth detected"), tint = Spectra.colors.danger, modifier = Modifier.padding(start = 2.dp))
-                    }
-                },
-                trailing = { Pill("${entry.itemCount}", kindTint(iconKind)) },
-                onClick = onOpen,
-            )
-        }
-    }
-}
-
-@Composable
 fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String, area: HistoryArea) {
     model.generation
     var query by rememberSaveable { mutableStateOf("") }
@@ -547,10 +588,9 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String, area: History
     var openOnly by rememberSaveable { mutableStateOf(false) }
     var knownOnly by rememberSaveable { mutableStateOf(false) }
     var band by rememberSaveable { mutableStateOf<Band?>(null) }
-    var showWifiOut by rememberSaveable { mutableStateOf(false) }
-    var bleSort by rememberSaveable { mutableStateOf(BleSort.SIGNAL) }
-    var bleScope by rememberSaveable { mutableStateOf(BleScope.ALL) }
-    var showBleOut by rememberSaveable { mutableStateOf(false) }
+    var bleNamed by rememberSaveable { mutableStateOf(false) }
+    var bleConnectable by rememberSaveable { mutableStateOf(false) }
+    val bleFilter = BleFilter(bleNamed, bleConnectable)
     // The session as this tab shows it: another tab's records in it stay out of sight.
     val entry = model.history.entry(id)?.only(area)
     if (entry == null) {
@@ -566,12 +606,12 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String, area: History
     val showKnown = entry.networks.any { it.hasStoredPassword(knownSsids) }
     val filterKnown = knownOnly && showKnown
     val networks = entry.networks.filter {
-        it.passesWifiFilter(showWifiOut, openOnly, band, needle, filterKnown, knownSsids)
+        it.passesWifiFilter(true, openOnly, band, needle, filterKnown, knownSsids)
     }.sortedForWifi(wifiSort)
     val probes = entry.probes.filter { it.passesWifiFilter(openOnly, band, needle, filterKnown) }
     val bands = entry.networks.map { it.latest.band }.toSet()
     val bleNow = entry.bluetooth.maxOfOrNull { it.lastSeen } ?: entry.savedAt
-    val bluetooth = entry.bluetooth.arranged(bleNow, bleSort, bleScope, showBleOut, needle)
+    val bluetooth = entry.bluetooth.arranged(bleNow, BleSort.SIGNAL, bleFilter, true, needle)
     val lan = entry.lan.filter { device ->
         needle.isEmpty() ||
             device.ipAddress.contains(needle, true) ||
@@ -603,7 +643,7 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String, area: History
     val footer = "$who · ${dateTime(entry.savedAt)}"
     val context = LocalContext.current
     SpectraScreen(
-        title = tr(entry.rowTitle),
+        title = dayLabel(startOfDay(entry.savedAt)),
         subtitle = footer,
         onBack = nav::back,
         actions = {
@@ -636,8 +676,6 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String, area: History
                     bands = bands,
                     band = band,
                     onBand = { band = it },
-                    showOut = showWifiOut,
-                    onShowOut = { showWifiOut = !showWifiOut },
                 )
             }
         }
@@ -645,9 +683,11 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String, area: History
             if (showWifi) {
                 item(key = "ble-label") { SectionHeader("Bluetooth", icon = Icons.Rounded.Bluetooth) }
             }
-            item(key = "ble-sort") { BleSortRow(bleSort) { bleSort = it } }
             item(key = "ble-filters") {
-                BleFilterRow(bleScope, { bleScope = it }, showBleOut) { showBleOut = !showBleOut }
+                BleFilterRow(bleFilter) {
+                    bleNamed = it.namedOnly
+                    bleConnectable = it.connectableOnly
+                }
             }
         }
         val lat = entry.latitude
@@ -666,17 +706,7 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String, area: History
             })
         }
         if (!entry.hasRecords) {
-            cardSection(entry.lines.withIndex().toList(), key = { "line-${it.index}" }, sectionKey = "lines", footer = footer) { (_, line) ->
-                ListRow(
-                    title = line.title,
-                    subtitle = line.detail.ifEmpty { null },
-                    trailing = if (line.trailing.isNotEmpty()) {
-                        { Text(line.trailing, style = MaterialTheme.typography.titleMedium.merge(Tabular), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    } else {
-                        null
-                    },
-                )
-            }
+            cardSection(entry.lines.withIndex().toList(), key = { "line-${it.index}" }, sectionKey = "lines", footer = footer) { (_, line) -> HistoryLineRow(line) }
             return@SpectraScreen
         }
         cardSection(
@@ -715,18 +745,7 @@ fun HistoryDetail(model: SpectraModel, nav: Navigator, id: String, area: History
             key = { "c-${it.checkedAt}" },
             sectionKey = "connection",
             dividerInset = 70.dp,
-        ) { saved ->
-            val report = saved.toReport()
-            ListRow(
-                title = statusLabel(saved.status),
-                subtitle = connectionSummary(report, saved.viaVpn),
-                leading = { IconTile(Icons.Rounded.Public, statusColor(saved.status)) },
-                trailing = {
-                    Text(ago(saved.checkedAt), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                },
-                onClick = { nav.savedConnection(entry.id, saved.checkedAt) },
-            )
-        }
+        ) { saved -> SavedConnectionRow(saved) { nav.savedConnection(entry.id, saved.checkedAt) } }
         cardSection(
             lan,
             header = tr("Devices: %d", lan.size),

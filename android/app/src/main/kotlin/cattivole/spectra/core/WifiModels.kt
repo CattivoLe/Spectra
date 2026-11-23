@@ -309,32 +309,17 @@ data class DeauthEvent(
 data class VendorDeviceInfo(val deviceName: String, val manufacturer: String)
 
 data class TrafficSnapshot(val bytes: Long, val packets: Int) {
+    val estimatedBitsPerSecond: Double get() = bytes * 8 / (WINDOW_MS / 1000.0)
+
     companion object {
         /** The time these bytes stand for: what the sensor listens on one channel, or is scaled back to. */
         const val WINDOW_MS = 250
-    }
-
-    val formattedBytes: String
-        get() = when {
-            bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
-            bytes >= 1_000 -> "%.1f KB".format(bytes / 1_000.0)
-            else -> "$bytes B"
-        }
-
-    fun estimatedBitrate(durationMs: Int): String? {
-        if (durationMs <= 0) return null
-        val bitsPerSecond = bytes * 8.0 / (durationMs / 1000.0)
-        return when {
-            bitsPerSecond >= 1_000_000 -> "%.1f Mbps".format(bitsPerSecond / 1_000_000)
-            bitsPerSecond >= 1_000 -> "%.0f Kbps".format(bitsPerSecond / 1_000)
-            else -> "%.0f bps".format(bitsPerSecond)
-        }
     }
 }
 
 class TrackedNetwork(
     var latest: AccessPointReading,
-    val firstSeen: Long,
+    var firstSeen: Long,
     var lastSeen: Long,
     val samples: MutableList<Sample>,
     var missedScans: Int = 0,
@@ -445,3 +430,11 @@ fun ProbingDevice.passesWifiFilter(
         mac.vendor()?.contains(needle, ignoreCase = true) == true ||
         ssids.any { it.contains(needle, ignoreCase = true) }
 }
+
+/**
+ * Whether the network the phone is on is worth a "no password" warning. One open reading is not enough: a password
+ * kept for the network, or another reading of it that is protected, says otherwise, and a false warning is worse
+ * than none.
+ */
+fun isOpenWifi(joined: AuthMode, savedPassword: String?, heard: List<AuthMode>): Boolean =
+    joined == AuthMode.OPEN && savedPassword.isNullOrEmpty() && heard.all { it == AuthMode.OPEN }

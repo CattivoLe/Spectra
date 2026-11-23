@@ -124,7 +124,7 @@ private fun distanceLabel(metres: Double): String = when {
 private fun levelLabel(level: Proximity.Level): String = when (level) {
     Proximity.Level.HERE -> tr("Right here")
     Proximity.Level.CLOSE -> tr("Very close")
-    Proximity.Level.NEAR -> tr("Close")
+    Proximity.Level.NEAR -> tr("Close by")
     Proximity.Level.FAR -> tr("Nearby")
     Proximity.Level.VERY_FAR -> tr("Far")
 }

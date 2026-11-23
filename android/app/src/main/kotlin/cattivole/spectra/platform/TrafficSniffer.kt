@@ -230,6 +230,9 @@ class TrafficSniffer(context: Context) {
     }
 
     /** The request the Repeat screen opens with. */
+    /** The text opened on its own screen. */
+    var openText: cattivole.spectra.core.OpenText? = null
+
     var repeatDraft: cattivole.spectra.core.RepeatRequest? = null
 
     /** The rule a new Map Local rule screen opens with, made from a recorded response. */

@@ -418,7 +418,8 @@ class BleDevice(
     private var smoothedRssi: Double = rssi.toDouble()
     val samples = mutableListOf<Sample>()
     var packetCount: Int = 0
-    val firstSeen: Long = seen
+    /** May be earlier than anything heard since launch: the device was met before. */
+    var firstSeen: Long = seen
     var lastSeen: Long = seen
 
     /**

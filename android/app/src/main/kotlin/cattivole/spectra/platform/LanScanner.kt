@@ -97,7 +97,9 @@ class LanScanner(
     /** Asks the router for its UPnP port-forwarding table again, by hand. */
     fun checkPortForwarding() {
         if (scanning || checkingForwarding) return
-        scope.launch { refreshPortForwarding() }
+        scope.launch {
+            if (lanRoute()?.let { aim(it) } != false) refreshPortForwarding() else publish()
+        }
     }
 
     /**
@@ -199,6 +201,26 @@ class LanScanner(
             return "lan:net:${info.networkLabel}"
         }
 
+    /** Every key this network may have been saved under: before its router's hardware address was known, too. */
+    private val networkKeys: List<String>
+        get() = listOfNotNull(
+            devices.firstOrNull { it.isGateway }?.macAddress?.let { "lan:gw:${it.text}" },
+            subnet?.let { "lan:net:${it.networkLabel}" },
+        )
+
+    /** When a host was first met on this network, if it was before. */
+    var earlier: ((LanDevice, List<String>) -> Long?)? = null
+
+    /** Moves the hosts' first sightings back to the earliest known. Their names and addresses are in by now. */
+    fun datesChanged() {
+        val key = networkKey ?: return
+        val keys = networkKeys
+        for (device in devices) {
+            val date = listOfNotNull(knownHosts.firstSeen(device, key), earlier?.invoke(device, keys)).minOrNull() ?: continue
+            if (date < device.firstSeen) device.firstSeen = date
+        }
+    }
+
     val networkLabel: String? get() = subnet?.networkLabel
 
     private val app = context.applicationContext
@@ -207,8 +229,28 @@ class LanScanner(
     private var portJob: Job? = null
     private val listeners = mutableListOf<() -> Unit>()
     private val known = linkedMapOf<String, LanDevice>()
-    /** The Wi-Fi or Ethernet network the sweep is walking, so probes do not leave via a VPN. */
-    private var routeNetwork: Network? = null
+    /**
+     * The Wi-Fi or Ethernet network the sweep is walking, so probes do not leave via a VPN. Null when the VPN that is
+     * on refuses that but leaves the local network alone: then probes go out unbound.
+     */
+    @Volatile private var routeNetwork: Network? = null
+    private val guard = VpnGuard(app)
+
+    /**
+     * The VPN that is on takes the local network into its tunnel and lets nothing go around it. A sweep would ask the
+     * far end of the tunnel, which may answer for every address, so none is made.
+     */
+    var heldByVpn: Boolean = false
+        private set
+
+    /** Points the probes at [route]. False when the VPN does not let them reach it. */
+    private suspend fun aim(route: LanRoute): Boolean {
+        val host = inet4(route.subnet.gateway ?: route.subnet.localIp)
+        val path = if (host == null) VpnGuard.Path.Bound else withContext(Dispatchers.IO) { guard.toLocal(route.network, host) }
+        routeNetwork = route.network.takeUnless { path is VpnGuard.Path.Around }
+        heldByVpn = path == VpnGuard.Path.Held
+        return !heldByVpn
+    }
 
     fun observe(listener: () -> Unit): () -> Unit {
         listeners.add(listener)
@@ -249,13 +291,15 @@ class LanScanner(
             scanning = true
             widePrefix = false
             noNetwork = false
+            heldByVpn = false
             fraction = 0.02f
             describedHosts.clear()
             progress = "Reading the network"
             publish()
-            val info = currentSubnet()
+            val route = lanRoute()
+            val info = route?.subnet
             subnet = info
-            if (info == null) {
+            if (route == null || info == null) {
                 ipv6Only = hasIpv6OnlyLink()
                 progress = "Join a Wi-Fi network to scan it"
                 noNetwork = true
@@ -264,6 +308,12 @@ class LanScanner(
                 return@launch
             }
             ipv6Only = false
+            if (!aim(route)) {
+                progress = ""
+                scanning = false
+                publish()
+                return@launch
+            }
             val hosts = hostAddresses(info)
             progress = "Looking for ${hosts.size} addresses"
             fraction = 0.05f
@@ -308,6 +358,8 @@ class LanScanner(
                         Assembled(arp, mdns.names, mdns.services, announced, profiles)
                     }
                 }
+                // A VPN that came up halfway leaves nothing but silence behind: keep the list as it was.
+                if (!aim(route)) return@launch
                 apply(info, found)
                 progress = "Asking the router"
                 publish()
@@ -350,6 +402,11 @@ class LanScanner(
         if (scanning || device.portScanFraction != null) return
         portJob?.cancel()
         portJob = scope.launch {
+            // The VPN may have come up, or gone, since the network was swept.
+            if (lanRoute()?.let { !aim(it) } == true) {
+                publish()
+                return@launch
+            }
             device.portScanFraction = 0f
             publish()
             try {
@@ -444,6 +501,7 @@ class LanScanner(
         devices = next.values.toList()
         // The gateway's address keys the network, so the list is in place first.
         lastVerdict = networkKey?.let { knownHosts.classify(next.values, it) }
+        datesChanged()
         next.values.forEach { labels.apply(it) }
         // This phone, the gateway, then newcomers, then everything else by address.
         devices = next.values.sortedWith(
@@ -460,25 +518,6 @@ class LanScanner(
         val captive: Boolean,
     )
 
-    /** The joined LAN, for probes that should not escape through a VPN. */
-    fun lanRoute(): LanRoute? = selectRoute()
-
-    /**
-     * The Wi-Fi or Ethernet subnet the phone shares with the LAN.
-     *
-     * The phone often carries extra virtual interfaces: a VPN, or a local
-     * tunnel app (ad blocker, private DNS, proxy) that assigns a tiny
-     * `/30` such as `26.26.26.0/30` with a `0.0.0.0` gateway. `activeNetwork`
-     * can point at one of those, so the real network is never walked. Every
-     * network is considered instead: VPN transports are dropped, and the one
-     * with a real default gateway and the widest subnet wins.
-     */
-    private fun currentSubnet(): SubnetInfo? {
-        val route = selectRoute()
-        routeNetwork = route?.network
-        return route?.subnet
-    }
-
     /** A Wi-Fi or Ethernet link with a global IPv6 address and no IPv4 one. */
     @Suppress("DEPRECATION")
     private fun hasIpv6OnlyLink(): Boolean {
@@ -493,8 +532,18 @@ class LanScanner(
         }
     }
 
+    /**
+     * The Wi-Fi or Ethernet network the phone is on, for probes that should not escape through a VPN.
+     *
+     * The phone often carries extra virtual interfaces: a VPN, or a local
+     * tunnel app (ad blocker, private DNS, proxy) that assigns a tiny
+     * `/30` such as `26.26.26.0/30` with a `0.0.0.0` gateway. `activeNetwork`
+     * can point at one of those, so the real network is never walked. Every
+     * network is considered instead: VPN transports are dropped, and the one
+     * with a real default gateway and the widest subnet wins.
+     */
     @Suppress("DEPRECATION")
-    private fun selectRoute(): LanRoute? {
+    fun lanRoute(): LanRoute? {
         val manager = app.getSystemService(ConnectivityManager::class.java) ?: return null
         val candidates = buildList {
             for (network in manager.allNetworks) {
@@ -613,7 +662,7 @@ class LanScanner(
             return
         }
         socket.use {
-            bindToRoute(it)
+            if (!bindToRoute(it)) return
             val payload = byteArrayOf(0)
             for (ip in hosts) {
                 val address = inet4(ip) ?: continue
@@ -733,18 +782,20 @@ class LanScanner(
         return InetAddress.getByAddress(bytes)
     }
 
+    /**
+     * Throws when the network refuses the socket: an unbound one would go into a VPN's tunnel, and what answers there
+     * is not the local network.
+     */
     private fun bindToRoute(socket: Socket) {
-        try {
-            routeNetwork?.bindSocket(socket)
-        } catch (_: Exception) {
-        }
+        routeNetwork?.bindSocket(socket)
     }
 
-    private fun bindToRoute(socket: DatagramSocket) {
-        try {
-            routeNetwork?.bindSocket(socket)
-        } catch (_: Exception) {
-        }
+    /** False when the network refuses the socket; see the TCP one. */
+    private fun bindToRoute(socket: DatagramSocket): Boolean = try {
+        routeNetwork?.bindSocket(socket)
+        true
+    } catch (_: Exception) {
+        false
     }
 
     private suspend fun scanPorts(ip: String): List<DiscoveredPort> = coroutineScope {
@@ -862,8 +913,8 @@ class LanScanner(
         val found = linkedMapOf<String, LanIdentity.Ssdp>()
         val socket = DatagramSocket()
         socket.soTimeout = 1200
-        bindToRoute(socket)
         try {
+            if (!bindToRoute(socket)) return found
             val payload = LanIdentity.ssdpSearch("239.255.255.250")
             val packet = DatagramPacket(payload, payload.size, InetAddress.getByName("239.255.255.250"), 1900)
             socket.send(packet)
@@ -1083,13 +1134,15 @@ class LanScanner(
         }
     }
 
-    private fun connect(ip: String, port: Int, timeoutMs: Int): Socket? = try {
-        Socket().apply {
-            bindToRoute(this)
-            connect(InetSocketAddress(ip, port), timeoutMs)
+    private fun connect(ip: String, port: Int, timeoutMs: Int): Socket? {
+        val socket = Socket()
+        return try {
+            bindToRoute(socket)
+            socket.apply { connect(InetSocketAddress(ip, port), timeoutMs) }
+        } catch (_: Exception) {
+            runCatching { socket.close() }
+            null
         }
-    } catch (_: Exception) {
-        null
     }
 
     private fun exchangeTcp(ip: String, port: Int, payload: ByteArray, timeoutMs: Int, limit: Int = 4096): ByteArray? {
@@ -1102,10 +1155,11 @@ class LanScanner(
     }
 
     private fun exchangeTls(ip: String, port: Int, payload: ByteArray): ByteArray? = try {
-        val socket = SSLSocketFactory.getDefault().createSocket() as SSLSocket
+        // Over a socket bound like every other one: a fresh SSL socket would go into the VPN.
+        val plain = connect(ip, port, 2000) ?: return null
+        plain.soTimeout = 2000
+        val socket = (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(plain, ip, port, true) as SSLSocket
         socket.use {
-            it.connect(InetSocketAddress(ip, port), 2000)
-            it.soTimeout = 2000
             it.startHandshake()
             if (!writeAll(it, payload)) return null
             readSome(it, 65_536)
@@ -1117,9 +1171,9 @@ class LanScanner(
     private fun exchangeUdp(ip: String, port: Int, payload: ByteArray, timeoutMs: Int): List<ByteArray> {
         val socket = DatagramSocket()
         socket.soTimeout = timeoutMs
-        bindToRoute(socket)
         val replies = mutableListOf<ByteArray>()
         try {
+            if (!bindToRoute(socket)) return replies
             socket.send(DatagramPacket(payload, payload.size, InetAddress.getByName(ip), port))
             val buffer = ByteArray(1024)
             val end = System.currentTimeMillis() + timeoutMs
@@ -1207,7 +1261,7 @@ class LanScanner(
         }
         val found = linkedSetOf<String>()
         socket.use {
-            bindToRoute(it)
+            if (!bindToRoute(it)) return found
             try {
                 it.broadcast = true
             } catch (_: Exception) {

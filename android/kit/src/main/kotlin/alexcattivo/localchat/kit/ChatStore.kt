@@ -182,14 +182,6 @@ class ChatStore(
             System.currentTimeMillis(), provider, query, if (succeeded) 1 else 0)
     }
 
-    suspend fun searchLog(limit: Int = 200): List<SearchLogEntry> = read {
-        query("SELECT * FROM websearch_log ORDER BY date DESC LIMIT $limit").map {
-            SearchLogEntry(it.long("id"), it.long("date"), it.string("provider"), it.string("query"), it.bool("succeeded"))
-        }
-    }
-
-    suspend fun deleteSearchLogEntry(id: Long) = write { execute("DELETE FROM websearch_log WHERE id = ?", id) }
-
     // MARK: - Search cache
 
     /** The freshest earlier search by the same provider whose query is similar to [query], if one is still fresh. */
@@ -224,10 +216,31 @@ class ChatStore(
         }
     }
 
-    suspend fun searchCacheCount(): Int = read { query("SELECT COUNT(*) AS n FROM websearch_cache").first().long("n").toInt() }
+    /** Every search: what went out, and what it brought back while that is still kept. Newest first. */
+    suspend fun searches(now: Long = System.currentTimeMillis()): List<alexcattivo.localchat.kit.web.PastSearch> = read {
+        val log = query("SELECT * FROM websearch_log ORDER BY date DESC LIMIT 200").map {
+            SearchLogEntry(it.long("id"), it.long("date"), it.string("provider"), it.string("query"), it.bool("succeeded"))
+        }
+        val kept = query("SELECT * FROM websearch_cache WHERE date > ? ORDER BY date DESC", now - alexcattivo.localchat.kit.web.SearchCache.LIFETIME_MS).map {
+            alexcattivo.localchat.kit.web.KeptSearch(
+                it.long("id"), it.long("date"), it.string("provider"), it.string("query"), it.string("terms"), it.string("gathered"),
+            )
+        }
+        alexcattivo.localchat.kit.web.PastSearch.joined(log, kept)
+    }
 
-    suspend fun clearSearchCache() {
-        write { execute("DELETE FROM websearch_cache") }
+    /** Forgets one search: the record that it went out and what it found. */
+    suspend fun deleteSearch(search: alexcattivo.localchat.kit.web.PastSearch) = write {
+        search.logId?.let { execute("DELETE FROM websearch_log WHERE id = ?", it) }
+        search.keptId?.let { execute("DELETE FROM websearch_cache WHERE id = ?", it) }
+    }
+
+    /** Forgets every search: the records and what they found. */
+    suspend fun clearSearches() {
+        write {
+            execute("DELETE FROM websearch_log")
+            execute("DELETE FROM websearch_cache")
+        }
         vacuum()
     }
 

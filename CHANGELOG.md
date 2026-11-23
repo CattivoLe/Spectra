@@ -60,6 +60,31 @@ Android app.
   they are erased once on the first start of this version. Summaries and
   their folders stay. The code behind the chat (tool calling by the model,
   the search-query planner, pictures by question) is removed with them.
+- VPN: a VPN that lets no app around it is no longer measured as if it were
+  Wi‑Fi or the mobile network. The connection check, the speed test, the
+  traceroute and the device scan say so instead, and follow the VPN as it is
+  turned on and off. A VPN that leaves the local network or the internet alone
+  does not get in the way. HTTPS banners of LAN devices went into the VPN even
+  when it could be bypassed; they no longer do.
+- Connection: the check moved to the mobile network by itself on a phone that
+  hides the Wi‑Fi name (location off or not allowed). It now does so only when
+  there is no Wi‑Fi.
+- Traffic: requests and connections have a screen of their own, with filters on
+  it (GET, POST, PUT, PATCH, DELETE, errors, WebSocket; HTTP, TLS, DNS, TCP,
+  UDP). TCP and UDP now show everything that went over them. JSON bodies are
+  coloured, and the whole body can be searched. A request's row names its site;
+  a connection lists its requests.
+- "First seen" of a network, a host and a Bluetooth device is the earliest date
+  in History (records from other phones do not count), with the date.
+- History: a session opens onto its records, with no page in between; a search
+  opens the sessions it found something in, narrowed to it.
+- Wi‑Fi: "Connected" follows the network the phone is on, and an error is not
+  shown once it is there. "Out of range" moved from the chips to the menu. No
+  "Open Wi‑Fi" warning when a password is saved for the network or another
+  reading of it is protected.
+- Bluetooth filters are chips on the screen, sorting is in the menu; the search
+  log and the saved searches are one list with what each search found; texts
+  and translations were checked throughout.
 
 ## 1.1.0 (2026-11-22)
 

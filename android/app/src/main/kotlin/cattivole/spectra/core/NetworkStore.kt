@@ -55,6 +55,18 @@ class NetworkStore {
     /** Gets networks just before they leave the list, so History can keep them. */
     var onEvict: ((List<TrackedNetwork>) -> Unit)? = null
 
+    /** When a network was first met, if it was before: its card says so instead of "today". */
+    var earlier: ((MacAddress) -> Long?)? = null
+
+    /** The dates came in after the list had started to fill. */
+    fun datesChanged() {
+        val lookup = earlier ?: return
+        for (network in sensor.values + phone.values) {
+            lookup(network.id)?.let { if (it < network.firstSeen) network.firstSeen = it }
+        }
+        publish()
+    }
+
     fun observe(listener: () -> Unit): () -> Unit {
         listeners.add(listener)
         return { listeners.remove(listener) }
@@ -206,7 +218,7 @@ class NetworkStore {
         } else {
             into[reading.bssid] = TrackedNetwork(
                 latest = reading,
-                firstSeen = at,
+                firstSeen = earlier?.invoke(reading.bssid)?.takeIf { it < at } ?: at,
                 lastSeen = at,
                 samples = mutableListOf(sample),
                 source = source,

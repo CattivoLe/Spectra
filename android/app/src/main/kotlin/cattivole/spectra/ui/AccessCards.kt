@@ -135,7 +135,11 @@ internal fun RouteRow(link: LinkProbe, wifiJoined: Boolean? = null) {
             ToggleChip(tr("Cellular"), link.route == ProbeRoute.CELLULAR, { if (!link.running) { link.route = ProbeRoute.CELLULAR; autoCellular = false } })
             ToggleChip("VPN", link.route == ProbeRoute.VPN, { if (!link.running) { link.route = ProbeRoute.VPN; autoCellular = false } })
         }
-        Text(routeText(link.route), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (link.heldByVpn && link.route != ProbeRoute.VPN) {
+            Text(tr(LinkProbe.HELD_BY_VPN), style = MaterialTheme.typography.bodySmall, color = Spectra.colors.warning)
+        } else {
+            Text(routeText(link.route), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 

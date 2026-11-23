@@ -134,6 +134,13 @@ class HistoryStore(context: Context) {
     var entries: List<HistoryEntry> = emptyList()
         private set
 
+    /** When everything saved here was first met. Follows [entries]. */
+    var sightings = Sightings()
+        private set
+
+    /** The saved sessions were read, or others came in: earlier dates may be known now. */
+    var onSightings: (() -> Unit)? = null
+
     private val appContext = context.applicationContext
     private val file = File(context.applicationContext.filesDir, "spectra-history.json")
     private val listeners = mutableListOf<() -> Unit>()
@@ -181,12 +188,16 @@ class HistoryStore(context: Context) {
         loaded.forEach { (entry, json) -> encoded[entry.id] = json }
         val combined = (fresh + loaded.map { it.first }.filter { old -> fresh.none { it.id == old.id } }).take(LIMIT)
         val joined = coalesce(combined)
+        // From all that is on disk, also the sessions over the limit: their dates go on into the newer ones.
+        sightings = Sightings(fresh + loaded.map { it.first })
+        val dated = joined.filter { sightings.date(it) }
         entries = joined
-        if (fresh.isNotEmpty() || joined.map { it.id } != combined.map { it.id }) {
+        if (fresh.isNotEmpty() || dated.isNotEmpty() || joined.map { it.id } != combined.map { it.id }) {
             encoded.keys.retainAll(joined.map { it.id }.toSet())
             joined.forEach { encoded[it.id] = encodeEntry(it) }
             persist()
         }
+        onSightings?.invoke()
         publish()
     }
 
@@ -349,14 +360,9 @@ class HistoryStore(context: Context) {
 
     fun entry(id: String): HistoryEntry? = entries.firstOrNull { it.id == id }
 
-    /** Earliest sighting of this BSSID across every saved session, including imported ones. */
-    fun earliestNetworkSeen(bssid: MacAddress): Long? = entries.asSequence()
-        .flatMap { it.networks.asSequence() }
-        .filter { it.id == bssid }
-        .minOfOrNull { it.firstSeen }
-
     fun delete(id: String) {
         entries = entries.filterNot { it.id == id }
+        sightings = Sightings(entries)
         encoded.remove(id)
         persist()
         publish()
@@ -364,6 +370,7 @@ class HistoryStore(context: Context) {
 
     fun clear() {
         entries = emptyList()
+        sightings = Sightings()
         encoded.clear()
         partials.clear()
         pendingFix.clear()
@@ -384,6 +391,7 @@ class HistoryStore(context: Context) {
         }
         if (next.size == entries.size && next.indices.all { next[it] === entries[it] }) return
         entries = next
+        sightings = Sightings(entries)
         encoded.keys.retainAll(next.map { it.id }.toSet())
         persist()
         publish()
@@ -392,6 +400,7 @@ class HistoryStore(context: Context) {
     /** Drops one shelf. Imported sessions stay when the phone's own shelf is cleared, and the reverse. */
     fun clearShelf(imported: Boolean) {
         entries = entries.filter { (it.importedFrom != null) != imported }
+        sightings = Sightings(entries)
         encoded.keys.retainAll(entries.map { it.id }.toSet())
         persist()
         publish()
@@ -408,9 +417,11 @@ class HistoryStore(context: Context) {
         val (joined, added) = merged
         if (added == 0) return 0
         entries = joined
+        sightings = Sightings(entries)
         encoded.clear()
         joined.forEach { encoded[it.id] = encodeEntry(it) }
         persist()
+        onSightings?.invoke()
         publish()
         return added
     }
@@ -463,6 +474,8 @@ class HistoryStore(context: Context) {
                 ),
                 old,
             )
+            sightings.date(mergedEntry)
+            sightings.note(mergedEntry)
             val list = entries.toMutableList()
             list.removeAt(index)
             list.add(0, mergedEntry)
@@ -496,6 +509,8 @@ class HistoryStore(context: Context) {
 
     private fun insert(entry: HistoryEntry) {
         if (entry.itemCount == 0) return
+        sightings.date(entry)
+        sightings.note(entry)
         encoded[entry.id] = encodeEntry(entry)
         entries = (listOf(entry) + entries).take(LIMIT)
         encoded.keys.retainAll(entries.map { it.id }.toSet())
@@ -786,6 +801,7 @@ class HistoryStore(context: Context) {
                     vendorInfo = new.vendorInfo ?: old.vendorInfo,
                     traffic = if (newer) (new.traffic ?: old.traffic) else old.traffic,
                     source = old.source,
+                    steadyScans = if (newer) new.steadyScans else old.steadyScans,
                 )
             }
             return byId.values.sortedWith(

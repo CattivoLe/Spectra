@@ -23,6 +23,7 @@ object HistoryCodec {
         .putOpt("vendorMaker", network.vendorInfo?.manufacturer)
         .putOpt("trafficBytes", network.traffic?.bytes)
         .putOpt("trafficPackets", network.traffic?.packets)
+        .putOpt("steadyScans", network.steadyScans.takeIf { it > 0 })
         .put("source", network.source.name)
 
     fun network(json: JSONObject): TrackedNetwork? {
@@ -43,6 +44,7 @@ object HistoryCodec {
             vendorInfo = if (vendorName != null || vendorMaker != null) VendorDeviceInfo(vendorName.orEmpty(), vendorMaker.orEmpty()) else null,
             traffic = if (json.has("trafficBytes")) TrafficSnapshot(json.optLong("trafficBytes"), json.optInt("trafficPackets")) else null,
             source = runCatching { RadioSource.valueOf(json.optString("source")) }.getOrDefault(RadioSource.SENSOR),
+            steadyScans = json.optInt("steadyScans"),
         )
     }
 

@@ -9,6 +9,7 @@ import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.NetworkStore
 import cattivole.spectra.core.RadioSource
 import cattivole.spectra.core.SecondaryChannel
+import cattivole.spectra.core.SensorProtocol
 import cattivole.spectra.core.Threats
 import cattivole.spectra.core.TrackedNetwork
 import cattivole.spectra.core.TrafficSnapshot
@@ -113,5 +114,38 @@ class ThreatsTest {
         val streaming = Threats.assess(networks, emptyList()).filter { it.kind == Threats.Kind.STREAMING }
         assertEquals(1, streaming.size)
         assertTrue(streaming.first().name!!.contains("Camera"))
+    }
+
+    private fun flagged(network: TrackedNetwork) = Threats.assess(listOf(network), emptyList()).any { it.kind == Threats.Kind.STREAMING }
+
+    @Test
+    fun aSingleBusySweepIsNotAStream() {
+        val network = net(byteArrayOf(3, 0, 0, 0, 0, 3), "Browsing", AuthMode.WPA2_PSK)
+        network.noteTraffic(TrafficSnapshot(900_000, 700))
+        network.noteTraffic(TrafficSnapshot(2_000, 4))
+        assertFalse(flagged(network))
+    }
+
+    @Test
+    fun theBitrateIsOverTheTimeOnTheChannel() {
+        assertEquals(1_000_000.0, TrafficSnapshot(31_250, 40).estimatedBitsPerSecond, 0.1)
+    }
+
+    /** The sensor says nothing about a network's traffic in a sweep that heard none: that counts against the stream. */
+    @Test
+    fun theStoreCountsSweepsWithoutTraffic() {
+        val store = NetworkStore()
+        val camera = net(byteArrayOf(2, 0, 0, 0, 0, 2), "Camera", AuthMode.WPA2_PSK).latest
+        fun sweep(id: Int, bytes: Long?) {
+            store.handle(SensorProtocol.Message.ScanStarted(id))
+            store.handle(SensorProtocol.Message.AccessPoint(id, camera))
+            bytes?.let { store.handle(SensorProtocol.Message.Traffic(id, camera.bssid, it, 40)) }
+            store.handle(SensorProtocol.Message.ScanFinished(id, 1, 3_000, 0, 0))
+        }
+        for (id in 1..3) sweep(id, 20_000)
+        assertTrue(store.network(camera.bssid)!!.movesDataSteadily)
+        sweep(4, null)
+        assertNull(store.network(camera.bssid)!!.traffic)
+        assertFalse(store.network(camera.bssid)!!.movesDataSteadily)
     }
 }
