@@ -5,7 +5,9 @@ Each `## X.Y.Z` section is the text of the GitHub release for tag `vX.Y.Z`
 `versionName`; the sensor firmware keeps its own version, which the release
 notes name.
 
-## Unreleased
+## 1.2.1 (2026-11-23)
+
+Android and iPhone apps. The sensor firmware is unchanged.
 
 Traffic recording:
 
