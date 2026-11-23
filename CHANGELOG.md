@@ -5,6 +5,18 @@ Each `## X.Y.Z` section is the text of the GitHub release for tag `vX.Y.Z`
 `versionName`; the sensor firmware keeps its own version, which the release
 notes name.
 
+## Unreleased
+
+Traffic recording:
+
+- An app is answered only after the server is. On a network whose IPv6 leads
+  nowhere, apps stayed with the dead address while recording; they go on to IPv4
+  now. A refused connection is reported to the app at once (iPhone).
+- Android: an app that refuses the certificate no longer leaves its host unread
+  for other apps.
+- The screen says that an installed certificate needs nothing else, and, when
+  only apps that refuse it were used, how to check that decryption works.
+
 ## 1.2.0 (2026-11-23)
 
 Android and iPhone apps, sensor firmware 0.11.0. The iPhone app is level with

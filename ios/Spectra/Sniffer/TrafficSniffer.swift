@@ -196,6 +196,8 @@ final class TrafficSniffer {
             defaults?.removeObject(forKey: Self.tlsNoticeKey)
             error = notice == "noca"
                 ? String(localized: "Spectra's certificate could not be opened, so nothing is decrypted. Unlock the phone and start the recording again.")
+                : caTrusted == true
+                ? String(localized: "This iPhone trusts Spectra's certificate, but the apps used so far accept only their own. They go through unread. Open a site in Safari to check that decryption works.")
                 : String(localized: "Apps keep refusing Spectra's certificate, and none has accepted it yet: it is probably not trusted. Connections that refused go through unread.")
         }
         guard let url = containerURL()?.appendingPathComponent("live.json"),

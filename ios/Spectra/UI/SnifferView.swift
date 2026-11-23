@@ -219,6 +219,12 @@ private struct TrafficList: View {
     @State private var expanded: Set<String> = []
     @State private var connection: ConnectionFilter?
 
+    private var nothingRead: LocalizedStringKey {
+        flows.contains(where: \.refused)
+            ? "No requests read yet. The apps used so far refuse the certificate: open a site in Safari to check that decryption works."
+            : "No requests read yet."
+    }
+
     var body: some View {
         List {
             Section {
@@ -316,7 +322,7 @@ private struct TrafficList: View {
             if self.groups == nil {
                 ProgressView().frame(maxWidth: .infinity)
             } else if groups.isEmpty {
-                Text(total == 0 ? "No requests read yet." : "Nothing matches the filter.")
+                Text(total == 0 ? nothingRead : "Nothing matches the filter.")
                     .foregroundStyle(.secondary).font(.footnote)
             }
             ForEach(groups) { group in
@@ -355,7 +361,7 @@ private struct TrafficList: View {
         let rows = all.filter { filter.passes($0.exchange, of: $0.flow) }.sorted { $0.at > $1.at }
         Section {
             if rows.isEmpty {
-                Text(all.isEmpty ? "No requests read yet." : "Nothing matches the filter.")
+                Text(all.isEmpty ? nothingRead : "Nothing matches the filter.")
                     .foregroundStyle(.secondary).font(.footnote)
             }
             ForEach(rows) { hit in

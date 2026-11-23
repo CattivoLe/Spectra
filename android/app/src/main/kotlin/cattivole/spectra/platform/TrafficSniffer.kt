@@ -116,7 +116,7 @@ class TrafficSniffer(context: Context) {
     /** The recording on screen is saved as it stands. */
     val isCurrentSaved: Boolean get() = currentSessionId != null && !unsaved
 
-    /** Apps keep refusing this app's certificate, and none has accepted it: it is probably not trusted. */
+    /** Apps keep refusing this app's certificate, and none has accepted it: not installed, or apps that take no user certificate. */
     val refusedCertificate: Boolean get() = CaptureBus.refusedCertificate
 
     /** Row kept at the top of the list. `session:flow:exchange`. */

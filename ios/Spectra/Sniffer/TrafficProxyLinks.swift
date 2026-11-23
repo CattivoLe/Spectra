@@ -23,7 +23,7 @@ final class TCPLink {
     private var theirNext: UInt32 = 0
     private var theirAcked: UInt32 = 0
     private var clientWindow = 65535
-    private var synSent = false, synAcked = false
+    private var synSeen = false, synSent = false, synAcked = false
     private var clientFin = false, finSent = false, remoteEof = false
 
     private var outbound: [[UInt8]] = []   // pending bytes for the upstream (pre-connect)
@@ -71,10 +71,14 @@ final class TCPLink {
                 case .ready:
                     snifferLog.debug("upstream ready \(self.flow.destination, privacy: .public):\(self.dstPort) pending=\(self.outbound.count)")
                     self.connected = true
+                    self.answerSyn()
                     self.flushRemote()
                     self.receiveLoop()
                 case .waiting(let error):
+                    // Refused, or no route: Network.framework would wait for the network to change. The app is told
+                    // at once, so that it can try another address.
                     snifferLog.error("upstream waiting \(self.flow.destination, privacy: .public):\(self.dstPort): \(String(describing: error), privacy: .public)")
+                    if !self.connected { self.fail() }
                 case .failed(let error):
                     snifferLog.error("upstream failed \(self.flow.destination, privacy: .public):\(self.dstPort): \(String(describing: error), privacy: .public)")
                     self.fail()
@@ -197,13 +201,18 @@ final class TCPLink {
     // MARK: TCP state machine (ported)
 
     private func handshake(_ tcp: IPCodec.TCP) {
-        if !synSent {
+        if !synSeen {
+            synSeen = true
             theirNext = tcp.seq &+ 1
             clientWindow = tcp.window
-            sendSynAck()
-        } else {
-            sendSynAck()
         }
+        answerSyn()
+    }
+
+    /// Accepts the app's connection once the server has accepted ours, and not before. An app that gets no answer over
+    /// IPv6 goes on to IPv4 by itself; answered at once, it stayed with an address that led nowhere.
+    private func answerSyn() {
+        if synSeen && connected { sendSynAck() }
     }
 
     private func sendSynAck() {

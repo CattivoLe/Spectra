@@ -11,6 +11,7 @@ import cattivole.spectra.core.IpCodec
 import cattivole.spectra.core.LocalCa
 import cattivole.spectra.core.MapLocal
 import cattivole.spectra.core.MapRule
+import cattivole.spectra.core.RefusedHosts
 import cattivole.spectra.core.Throttle
 import cattivole.spectra.core.ThrottleSettings
 import cattivole.spectra.core.TlsBridge
@@ -95,8 +96,7 @@ class TrafficProxy(
     /** Since when the packet queue has been full, or 0. */
     @Volatile private var fullSince = 0L
 
-    /** Hosts whose apps refused our certificate: later connections to them pass through unread. */
-    private val refusedHosts = HashSet<String>()
+    private val refusedHosts = RefusedHosts()
     private var refusals = 0
     private var acceptances = 0
     private var refusalNoticeSent = false
@@ -497,6 +497,7 @@ class TrafficProxy(
         private var theirScale = 0
         private var ourScale = 0
         private var clientWindow = 65535
+        private var synSeen = false
         private var synSent = false
         private var synAcked = false
         private var clientFin = false
@@ -543,6 +544,7 @@ class TrafficProxy(
             try {
                 if (!channel.finishConnect()) return
                 interest(connect = false, read = true, write = outbound.isNotEmpty())
+                answerSyn()
                 flushRemote()
             } catch (_: IOException) {
                 fail()
@@ -664,15 +666,22 @@ class TrafficProxy(
         }
 
         private fun handshake(tcp: IpCodec.Tcp) {
-            if (!synSent) {
+            if (!synSeen) {
+                synSeen = true
                 theirNext = tcp.seq + 1
                 theirScale = (tcp.windowScale ?: 0).coerceIn(0, 14)
                 ourScale = if (theirScale > 0) 7 else 0
                 clientWindow = tcp.window
-                sendSynAck(retransmit = false)
-            } else {
-                sendSynAck(retransmit = true)
             }
+            answerSyn()
+        }
+
+        /**
+         * Accepts the app's connection once the server has accepted ours, and not before. An app that gets no answer
+         * over IPv6 goes on to IPv4 by itself; answered at once, it stayed with an address that led nowhere.
+         */
+        private fun answerSyn() {
+            if (synSeen && channel.isConnected) sendSynAck(retransmit = synSent)
         }
 
         private fun sendSynAck(retransmit: Boolean) {
@@ -754,9 +763,9 @@ class TrafficProxy(
                 return true
             }
             val sni = TrafficHints.tlsServerName(buf)
-            if ((sni != null && sni in refusedHosts) || !hostFilter.get().allows(sni?.takeIf { it.isNotEmpty() })) {
-                // This host's app refused our certificate before, or the user left it encrypted: read nothing,
-                // but let it work.
+            if ((sni != null && refusedHosts.contains(flow.app, sni)) || !hostFilter.get().allows(sni?.takeIf { it.isNotEmpty() })) {
+                // This app refused our certificate for this host before, or the user left it encrypted: read
+                // nothing, but let it work.
                 if (!sni.isNullOrEmpty()) flow.host = sni
                 flow.tls = true
                 inspect = Inspect.OTHER
@@ -770,7 +779,7 @@ class TrafficProxy(
         /** The app on the phone refused our certificate for this host. */
         private fun refused() {
             flow.refused = true
-            flow.host?.takeIf { it.isNotEmpty() }?.let { refusedHosts.add(it) }
+            flow.host?.takeIf { it.isNotEmpty() }?.let { refusedHosts.add(flow.app, it) }
             refusals++
             if (!refusalNoticeSent && acceptances == 0 && refusals >= REFUSALS_BEFORE_NOTICE) {
                 refusalNoticeSent = true
