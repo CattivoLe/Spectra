@@ -2,6 +2,8 @@ package cattivole.spectra.assistant
 
 import alexcattivo.localchat.kit.web.SearchPayload
 import cattivole.spectra.core.CaptureAnalysis
+import cattivole.spectra.core.EndpointGroup
+import cattivole.spectra.core.RequestHit
 import cattivole.spectra.core.TrafficFlow
 import cattivole.spectra.core.TrafficKind
 import cattivole.spectra.core.kind
@@ -40,7 +42,7 @@ sealed class CardSubject {
     /** Which narrow prompt the model gets for it. */
     abstract val kind: Kind
 
-    enum class Kind { LAN, HOST, BLUETOOTH, WIFI, TRAFFIC, CAPTURE, INTERNET, LINK }
+    enum class Kind { LAN, HOST, BLUETOOTH, WIFI, TRAFFIC, CAPTURE, INTERNET, LINK, REQUEST, ENDPOINT, CONNECTION }
 
     data object Lan : CardSubject() {
         override val kind get() = Kind.LAN
@@ -77,6 +79,21 @@ sealed class CardSubject {
     data class Link(val link: String) : CardSubject() {
         override val kind get() = Kind.LINK
     }
+
+    /** One recorded request, by its place in the recording: what it says is read there, never kept here. */
+    data class Request(val ref: TrafficRef) : CardSubject() {
+        override val kind get() = Kind.REQUEST
+    }
+
+    /** The requests of one endpoint in a recording (null is the live one): `GET api.example.com/v1/users/{id}`. */
+    data class Endpoint(val session: String?, val key: String) : CardSubject() {
+        override val kind get() = Kind.ENDPOINT
+    }
+
+    /** One recorded connection. */
+    data class Connection(val ref: TrafficRef) : CardSubject() {
+        override val kind get() = Kind.CONNECTION
+    }
 }
 
 /** How a saved card remembers its subject (in the chat's system-prompt field), so the journal can refresh it. */
@@ -92,6 +109,9 @@ object CardSubjects {
         CardSubject.Capture -> "capture"
         CardSubject.Internet -> "internet"
         is CardSubject.Link -> "link:" + subject.link
+        is CardSubject.Request -> "request:" + subject.ref.text
+        is CardSubject.Endpoint -> "endpoint:${subject.session.orEmpty()}|${subject.key}"
+        is CardSubject.Connection -> "connection:" + subject.ref.text
     }
 
     fun decode(text: String): CardSubject? {
@@ -108,6 +128,9 @@ object CardSubjects {
             "capture" -> CardSubject.Capture
             "internet" -> CardSubject.Internet
             "link" -> value.takeIf { it.isNotEmpty() }?.let { CardSubject.Link(it) }
+            "request" -> TrafficRef.of(value)?.takeIf { it.index != null }?.let { CardSubject.Request(it) }
+            "connection" -> TrafficRef.of(value)?.let { CardSubject.Connection(it) }
+            "endpoint" -> value.substringAfter('|', "").takeIf { it.isNotEmpty() }?.let { CardSubject.Endpoint(value.substringBefore('|').ifEmpty { null }, it) }
             else -> null
         }
     }
@@ -118,6 +141,9 @@ object CardSubjects {
 /** A next step as a button: [call] is a tool call `AssistantActions.perform` runs as it is, without the model. */
 data class CardStep(val call: String, val label: String) {
     val tool: String get() = runCatching { JSONObject(call).optString("tool") }.getOrDefault(call)
+
+    /** The call's "text" argument: what the step is about. */
+    val text: String? get() = runCatching { JSONObject(call).optString("text") }.getOrNull()?.ifEmpty { null }
 }
 
 /**
@@ -171,7 +197,9 @@ object AssistantCards {
         CardSubject.Internet -> InternetCards.internet(snapshot, now)
         // Recorded traffic, captures and links come from their shelves, not the snapshot: see [traffic],
         // [capture] and [InternetCards.link].
-        CardSubject.Traffic, CardSubject.Capture, is CardSubject.Link -> null
+        CardSubject.Traffic, CardSubject.Capture, is CardSubject.Link,
+        is CardSubject.Request, is CardSubject.Endpoint, is CardSubject.Connection,
+        -> null
     }
 
     // MARK: - The local network
@@ -461,6 +489,7 @@ object AssistantCards {
                     tr("Unencrypted HTTP to %s: what was sent can be read on the way.", cleartext.take(3).joinToString(", ") { AssistantDigest.clean(it, 30) }),
                 )
             }
+            found += endpointFindings(flows)
             val servers = flows.map { it.title }.toSet().size
             val apps = flows.mapNotNull { it.app }.toSet().size
             found += CardFinding(CardRisk.INFO, tr("%d connections to %d servers.", flows.size, servers) + if (apps > 0) " " + tr("Apps: %d.", apps) else "")
@@ -471,6 +500,31 @@ object AssistantCards {
             if (cleartext.isEmpty()) found += CardFinding(CardRisk.OK, tr("Everything went encrypted."))
         }
         return CardFacts(CardSubject.Traffic, name, ranked(found), emptyList(), digest, digest)
+    }
+
+    /** What the recording's endpoints show: secrets in addresses, the one that fails, the slowest, the busiest, trackers. */
+    private fun endpointFindings(flows: List<TrafficFlow>): List<CardFinding> {
+        val groups = EndpointGroup.build(flows)
+        if (groups.isEmpty()) return emptyList()
+        val found = mutableListOf<CardFinding>()
+        val scans = TrafficAudit.scan(RequestHit.all(flows).filter { it.exchange.method.isNotEmpty() })
+        val told = setOf(TrafficIssue.Kind.SECRET_UNENCRYPTED, TrafficIssue.Kind.SECRET_IN_ADDRESS, TrafficIssue.Kind.TRACKER)
+        for (issue in TrafficAudit.issues(scans)) if (issue.kind in told) found += issue.finding
+        fun name(group: EndpointGroup) = AssistantDigest.clean(group.key, 60)
+        groups.filter { it.errors > 0 }.maxByOrNull { it.errors }?.let { failing ->
+            found += CardFinding(CardRisk.WARNING, tr("Fails most often: %s, errors %d of %d.", name(failing), failing.errors, failing.hits.size))
+        }
+        groups.maxByOrNull { it.typicalMs ?: 0 }?.let { slowest ->
+            val typical = slowest.typicalMs ?: 0
+            if (typical >= TrafficAudit.SLOW_TYPICAL_MS) {
+                found += CardFinding(CardRisk.WARNING, tr("Slowest: %s, usually %s.", name(slowest), TrafficAudit.duration(typical)))
+            }
+        }
+        val busiest = groups.first()
+        if (busiest.hits.size > 1) {
+            found += CardFinding(CardRisk.INFO, tr("Most requested: %s, %d times; endpoints in all: %d.", name(busiest), busiest.hits.size, groups.size))
+        }
+        return found
     }
 
     /** Plain-text protocols in a capture: logins and pages there can be read by anyone who records them. */
@@ -567,6 +621,9 @@ You are the security assistant inside Spectra, an app that inspects the user's o
         CardSubject.Kind.TRAFFIC -> "The subject is the traffic recorded from the user's own phone: which servers and apps it talked to, anything unencrypted, tracking or unexpected."
         CardSubject.Kind.CAPTURE -> "The subject is a captured traffic file: what is in it, the busiest devices, and anything unusual (deauthentication bursts, plain-text protocols, unknown devices)."
         CardSubject.Kind.INTERNET -> "The subject is the user's internet connection as the app measured it: whether it works, name lookups (DNS), latency, the provider and public address, whether HTTPS is intercepted, which sites and services open, the speed, and the path out. When often-blocked services do not open while the rest works, that is filtering on the way, not a fault of the phone. Say what a measurement means for everyday use (calls, video, games). A check that has not been run is not a problem: say what is known and that the buttons below run the rest; do not guess at faults it might find."
+        CardSubject.Kind.REQUEST -> "The subject is one HTTP request an app on the user's phone made: say in plain words which service it goes to and, from its method and path, what it is probably for; what is wrong with it, if anything; and what to check next. The app sends it, not the user: never tell the user they pass or expose something. Values are hidden from you on purpose: never guess them. Signing in through headers over an encrypted connection is normal, not a leak."
+        CardSubject.Kind.ENDPOINT -> "The subject is one endpoint (a method, a server and a path) an app on the user's phone calls: what it is probably for, how often it is called, how often it fails, how fast it is, and what is wrong, if anything. The app sends it, not the user: never tell the user they pass or expose something. Values are hidden from you on purpose: never guess them. Signing in through headers over an encrypted connection is normal, not a leak."
+        CardSubject.Kind.CONNECTION -> "The subject is one network connection an app on the user's phone opened: which service it goes to, whether it is encrypted, what is known about what went through it, and what is wrong, if anything. An app that refuses Spectra's certificate protects itself: that is not a fault. When nothing was read, say the content is unknown; do not guess it."
         CardSubject.Kind.LINK -> "The subject is one link the user may open: whether the address looks like phishing (look-alike names, a brand in the wrong place, free hosting, a link hidden inside a link), what its certificate and the domain's age say, and where its redirects lead. A young domain or certificate is a warning sign, not proof; a clean address does not prove the page is safe."
     }
 
@@ -608,6 +665,7 @@ The <web> block holds results of a web search about the subject (its maker and m
         AssistantActions.Name.CHECK_SITES -> "This check tried to open the user's own sites: say which open and which do not, and what a site that does not open most likely means (blocked on the way, the site is down, or a DNS problem)."
         AssistantActions.Name.CHECK_SITE -> "This check read the site's certificate and asked the domain's registry: say what it found about the certificate (who issued it and when, only if the result names them) and how old the domain is, and whether that is a warning sign (phishing sites are usually only days or weeks old). When no certificate was received or the registry has no record, say exactly that: it matters in itself. Never name an issuer, a registrar or a date that is not in the result."
         AssistantActions.Name.EXPAND_REDIRECTS -> "This check followed the link's redirects without opening the page: say where the link really leads and whether the final site differs from the one in the link."
+        AssistantActions.Name.REPEAT_REQUEST -> "This check sent the recorded request once more: say whether the answer is the same as the recorded one (status, time, size) and whether the problem is still there. A status of 401 or 403 now can simply mean that the recorded sign-in has expired."
         AssistantActions.Name.SCAN_LAN, AssistantActions.Name.SCAN_WIFI, AssistantActions.Name.SCAN_BLUETOOTH -> "This check scanned again: say only what changed or what is new."
         else -> null
     }

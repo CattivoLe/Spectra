@@ -1,0 +1,127 @@
+google-analytics.com	Google Analytics	analytics
+analytics.google.com	Google Analytics	analytics
+googletagmanager.com	Google Tag Manager	analytics
+app-measurement.com	Google Analytics for Firebase	analytics
+app-analytics-services.com	Google Analytics for Firebase	analytics
+firebaselogging-pa.googleapis.com	Firebase Logging	analytics
+firebaselogging.googleapis.com	Firebase Logging	analytics
+crashlytics.com	Firebase Crashlytics	crash
+crashlyticsreports-pa.googleapis.com	Firebase Crashlytics	crash
+doubleclick.net	Google Ads	ads
+googleadservices.com	Google Ads	ads
+googlesyndication.com	Google Ads	ads
+admob.com	Google AdMob	ads
+graph.facebook.com	Meta (Facebook SDK)	analytics
+connect.facebook.net	Meta Pixel	ads
+an.facebook.com	Meta Audience Network	ads
+mc.yandex.ru	Yandex Metrica	analytics
+mc.yandex.com	Yandex Metrica	analytics
+appmetrica.yandex.net	AppMetrica	analytics
+appmetrica.yandex.com	AppMetrica	analytics
+report.appmetrica.yandex.net	AppMetrica	analytics
+startup.mobile.yandex.net	AppMetrica	analytics
+an.yandex.ru	Yandex Ads	ads
+mobile.yandexadexchange.net	Yandex Ads	ads
+ads.vk.com	VK Ads	ads
+top-fwz1.mail.ru	Mail.ru Top	analytics
+tracker-api.my.com	MyTracker	analytics
+tracker.my.com	MyTracker	analytics
+counter.yadro.ru	LiveInternet	analytics
+tns-counter.ru	Mediascope	analytics
+appsflyer.com	AppsFlyer	attribution
+appsflyersdk.com	AppsFlyer	attribution
+adjust.com	Adjust	attribution
+adjust.io	Adjust	attribution
+branch.io	Branch	attribution
+app.link	Branch	attribution
+kochava.com	Kochava	attribution
+singular.net	Singular	attribution
+tenjin.com	Tenjin	attribution
+amplitude.com	Amplitude	analytics
+mixpanel.com	Mixpanel	analytics
+segment.io	Segment	analytics
+cdn.segment.com	Segment	analytics
+heapanalytics.com	Heap	analytics
+posthog.com	PostHog	analytics
+flurry.com	Flurry	analytics
+localytics.com	Localytics	analytics
+countly.com	Countly	analytics
+hotjar.com	Hotjar	analytics
+clarity.ms	Microsoft Clarity	analytics
+fullstory.com	FullStory	analytics
+smartlook.com	Smartlook	analytics
+uxcam.com	UXCam	analytics
+quantserve.com	Quantcast	analytics
+scorecardresearch.com	Comscore	analytics
+chartbeat.net	Chartbeat	analytics
+nr-data.net	New Relic	analytics
+mobile-collector.newrelic.com	New Relic	analytics
+sentry.io	Sentry	crash
+bugsnag.com	Bugsnag	crash
+instabug.com	Instabug	crash
+raygun.io	Raygun	crash
+app.bugsee.com	Bugsee	crash
+appcenter.ms	Visual Studio App Center	crash
+datadoghq.com	Datadog	analytics
+datadoghq.eu	Datadog	analytics
+browser-intake-datadoghq.com	Datadog	analytics
+onesignal.com	OneSignal	push
+braze.com	Braze	analytics
+braze.eu	Braze	analytics
+appboy.com	Braze	analytics
+clevertap-prod.com	CleverTap	analytics
+wzrkt.com	CleverTap	analytics
+moengage.com	MoEngage	analytics
+airship.com	Airship	push
+urbanairship.com	Airship	push
+mindbox.ru	Mindbox	analytics
+leanplum.com	Leanplum	analytics
+track.customer.io	Customer.io	analytics
+ws.batch.com	Batch	push
+applovin.com	AppLovin	ads
+applvn.com	AppLovin	ads
+unityads.unity3d.com	Unity Ads	ads
+cdp.cloud.unity3d.com	Unity Analytics	analytics
+ironsrc.com	ironSource	ads
+ironsrc.mobi	ironSource	ads
+supersonicads.com	ironSource	ads
+vungle.com	Vungle	ads
+chartboost.com	Chartboost	ads
+inmobi.com	InMobi	ads
+mopub.com	MoPub	ads
+smaato.net	Smaato	ads
+adcolony.com	AdColony	ads
+tapjoy.com	Tapjoy	ads
+startappservice.com	Start.io	ads
+pangle.io	Pangle	ads
+pangleglobal.com	Pangle	ads
+analytics.tiktok.com	TikTok Pixel	ads
+business-api.tiktok.com	TikTok Ads	ads
+criteo.com	Criteo	ads
+criteo.net	Criteo	ads
+taboola.com	Taboola	ads
+outbrain.com	Outbrain	ads
+adnxs.com	Xandr	ads
+rubiconproject.com	Magnite	ads
+pubmatic.com	PubMatic	ads
+openx.net	OpenX	ads
+casalemedia.com	Index Exchange	ads
+amazon-adsystem.com	Amazon Ads	ads
+bat.bing.com	Microsoft Ads	ads
+ads.linkedin.com	LinkedIn Ads	ads
+px.ads.linkedin.com	LinkedIn Ads	ads
+analytics.twitter.com	X Ads	ads
+ads-twitter.com	X Ads	ads
+tr.snapchat.com	Snap Pixel	ads
+sc-static.net	Snap Pixel	ads
+ct.pinterest.com	Pinterest Tag	ads
+demdex.net	Adobe Audience Manager	ads
+omtrdc.net	Adobe Analytics	analytics
+2o7.net	Adobe Analytics	analytics
+metrics.apple.com	Apple Analytics	analytics
+xp.apple.com	Apple Analytics	analytics
+iadsdk.apple.com	Apple Ads	ads
+data.mistat.xiaomi.com	Xiaomi Statistics	analytics
+tracking.miui.com	Xiaomi Statistics	analytics
+metrics.data.hicloud.com	Huawei Analytics	analytics
+samsungads.com	Samsung Ads	ads

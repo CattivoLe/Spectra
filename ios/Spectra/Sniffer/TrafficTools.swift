@@ -88,7 +88,7 @@ nonisolated final class Throttle {
 /// Map Local, as in Charles: requests to a matching host and path are answered from here and never reach the
 /// server. `host` is a pattern like the TLS host list's; `path` matches the request target (path and query) with
 /// `*` for any characters, empty for any. Port of Android `MapRule`.
-nonisolated struct MapRule: Codable, Equatable, Sendable, Identifiable {
+nonisolated struct MapRule: Codable, Hashable, Sendable, Identifiable {
     var id: String
     var enabled = true
     var host: String

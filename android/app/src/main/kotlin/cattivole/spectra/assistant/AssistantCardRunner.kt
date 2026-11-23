@@ -99,6 +99,7 @@ class AssistantCardRunner(
 
     /** A new card about [subject], its summary started at once. Null when there is nothing to summarize. */
     suspend fun open(subject: CardSubject): UUID? {
+        sources.prepare(subject)
         val facts = sources.cardFacts(subject) ?: return null
         assistant.ensureStarted()
         val chat = store.createChat(systemPrompt = CardSubjects.encode(subject), folderID = assistant.recordingFolder())
@@ -204,6 +205,7 @@ class AssistantCardRunner(
             entry.text = ""
             if (runCatching { store.append(ChatMessage.Role.Assistant, "✓ ${step.label}", card.id) }.isFailure) return@launch
             val subject = card.subject ?: return@launch
+            sources.prepare(subject)
             val fresh = sources.cardFacts(subject) ?: card.facts
             // The check's own words go to the model as their own block: a capture or a GATT read says more than
             // the refreshed findings, and the model is asked about the check, not for the summary again.

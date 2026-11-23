@@ -1,5 +1,10 @@
 package cattivole.spectra.platform
 
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import cattivole.spectra.core.RepeatRequest
+import cattivole.spectra.core.BodyView
+import cattivole.spectra.core.BodyPreview
 import android.content.Context
 import android.content.Intent
 import android.os.Handler
@@ -237,6 +242,32 @@ class TrafficSniffer(context: Context) {
 
     /** The rule a new Map Local rule screen opens with, made from a recorded response. */
     var ruleDraft: MapRule? = null
+
+    /** Makes the Repeat screen's draft of a recorded request, its body included. */
+    suspend fun draftRepeat(flow: TrafficFlow, index: Int, sessionId: String?) {
+        val exchange = flow.exchanges[index]
+        val body = withContext(Dispatchers.IO) { if (exchange.requestBodyStored) body(sessionId, flow.id, index, true) else null }
+        repeatDraft = RepeatRequest.from(flow, exchange, body)
+    }
+
+    /** Makes a Map Local rule that answers a recorded request with the response it got. */
+    suspend fun draftRule(flow: TrafficFlow, index: Int, sessionId: String?) {
+        val exchange = flow.exchanges[index]
+        val body = withContext(Dispatchers.IO) { if (exchange.responseBodyStored) body(sessionId, flow.id, index, false) else null }
+        val text = when (val view = body?.let { BodyPreview.of(it, exchange.header("Content-Type", response = true)) }) {
+            is BodyView.Json -> view.text
+            is BodyView.Text -> view.text
+            else -> exchange.responseJson.orEmpty()
+        }
+        ruleDraft = MapRule(
+            id = UUID.randomUUID().toString(),
+            host = flow.host ?: flow.destination,
+            path = exchange.path,
+            status = exchange.status ?: 200,
+            contentType = exchange.header("Content-Type", response = true)?.substringBefore(';')?.trim() ?: "application/json",
+            body = text,
+        )
+    }
 
     /** Map Local rules: requests they match are answered by the phone itself. */
     val mapRules: List<MapRule> get() = CaptureBus.mapRules.get()

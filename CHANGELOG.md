@@ -53,6 +53,25 @@ Sensor firmware 0.11.0 (protocol 10), with both apps:
 - Android: the network rule is the iPhone's (about 320 kbit/s kept up for three
   sweeps), and so is the estimated bitrate.
 
+Traffic recording, in both apps:
+
+- Requests can be grouped by endpoint: method, server and path, with numbers,
+  UUIDs and long tokens in the path shown as `{id}`. A group shows how many
+  requests it has, how many failed, the typical and the longest time, the size
+  and the last request; filters and search work inside it. The choice is kept.
+- ✨ on a request, an endpoint and a connection: whom it goes to, what is wrong
+  and what to check next. The app's own rules look for passwords, tokens and
+  keys in addresses, headers and bodies, unencrypted HTTP, errors, slow and
+  large answers, needless repeats, missing compression and caching, weak
+  cookies, known analytics and advertising services, and refused certificates.
+- Values of secrets, cookies, parameters and bodies never reach the summary or
+  the model: only their kind and place. Nothing from recorded traffic goes to
+  the web search.
+- Buttons on these summaries repeat a GET and compare the answers, open Repeat
+  or Map Local filled in, check the site or trace the path to it.
+- The summary of a whole recording names the endpoints asked most often, failing
+  and slowest, and no longer lists paths as they were.
+
 Android app.
 
 - Assistant: the old chats are gone. The assistant has worked through summary

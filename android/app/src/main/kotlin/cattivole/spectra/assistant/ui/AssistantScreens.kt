@@ -124,6 +124,10 @@ interface AssistantNav {
     fun searches()
     /** What one search found. */
     fun search(id: String)
+    /** The sniffer's screens a card's step opens, filled in through `TrafficSniffer`'s drafts. */
+    fun trafficRepeat()
+    fun trafficMapRule(id: String?)
+    fun trafficHosts()
 }
 
 /**

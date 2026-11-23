@@ -40,6 +40,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
+import cattivole.spectra.assistant.TrafficRef
+import cattivole.spectra.assistant.AssistantActions
 import cattivole.spectra.assistant.AssistantCard
 import cattivole.spectra.assistant.CardAction
 import cattivole.spectra.assistant.CardEntry
@@ -116,7 +118,21 @@ fun AssistantCardScreen(model: SpectraModel, nav: AssistantNav, id: UUID) {
                 freeCard(key = "steps", header = tr("Next steps")) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         for (step in steps) {
-                            FilledTonalButton(onClick = { assistant.cards.runStep(current, step) }, enabled = !current.busy, modifier = Modifier.fillMaxWidth()) {
+                            // A step that opens a screen decides nothing by itself and does not disturb the text being written.
+                            val opens = AssistantActions.Name.of(step.tool)?.takeIf { it.opensScreen }
+                            FilledTonalButton(
+                                onClick = {
+                                    if (opens == null) {
+                                        assistant.cards.runStep(current, step)
+                                    } else {
+                                        scope.launch {
+                                            if (!openTrafficStep(model, nav, opens, step.text)) notify(tr("This connection is no longer in the list."))
+                                        }
+                                    }
+                                },
+                                enabled = opens != null || !current.busy,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
                                 Text(step.label)
                             }
                         }
@@ -172,6 +188,29 @@ fun AssistantCardScreen(model: SpectraModel, nav: AssistantNav, id: UUID) {
             }
         }
     }
+}
+
+/**
+ * Opens a sniffer screen filled in with the recorded request the step points to; what happens there is the user's
+ * doing. False when the request is gone.
+ */
+private suspend fun openTrafficStep(model: SpectraModel, nav: AssistantNav, step: AssistantActions.Name, text: String?): Boolean {
+    if (step == AssistantActions.Name.OPEN_TLS_HOSTS) {
+        nav.trafficHosts()
+        return true
+    }
+    val ref = text?.let(TrafficRef::of) ?: return false
+    val index = ref.index ?: return false
+    val (session, flow) = model.captures.library.find(ref) ?: return false
+    if (index !in flow.exchanges.indices) return false
+    if (step == AssistantActions.Name.OPEN_MAP_LOCAL) {
+        model.traffic.draftRule(flow, index, session)
+        nav.trafficMapRule(null)
+    } else {
+        model.traffic.draftRepeat(flow, index, session)
+        nav.trafficRepeat()
+    }
+    return true
 }
 
 @Composable

@@ -119,6 +119,7 @@ final class AssistantCardRunner {
 
     /// A new card about `subject`, its summary started at once. `nil` when there is nothing to summarize.
     func open(_ subject: CardSubject) async -> UUID? {
+        await sources.prepare(subject)
         guard let facts = sources.cardFacts(subject) else { return nil }
         // The model loads in its own task: the card shows its findings meanwhile.
         Task { await assistant.ensureStarted() }
@@ -219,6 +220,7 @@ final class AssistantCardRunner {
             entry.text = ""
             guard cards[card.id] != nil, (try? await store.append(.assistant, "✓ \(step.label)", to: card.id)) != nil else { return }
             guard let subject = card.subject else { return }
+            await sources.prepare(subject)
             let fresh = sources.cardFacts(subject) ?? card.facts
             // The check's own words go to the model as their own block: a capture or a GATT read says more than
             // the refreshed findings, and the model is asked about the check, not for the summary again.

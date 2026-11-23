@@ -1,7 +1,7 @@
 import Foundation
 
 /// A request to send again, as recorded or as edited on the Repeat screen. Port of Android `RepeatRequest`.
-nonisolated struct RepeatRequest: Equatable, Sendable {
+nonisolated struct RepeatRequest: Hashable, Sendable {
     var method: String
     var url: String
     var headers: [HttpField]

@@ -79,6 +79,7 @@ struct SpectraApp: App {
                         resources: resourceWatch, tracer: routeTracer, links: linkShelf
                     )
                     captures.recordedTraffic = { [weak sniffer] in sniffer?.assistantRecording }
+                    captures.library = sniffer.library
                     let actions = AssistantActions(sources: sources)
                     assistant.actions = actions
                     assistant.cards = AssistantCardRunner(assistant: assistant, sources: sources, actions: actions)

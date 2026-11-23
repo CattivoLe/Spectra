@@ -90,7 +90,7 @@ struct SnifferView: View {
         .sensoryFeedback(.success, trigger: saves)
         .summaryButton(isShown: !sniffer.flows.isEmpty,
                        subject: { .traffic },
-                       prepare: { captures.keep(traffic: sniffer.flows, name: sniffer.running ? "recording in progress" : "current recording") })
+                       prepare: { captures.keep(traffic: sniffer.flows, name: sniffer.recordingName) })
         .shareSheet(item: $exportItem)
         .toolbar {
             if !sniffer.flows.isEmpty {
@@ -178,15 +178,6 @@ private struct HarExportButton: View {
     }
 }
 
-/// One HTTP request of a connection, as a row of its own.
-private struct RequestHit: Identifiable {
-    let flow: TrafficFlow
-    let index: Int
-    var id: String { "\(flow.id)-\(index)" }
-    var exchange: HttpExchange { flow.exchanges[index] }
-    var at: Int64 { exchange.startedAt ?? flow.lastAt }
-}
-
 /// The recording in progress, or the last one: its requests and connections.
 struct LiveTrafficView: View {
     @Environment(TrafficSniffer.self) private var sniffer
@@ -199,7 +190,7 @@ struct LiveTrafficView: View {
             .navigationBarTitleDisplayMode(.inline)
             .summaryButton(isShown: !sniffer.flows.isEmpty,
                            subject: { .traffic },
-                           prepare: { captures.keep(traffic: sniffer.flows, name: sniffer.running ? "recording in progress" : "current recording") })
+                           prepare: { captures.keep(traffic: sniffer.flows, name: sniffer.recordingName) })
             .shareSheet(item: $exportItem)
             .toolbar {
                 if !sniffer.flows.isEmpty {
@@ -222,7 +213,10 @@ private struct TrafficList: View {
     let flows: [TrafficFlow]
     let sessionID: String?
     @AppStorage("trafficShowsConnections") private var showsConnections = false
+    @AppStorage("trafficByEndpoint") private var byEndpoint = false
     @State private var filter = RequestFilter()
+    @State private var groups: [EndpointGroup]?
+    @State private var expanded: Set<String> = []
     @State private var connection: ConnectionFilter?
 
     var body: some View {
@@ -243,8 +237,9 @@ private struct TrafficList: View {
                 }
             }
             .listSectionSpacing(.compact)
-            if showsConnections { connectionRows } else { requestRows }
+            if showsConnections { connectionRows } else if byEndpoint { endpointRows } else { requestRows }
         }
+        .task(id: grouping) { await group() }
         .searchable(text: $filter.query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Host or request")
     }
 
@@ -270,12 +265,94 @@ private struct TrafficList: View {
         }
     }
 
+    /// What the groups are made of: when none of it changes, they stand. Nil while the groups are not shown.
+    private struct Grouping: Equatable {
+        var filter: RequestFilter
+        var mark: TrafficMark
+    }
+
+    private var grouping: Grouping? {
+        byEndpoint && !showsConnections ? Grouping(filter: filter, mark: TrafficMark(flows)) : nil
+    }
+
+    /// Groups the requests off the main thread: a live recording changes several times a second.
+    private func group() async {
+        guard grouping != nil else { return }
+        let flows = flows, filter = filter
+        let made = await Task.detached(priority: .userInitiated) { EndpointGroup.build(flows, filter: filter) }.value
+        // Shown even when the list has changed meanwhile: in a busy recording it always has.
+        groups = made
+    }
+
+    /// How many, and the switch between the list and the endpoints. One under the other: side by side they fit only
+    /// sometimes, and the switch would move under the finger.
+    private func requestsHeader(_ count: Text) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            count
+            Picker("Grouping", selection: $byEndpoint) {
+                Text("List").tag(false)
+                Text("By endpoint").tag(true)
+            }
+            .pickerStyle(.segmented)
+        }
+        .textCase(nil)
+        .padding(.bottom, 4)
+    }
+
+    private var refusedNote: some View {
+        let refused = flows.count(where: \.refused)
+        return Group {
+            if refused > 0 { Text("Connections that refused the certificate and went through unread: \(refused).") }
+        }
+    }
+
+    /// The requests grouped by endpoint. A row opens its group; inside, the same rows as in the list.
+    @ViewBuilder
+    private var endpointRows: some View {
+        let groups = groups ?? []
+        let shown = groups.reduce(0) { $0 + $1.shown.count }
+        let total = flows.reduce(0) { $0 + $1.exchanges.count }
+        Section {
+            if self.groups == nil {
+                ProgressView().frame(maxWidth: .infinity)
+            } else if groups.isEmpty {
+                Text(total == 0 ? "No requests read yet." : "Nothing matches the filter.")
+                    .foregroundStyle(.secondary).font(.footnote)
+            }
+            ForEach(groups) { group in
+                let open = expanded.contains(group.id)
+                Button {
+                    withAnimation(.snappy) { if expanded.remove(group.id) == nil { expanded.insert(group.id) } }
+                } label: { EndpointRow(group: group, open: open) }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(open ? .isSelected : [])
+                if open {
+                    NavigationLink {
+                        EndpointView(key: group.id, sessionID: sessionID)
+                    } label: {
+                        Label("About this endpoint", systemImage: "info.circle").font(.callout).foregroundStyle(.tint)
+                    }
+                    .padding(.leading, 16)
+                    ForEach(group.shown) { hit in
+                        NavigationLink {
+                            ExchangeDetailView(flow: hit.flow, index: hit.index, sessionID: sessionID)
+                        } label: { RequestRow(hit: hit) }
+                            .padding(.leading, 16)
+                    }
+                }
+            }
+        } header: {
+            requestsHeader(Text("Endpoints: \(groups.count) · requests: \(shown)"))
+        } footer: {
+            refusedNote
+        }
+    }
+
     @ViewBuilder
     private var requestRows: some View {
         let filter = filter
-        let all = flows.flatMap { flow in flow.exchanges.indices.map { RequestHit(flow: flow, index: $0) } }
+        let all = RequestHit.all(flows)
         let rows = all.filter { filter.passes($0.exchange, of: $0.flow) }.sorted { $0.at > $1.at }
-        let refused = flows.filter(\.refused).count
         Section {
             if rows.isEmpty {
                 Text(all.isEmpty ? "No requests read yet." : "Nothing matches the filter.")
@@ -287,13 +364,9 @@ private struct TrafficList: View {
                 } label: { RequestRow(hit: hit) }
             }
         } header: {
-            if rows.count == all.count {
-                Text("Requests: \(rows.count)")
-            } else {
-                Text("Requests: \(rows.count) of \(all.count)")
-            }
+            requestsHeader(rows.count == all.count ? Text("Requests: \(rows.count)") : Text("Requests: \(rows.count) of \(all.count)"))
         } footer: {
-            if refused > 0 { Text("Connections that refused the certificate and went through unread: \(refused).") }
+            refusedNote
         }
     }
 
@@ -342,6 +415,119 @@ private struct RequestRow: View {
                 .compactMap { $0 } + [exchangeLine(hit.exchange)].compactMap { $0 }).joined(separator: " · "))
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
+    }
+}
+
+/// An endpoint: what is asked, of whom, how often, how often in vain and how fast.
+private struct EndpointRow: View {
+    let group: EndpointGroup
+    let open: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(verbatim: group.endpoint.method).font(.caption.weight(.semibold).monospaced()).foregroundStyle(.tint)
+                    if group.http2 { Badge(text: "H2") }
+                    if group.webSocket { Badge(text: "WS") }
+                    Text(verbatim: group.endpoint.path).font(.callout).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    Text(verbatim: group.shown.count == group.hits.count ? "\(group.hits.count)" : "\(group.shown.count)/\(group.hits.count)")
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(.fill.tertiary, in: Capsule())
+                }
+                HStack(spacing: 8) {
+                    Text(verbatim: group.endpoint.host).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    Text(verbatim: clock(group.lastAt)).monospacedDigit().fixedSize()
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    if group.errors > 0 {
+                        Text("Errors: \(group.errors)").foregroundStyle(.red)
+                        if !endpointLine(group).isEmpty { Text(verbatim: "·").foregroundStyle(.tertiary) }
+                    }
+                    Text(verbatim: endpointLine(group)).foregroundStyle(.secondary)
+                }
+                .font(.caption.monospacedDigit()).lineLimit(1)
+            }
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                .rotationEffect(.degrees(open ? 90 : 0))
+        }
+        .contentShape(.rect)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Typical and worst duration and size, for an endpoint's row.
+private func endpointLine(_ group: EndpointGroup) -> String {
+    var parts: [String] = []
+    if let typical = group.typicalMs, let worst = group.worstMs {
+        parts.append(typical == worst ? millis(typical) : String(localized: "\(millis(typical)), worst \(millis(worst))"))
+    }
+    if group.bytes > 0 { parts.append(bytes(group.bytes)) }
+    return parts.joined(separator: " · ")
+}
+
+/// One endpoint of a recording: its numbers and every request of it. Follows a recording in progress.
+struct EndpointView: View {
+    let key: String
+    let sessionID: String?
+    @Environment(TrafficSniffer.self) private var sniffer
+    @State private var group: EndpointGroup?
+    @State private var gone = false
+
+    private var flows: [TrafficFlow] {
+        guard let sessionID else { return sniffer.flows }
+        return sniffer.saved.first { $0.id == sessionID }?.flows ?? []
+    }
+
+    var body: some View {
+        List {
+            if let group {
+                Section {
+                    InfoRow("Method", value: group.endpoint.method)
+                    InfoRow("Host", value: group.endpoint.host)
+                    InfoRow("Path", value: group.endpoint.path)
+                } footer: {
+                    if group.endpoint.path.contains(Endpoint.placeholder) { Text("{id} stands for the part that changes from request to request.") }
+                }
+                Section {
+                    InfoRow("Requests", value: "\(group.hits.count)")
+                    InfoRow("Errors", value: "\(group.errors)")
+                    if !group.statuses.isEmpty { InfoRow("Statuses", value: statusLine(group)) }
+                    if let typical = group.typicalMs { InfoRow("Typical duration", value: millis(typical)) }
+                    if let worst = group.worstMs { InfoRow("Longest duration", value: millis(worst)) }
+                    if group.bytes > 0 { InfoRow("Size", value: bytes(group.bytes)) }
+                    InfoRow("First request", value: clock(group.firstAt))
+                    InfoRow("Last request", value: clock(group.lastAt))
+                }
+                Section {
+                    ForEach(group.hits) { hit in
+                        NavigationLink {
+                            ExchangeDetailView(flow: hit.flow, index: hit.index, sessionID: sessionID)
+                        } label: { RequestRow(hit: hit) }
+                    }
+                }
+            } else if gone {
+                Text("These requests are no longer in the list.").foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle(group?.endpoint.path ?? "")
+        .navigationBarTitleDisplayMode(.inline)
+        .summaryButton(isShown: group != nil, subject: { .endpoint(session: sessionID, key: key) })
+        .task(id: TrafficMark(flows)) {
+            let flows = flows, key = key
+            let found = await Task.detached(priority: .userInitiated) { EndpointGroup.find(key, in: flows) }.value
+            // What is on screen stays when the recording is cleared or a new one begins.
+            if let found { group = found } else { gone = group == nil }
+        }
+    }
+
+    private func statusLine(_ group: EndpointGroup) -> String {
+        group.statuses.map { $0.status == 0 ? String(localized: "no answer ×\($0.count)") : "\($0.status) ×\($0.count)" }.joined(separator: ", ")
     }
 }
 
@@ -419,6 +605,7 @@ struct FlowDetailView: View {
         }
         .navigationTitle(flow.title)
         .navigationBarTitleDisplayMode(.inline)
+        .summaryButton(subject: { .connection(TrafficRef(session: sessionID, flow: flow)) })
         .shareSheet(item: $exportItem)
     }
 }
@@ -485,7 +672,7 @@ struct ExchangeDetailView: View {
                     Label("Repeat request", systemImage: "arrow.clockwise")
                 }
                 NavigationLink {
-                    MapRuleView(rule: localRule(), isNew: true)
+                    MapRuleView(rule: sniffer.localRule(flow, index, sessionID: sessionID), isNew: true)
                 } label: {
                     Label("Map locally", systemImage: "arrow.left.arrow.right")
                 }
@@ -501,23 +688,8 @@ struct ExchangeDetailView: View {
         }
         .navigationTitle("Exchange")
         .navigationBarTitleDisplayMode(.inline)
+        .summaryButton(subject: { .request(TrafficRef(session: sessionID, flow: flow, index: index)) })
         .sensoryFeedback(.success, trigger: copied)
-    }
-
-    /// A Map Local rule that answers this request with the response it got.
-    private func localRule() -> MapRule {
-        var text = exchange.responseJson ?? ""
-        if exchange.responseBodyStored,
-           let data = sniffer.body(sessionID: sessionID, flowID: flow.id, index: index, request: false) {
-            switch BodyPreview.of([UInt8](data), contentType: exchange.header("Content-Type", response: true)) {
-            case .json(let value), .text(let value): text = value
-            default: break
-            }
-        }
-        let type = exchange.header("Content-Type", response: true)?.components(separatedBy: ";").first?
-            .trimmingCharacters(in: .whitespaces) ?? "application/json"
-        return MapRule(host: flow.host ?? flow.destination, path: exchange.path, status: exchange.status ?? 200,
-                       contentType: type, body: text)
     }
 
     private func fields(_ title: LocalizedStringKey, _ fields: [HttpField]) -> some View {
@@ -1183,9 +1355,7 @@ struct SavedSessionView: View {
         .summaryButton(isShown: !session.flows.isEmpty,
                        subject: { .traffic },
                        prepare: {
-                          let stopped = Date(timeIntervalSince1970: Double(session.stoppedAt) / 1000)
-                          captures.keep(traffic: session.flows,
-                                        name: "saved session of " + stopped.formatted(.dateTime.day().month().hour().minute()))
+                          captures.keep(traffic: session.flows, name: TrafficSniffer.name(of: session))
                       })
         .shareSheet(item: $exportItem)
         .toolbar {
@@ -1234,6 +1404,11 @@ private func preciseTime(_ millis: Int64) -> String {
     let format = DateFormatter()
     format.dateFormat = "HH:mm:ss.SSS"
     return format.string(from: Date(timeIntervalSince1970: Double(millis) / 1000))
+}
+
+/// The time of day, for rows of requests of one recording.
+private func clock(_ millis: Int64) -> String {
+    Date(timeIntervalSince1970: Double(millis) / 1000).formatted(date: .omitted, time: .standard)
 }
 
 private func sizeLine(_ total: Int64, _ headers: Int64?, _ body: Int64?) -> String {

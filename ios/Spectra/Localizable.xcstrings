@@ -107,6 +107,16 @@
         }
       }
     },
+    "%@ belongs to %@: it collects data about the app's use.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ принадлежит сервису %@: он собирает данные об использовании приложения."
+          }
+        }
+      }
+    },
     "%@ is %@. One probe per hop; a hop that does not answer shows as an asterisk.": {
       "localizations": {
         "ru": {
@@ -199,6 +209,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$@, %2$@"
+          }
+        }
+      }
+    },
+    "%@, port %lld: not HTTP and not TLS, so its content is not read.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, порт %lld: не HTTP и не TLS, поэтому содержимое не читается."
+          }
+        }
+      }
+    },
+    "%@, worst %@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, худшее %@"
           }
         }
       }
@@ -582,6 +612,16 @@
         }
       }
     },
+    "(%lld of %lld requests)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(запросов: %lld из %lld)"
+          }
+        }
+      }
+    },
     "2.4 GHz": {
       "extractionState": "manual",
       "localizations": {
@@ -676,12 +716,32 @@
         }
       }
     },
+    "A name lookup (DNS): the phone asks for a server's address.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поиск имени (DNS): телефон узнаёт адрес сервера."
+          }
+        }
+      }
+    },
     "A network that moves data the whole time may be carrying a camera or microphone feed. Open it below to see which devices are connected.": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Сеть, по которой постоянно идут данные, может передавать поток с камеры или микрофона. Откройте её ниже, чтобы увидеть подключённые устройства."
+          }
+        }
+      }
+    },
+    "A personal answer may be kept by any cache on the way (Cache-Control: public).": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Личный ответ разрешено хранить любому кэшу по пути (Cache-Control: public)."
           }
         }
       }
@@ -745,6 +805,86 @@
           "stringUnit": {
             "state": "translated",
             "value": "Метка без владельца уже некоторое время рядом с вами. Перейдите в другое место и проверьте, осталась ли она здесь."
+          }
+        }
+      }
+    },
+    "a WebSocket message": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сообщение WebSocket"
+          }
+        }
+      }
+    },
+    "About this endpoint": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Об этом эндпоинте"
+          }
+        }
+      }
+    },
+    "access token": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "токен доступа"
+          }
+        }
+      }
+    },
+    "advertising": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "реклама"
+          }
+        }
+      }
+    },
+    "analytics": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "аналитика"
+          }
+        }
+      }
+    },
+    "Answer it from the phone…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отвечать на него с телефона…"
+          }
+        }
+      }
+    },
+    "Answer: %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответ: %@."
+          }
+        }
+      }
+    },
+    "Answered by this phone's own Map Local rule, not by the server.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответило правило Map Local на этом телефоне, а не сервер."
           }
         }
       }
@@ -1419,6 +1559,16 @@
         }
       }
     },
+    "body field “%@”": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "поле тела «%@»"
+          }
+        }
+      }
+    },
     "BSSID": {
       "localizations": {
         "ru": {
@@ -1643,6 +1793,16 @@
         }
       }
     },
+    "By endpoint": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По эндпоинтам"
+          }
+        }
+      }
+    },
     "By place": {
       "comment": "Label for the option to group saved sessions by place.",
       "isCommentAutoGenerated": true,
@@ -1651,6 +1811,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "По месту"
+          }
+        }
+      }
+    },
+    "Came uncompressed although the app accepts compression: %@ of text.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пришло без сжатия, хотя приложение его принимает: %@ текста."
+          }
+        }
+      }
+    },
+    "card number": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "номер карты"
           }
         }
       }
@@ -2086,6 +2266,16 @@
         }
       }
     },
+    "Check the site's certificate and domain": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить сертификат и домен сайта"
+          }
+        }
+      }
+    },
     "Check through": {
       "localizations": {
         "ru": {
@@ -2276,6 +2466,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Выбрать фото"
+          }
+        }
+      }
+    },
+    "Choose the hosts to decrypt…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать, какие хосты расшифровывать…"
           }
         }
       }
@@ -2595,6 +2795,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пары адресов"
+          }
+        }
+      }
+    },
+    "Cookies set with weak protection: %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Куки заданы со слабой защитой: %@."
           }
         }
       }
@@ -2920,6 +3130,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Страна"
+          }
+        }
+      }
+    },
+    "crash reports": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "отчёты о сбоях"
+          }
+        }
+      }
+    },
+    "Current recording": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текущая запись"
           }
         }
       }
@@ -3416,6 +3646,16 @@
         }
       }
     },
+    "e-mail address": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "адрес почты"
+          }
+        }
+      }
+    },
     "Each hump is one network: its width is the channels it covers, its height how loud it is here.": {
       "localizations": {
         "ru": {
@@ -3442,6 +3682,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Узел"
+          }
+        }
+      }
+    },
+    "Edit and repeat…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменить и повторить…"
           }
         }
       }
@@ -3513,6 +3763,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пусто для открытой сети"
+          }
+        }
+      }
+    },
+    "Encrypted (TLS), not opened: only the server's name and the amount of data are known.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зашифровано (TLS) и не вскрыто: известны только имя сервера и объём данных."
+          }
+        }
+      }
+    },
+    "Encrypted (TLS); Spectra opened it on this phone to show it.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зашифровано (TLS); Spectra вскрыла его на этом телефоне, чтобы показать."
+          }
+        }
+      }
+    },
+    "Endpoints: %lld · requests: %lld": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эндпоинтов: %lld · запросов: %lld"
           }
         }
       }
@@ -3592,6 +3872,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ошибка"
+          }
+        }
+      }
+    },
+    "Errors: %lld": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибок: %lld"
+          }
+        }
+      }
+    },
+    "Errors: %lld of %lld requests (%lld%%): %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибок: %lld из %lld (%lld%%): %@."
           }
         }
       }
@@ -3732,6 +4032,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Внешний адрес"
+          }
+        }
+      }
+    },
+    "Fails most often: %@, errors %lld of %lld.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чаще всего ошибается: %@, ошибок %lld из %lld."
+          }
+        }
+      }
+    },
+    "field “%@” of the answer": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "поле ответа «%@»"
+          }
+        }
+      }
+    },
+    "First request": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первый запрос"
           }
         }
       }
@@ -4203,6 +4533,16 @@
         }
       }
     },
+    "Grouping": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Группировка"
+          }
+        }
+      }
+    },
     "Guessed from well-known ports, so it is a hint, not proof.": {
       "comment": "A description of how the application name was",
       "isCommentAutoGenerated": true,
@@ -4221,6 +4561,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Гостевое подключение не увидело общих папок."
+          }
+        }
+      }
+    },
+    "header “%@”": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "заголовок «%@»"
+          }
+        }
+      }
+    },
+    "header “%@” of the answer": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "заголовок ответа «%@»"
           }
         }
       }
@@ -4468,12 +4828,32 @@
         }
       }
     },
+    "In all %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Всего %@."
+          }
+        }
+      }
+    },
     "INFO": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "ИНФО"
+          }
+        }
+      }
+    },
+    "install tracking": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "учёт установок"
           }
         }
       }
@@ -4949,12 +5329,42 @@
         }
       }
     },
+    "Large answer: %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Большой ответ: %@."
+          }
+        }
+      }
+    },
+    "Large answers: up to %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Большие ответы: до %@."
+          }
+        }
+      }
+    },
     "Large foreign sites, services that are often blocked, and sites from the Russian allow-list are asked over HTTPS. Two often-blocked services that do not open mean the connection is filtered.": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "По HTTPS опрашиваются крупные зарубежные сайты, часто блокируемые сервисы и сайты из российского белого списка. Если не открываются два часто блокируемых сервиса, соединение считается фильтруемым."
+          }
+        }
+      }
+    },
+    "Last request": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Последний запрос"
           }
         }
       }
@@ -5146,6 +5556,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Карта вживую"
+          }
+        }
+      }
+    },
+    "Longest duration": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Худшая длительность"
           }
         }
       }
@@ -5389,6 +5809,26 @@
         }
       }
     },
+    "Most requested: %@, %lld times; endpoints in all: %lld.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чаще всего: %@, запросов %lld; всего эндпоинтов %lld."
+          }
+        }
+      }
+    },
+    "Mostly upload: the phone sent far more than it received.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В основном отправка: телефон отдал намного больше, чем получил."
+          }
+        }
+      }
+    },
     "MQTT broker": {
       "extractionState": "manual",
       "localizations": {
@@ -5618,6 +6058,106 @@
         }
       }
     },
+    "No answer was recorded.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответа в записи нет."
+          }
+        }
+      }
+    },
+    "no answer ×%lld": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "без ответа ×%lld"
+          }
+        }
+      }
+    },
+    "No answer: %lld of %lld requests.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Без ответа запросов: %lld из %lld."
+          }
+        }
+      }
+    },
+    "No answer: the connection closed before one came.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответа нет: соединение закрылось раньше."
+          }
+        }
+      }
+    },
+    "No errors.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибок нет."
+          }
+        }
+      }
+    },
+    "no permission": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "нет прав"
+          }
+        }
+      }
+    },
+    "not signed in, or the sign-in has expired": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "вход не выполнен или истёк"
+          }
+        }
+      }
+    },
+    "parameter “%@”": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "параметр «%@»"
+          }
+        }
+      }
+    },
+    "password": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "пароль"
+          }
+        }
+      }
+    },
+    "Personal data in the address: %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Личные данные в адресе: %@."
+          }
+        }
+      }
+    },
     "port forwarding check": {
       "extractionState": "manual",
       "localizations": {
@@ -5636,6 +6176,106 @@
           "stringUnit": {
             "state": "translated",
             "value": "сканирование портов"
+          }
+        }
+      }
+    },
+    "private key": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "закрытый ключ"
+          }
+        }
+      }
+    },
+    "push messages": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "push-уведомления"
+          }
+        }
+      }
+    },
+    "Recording in progress": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Идёт запись"
+          }
+        }
+      }
+    },
+    "Redirects from HTTPS to unencrypted HTTP.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перенаправляет с HTTPS на незашифрованный HTTP."
+          }
+        }
+      }
+    },
+    "Refused: status %lld, %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отказ: статус %lld, %@."
+          }
+        }
+      }
+    },
+    "Repeat the request and compare": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторить запрос и сравнить"
+          }
+        }
+      }
+    },
+    "repeated request": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "повтор запроса"
+          }
+        }
+      }
+    },
+    "Requests in it: %lld, to %lld endpoints.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запросов в нём: %lld, эндпоинтов: %lld."
+          }
+        }
+      }
+    },
+    "Requests: %lld.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запросов: %lld."
+          }
+        }
+      }
+    },
+    "Saved session of %@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранённая сессия от %@"
           }
         }
       }
@@ -5673,6 +6313,136 @@
         }
       }
     },
+    "Secret in the address: %@. Addresses stay in server logs and histories. The value is hidden here.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Секрет в адресе: %@. Адреса остаются в журналах серверов и истории. Значение здесь скрыто."
+          }
+        }
+      }
+    },
+    "secret key": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "секретный ключ"
+          }
+        }
+      }
+    },
+    "Sending the request again…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправляю запрос ещё раз…"
+          }
+        }
+      }
+    },
+    "Sent %@, received %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправлено %@, получено %@."
+          }
+        }
+      }
+    },
+    "Sent encrypted, with no secrets in the address.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправлено зашифрованным, секретов в адресе нет."
+          }
+        }
+      }
+    },
+    "Sent encrypted.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправлено зашифрованным."
+          }
+        }
+      }
+    },
+    "Sent unencrypted, readable by anyone on the way: %@. Values are hidden here.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправлено без шифрования, прочтёт любой по пути: %@. Значения здесь скрыты."
+          }
+        }
+      }
+    },
+    "Services that collect data about the app's use: %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сервисы, которые собирают данные об использовании приложения: %@."
+          }
+        }
+      }
+    },
+    "session cookie or identifier": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "куки или идентификатор сессии"
+          }
+        }
+      }
+    },
+    "Slow: %@, %@ of it waiting for the server.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Медленно: %@, из них %@ — ожидание сервера."
+          }
+        }
+      }
+    },
+    "Slow: %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Медленно: %@."
+          }
+        }
+      }
+    },
+    "Slow: usually %@, at worst %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Медленно: обычно %@, в худшем случае %@."
+          }
+        }
+      }
+    },
+    "Slowest: %@, usually %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Самый медленный: %@, обычно %@."
+          }
+        }
+      }
+    },
     "speed test": {
       "extractionState": "manual",
       "localizations": {
@@ -5680,6 +6450,66 @@
           "stringUnit": {
             "state": "translated",
             "value": "замер скорости"
+          }
+        }
+      }
+    },
+    "Statuses": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Статусы"
+          }
+        }
+      }
+    },
+    "The answer carries a private key. The value is hidden here.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В ответе есть закрытый ключ. Значение здесь скрыто."
+          }
+        }
+      }
+    },
+    "The answer has not come yet.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответ ещё не пришёл."
+          }
+        }
+      }
+    },
+    "The answer says nothing about caching, so it is downloaded again every time.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В ответе ничего не сказано о кэшировании, поэтому он каждый раз загружается заново."
+          }
+        }
+      }
+    },
+    "the answer's body": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "тело ответа"
+          }
+        }
+      }
+    },
+    "The app refused Spectra's certificate and stayed unread: it accepts only its own, or the certificate is not trusted on this phone. That protects it and is not a fault.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приложение отказалось от сертификата Spectra и осталось непрочитанным: оно принимает только свой, или сертификату на этом телефоне не доверяют. Это защита, а не неисправность."
           }
         }
       }
@@ -9351,6 +10181,96 @@
         }
       }
     },
+    "the path": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "путь"
+          }
+        }
+      }
+    },
+    "the request body": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "тело запроса"
+          }
+        }
+      }
+    },
+    "the request itself is wrong": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "запрос составлен неверно"
+          }
+        }
+      }
+    },
+    "the request took too long to arrive": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "запрос шёл слишком долго"
+          }
+        }
+      }
+    },
+    "The same request went out %lld times within %lld s: repeats nobody needed, or a retry loop.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Один и тот же запрос: отправок %lld за %lld с. Лишние повторы или зацикленные попытки."
+          }
+        }
+      }
+    },
+    "the server did not accept it": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сервер его не принял"
+          }
+        }
+      }
+    },
+    "The server failed: status %lld.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сервер ответил ошибкой: статус %lld."
+          }
+        }
+      }
+    },
+    "there is nothing at this address": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "по этому адресу ничего нет"
+          }
+        }
+      }
+    },
+    "These requests are no longer in the list.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этих запросов больше нет в списке."
+          }
+        }
+      }
+    },
     "TKIP is enabled for old devices and weakens the whole network.": {
       "localizations": {
         "ru": {
@@ -9380,6 +10300,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Удалённое управление TR-069"
+          }
+        }
+      }
+    },
+    "Trace the path to %@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проследить путь до %@"
           }
         }
       }
@@ -11142,6 +12072,36 @@
         }
       }
     },
+    "Typical duration": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Типичная длительность"
+          }
+        }
+      }
+    },
+    "Unencrypted HTTP, as usual for this kind of service check.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Незашифрованный HTTP, для таких служебных проверок это обычно."
+          }
+        }
+      }
+    },
+    "Unencrypted HTTP: anyone on the way can read and change it.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Незашифрованный HTTP: любой по пути может прочитать и изменить его."
+          }
+        }
+      }
+    },
     "UPnP": {
       "extractionState": "manual",
       "localizations": {
@@ -11336,6 +12296,36 @@
         }
       }
     },
+    "Usually %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обычно %@."
+          }
+        }
+      }
+    },
+    "Usually %@, at worst %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обычно %@, в худшем случае %@."
+          }
+        }
+      }
+    },
+    "Usually %@, but once it took %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обычно %@, но однажды заняло %@."
+          }
+        }
+      }
+    },
     "VNC often runs with a weak password or none, and its traffic is not encrypted.": {
       "extractionState": "manual",
       "localizations": {
@@ -11499,6 +12489,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Стиральная машина"
+          }
+        }
+      }
+    },
+    "WebSocket: %lld messages sent, %lld received.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WebSocket: отправлено сообщений %lld, получено %lld."
+          }
+        }
+      }
+    },
+    "without": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "без"
           }
         }
       }
@@ -12359,6 +13369,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "вверх"
+          }
+        }
+      }
+    },
+    "{id} stands for the part that changes from request to request.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{id} — часть, которая меняется от запроса к запросу."
           }
         }
       }
