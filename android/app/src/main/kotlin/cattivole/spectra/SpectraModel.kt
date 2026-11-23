@@ -159,17 +159,23 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         connection.watch()
         phone.start()
         // Without its ✨ button the assistant still reads the Traffic screen: the live list, or the newest saved session.
+        captures.library = cattivole.spectra.assistant.TrafficLibrary(
+            live = { traffic.flows },
+            saved = { traffic.saved },
+            recording = { traffic.running },
+            body = traffic::body,
+        )
         captures.recordedTraffic = {
             val flows = traffic.flows
             if (flows.isNotEmpty()) {
                 cattivole.spectra.assistant.CaptureShelf.Recording(
-                    if (traffic.running) "recording in progress" else "current recording",
+                    if (traffic.running) cattivole.spectra.ui.tr("Recording in progress") else cattivole.spectra.ui.tr("Current recording"),
                     flows,
                     flows.maxOf { it.lastAt },
                 )
             } else {
                 traffic.saved.firstOrNull()?.let { session ->
-                    cattivole.spectra.assistant.CaptureShelf.Recording("saved session of ${cattivole.spectra.ui.dateTime(session.stoppedAt)}", session.flows, session.stoppedAt)
+                    cattivole.spectra.assistant.CaptureShelf.Recording(cattivole.spectra.ui.tr("Saved session of %s", cattivole.spectra.ui.dateTime(session.stoppedAt)), session.flows, session.stoppedAt)
                 }
             }
         }

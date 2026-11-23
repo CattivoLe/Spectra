@@ -156,6 +156,12 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
 
     fun trafficList() = nav.navigate("traffic/list")
 
+    /** One endpoint of the live recording or of a saved one, by its key. Encoded twice: a path can hold `%2F` itself. */
+    fun trafficEndpoint(key: String, session: String? = null) {
+        val name = Uri.encode(Uri.encode(key))
+        nav.navigate(if (session == null) "traffic/endpoint/$name" else "traffic/saved/${Uri.encode(session)}/endpoint/$name")
+    }
+
     /** The text put in `TrafficSniffer.openText`. */
     fun trafficText() = nav.navigate("traffic/text")
 
@@ -180,15 +186,15 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
         )
     }
 
-    fun trafficHosts() = nav.navigate("traffic/hosts")
+    override fun trafficHosts() = nav.navigate("traffic/hosts")
 
-    fun trafficRepeat() = nav.navigate("traffic/repeat")
+    override fun trafficRepeat() = nav.navigate("traffic/repeat")
 
     fun trafficThrottle() = nav.navigate("traffic/throttle")
 
     fun trafficMapLocal() = nav.navigate("traffic/map")
 
-    fun trafficMapRule(id: String?) = nav.navigate(if (id == null) "traffic/map/new" else "traffic/map/rule/${Uri.encode(id)}")
+    override fun trafficMapRule(id: String?) = nav.navigate(if (id == null) "traffic/map/new" else "traffic/map/rule/${Uri.encode(id)}")
 
     fun trafficMessage(id: Long, exchange: Int, number: Int, session: String? = null) =
         nav.navigate(
@@ -363,6 +369,10 @@ fun SpectraApp(model: SpectraModel) {
                     composable("traffic/text") { BodyTextScreen(model, navigator) }
                     composable("traffic/sessions") { SavedTrafficScreen(model, navigator) }
                     composable("traffic/saved/{id}") { TrafficListScreen(model, navigator, sessionId = it.text("id")) }
+                    composable("traffic/endpoint/{key}") { TrafficEndpointScreen(model, navigator, it.text("key"), sessionId = null) }
+                    composable("traffic/saved/{id}/endpoint/{key}") {
+                        TrafficEndpointScreen(model, navigator, it.text("key"), sessionId = it.text("id"))
+                    }
                     composable("traffic/hosts") { TrafficHostsScreen(model, navigator) }
                     composable("traffic/repeat") { TrafficRepeatScreen(model, navigator) }
                     composable("traffic/throttle") { TrafficThrottleScreen(model, navigator) }

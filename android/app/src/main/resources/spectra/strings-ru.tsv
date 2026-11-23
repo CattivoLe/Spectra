@@ -1692,3 +1692,104 @@ Medication delivery	Подача лекарств
 Outdoor sports	Спорт на улице
 Any device on the Wi-Fi can ask the router to open a port to the internet, without a login. Turn UPnP off in the router unless a game console or similar needs it.	Любое устройство в Wi-Fi может попросить роутер открыть порт в интернет без входа. Выключите UPnP в роутере, если он не нужен игровой приставке или подобному.
 KML (map)	KML (карта)
+%s belongs to %s: it collects data about the app's use.	%s принадлежит сервису %s: он собирает данные об использовании приложения.
+%s, port %d: not HTTP and not TLS, so its content is not read.	%s, порт %d: не HTTP и не TLS, поэтому содержимое не читается.
+%s, worst %s	%s, худшее %s
+(%d of %d requests)	(запросов: %d из %d)
+A name lookup (DNS): the phone asks for a server's address.	Поиск имени (DNS): телефон узнаёт адрес сервера.
+A personal answer may be kept by any cache on the way (Cache-Control: public).	Личный ответ разрешено хранить любому кэшу по пути (Cache-Control: public).
+About this endpoint	Об этом эндпоинте
+Answer it from the phone…	Отвечать на него с телефона…
+Answer: %s.	Ответ: %s.
+Answered by this phone's own Map Local rule, not by the server.	Ответило правило Map Local на этом телефоне, а не сервер.
+By endpoint	По эндпоинтам
+Came uncompressed although the app accepts compression: %s of text.	Пришло без сжатия, хотя приложение его принимает: %s текста.
+Check the site's certificate and domain	Проверить сертификат и домен сайта
+Choose the hosts to decrypt…	Выбрать, какие хосты расшифровывать…
+Cookies set with weak protection: %s.	Куки заданы со слабой защитой: %s.
+Edit and repeat…	Изменить и повторить…
+Encrypted (TLS), not opened: only the server's name and the amount of data are known.	Зашифровано (TLS) и не вскрыто: известны только имя сервера и объём данных.
+Encrypted (TLS); Spectra opened it on this phone to show it.	Зашифровано (TLS); Spectra вскрыла его на этом телефоне, чтобы показать.
+Endpoint	Эндпоинт
+Endpoints: %d · requests: %d	Эндпоинтов: %d · запросов: %d
+Errors: %d	Ошибок: %d
+Errors: %d of %d requests (%d%%): %s.	Ошибок: %d из %d (%d%%): %s.
+Fails most often: %s, errors %d of %d.	Чаще всего ошибается: %s, ошибок %d из %d.
+First request	Первый запрос
+Host	Хост
+In all %s.	Всего %s.
+Large answer: %s.	Большой ответ: %s.
+Large answers: up to %s.	Большие ответы: до %s.
+Last request	Последний запрос
+List##requests	Список
+Longest duration	Худшая длительность
+Most requested: %s, %d times; endpoints in all: %d.	Чаще всего: %s, запросов %d; всего эндпоинтов %d.
+Mostly upload: the phone sent far more than it received.	В основном отправка: телефон отдал намного больше, чем получил.
+No answer was recorded.	Ответа в записи нет.
+No answer: %d of %d requests.	Без ответа запросов: %d из %d.
+No answer: the connection closed before one came.	Ответа нет: соединение закрылось раньше.
+No errors.	Ошибок нет.
+Personal data in the address: %s.	Личные данные в адресе: %s.
+Redirects from HTTPS to unencrypted HTTP.	Перенаправляет с HTTPS на незашифрованный HTTP.
+Refused: status %d, %s.	Отказ: статус %d, %s.
+Repeat the request and compare	Повторить запрос и сравнить
+Requests in it: %d, to %d endpoints.	Запросов в нём: %d, эндпоинтов: %d.
+Requests: %d.	Запросов: %d.
+Secret in the address: %s. Addresses stay in server logs and histories. The value is hidden here.	Секрет в адресе: %s. Адреса остаются в журналах серверов и истории. Значение здесь скрыто.
+Sending the request again…	Отправляю запрос ещё раз…
+Sent %s, received %s.	Отправлено %s, получено %s.
+Sent encrypted, with no secrets in the address.	Отправлено зашифрованным, секретов в адресе нет.
+Sent encrypted.	Отправлено зашифрованным.
+Sent unencrypted, readable by anyone on the way: %s. Values are hidden here.	Отправлено без шифрования, прочтёт любой по пути: %s. Значения здесь скрыты.
+Services that collect data about the app's use: %s.	Сервисы, которые собирают данные об использовании приложения: %s.
+Slow: %s, %s of it waiting for the server.	Медленно: %s, из них %s — ожидание сервера.
+Slow: %s.	Медленно: %s.
+Slow: usually %s, at worst %s.	Медленно: обычно %s, в худшем случае %s.
+Slowest: %s, usually %s.	Самый медленный: %s, обычно %s.
+Statuses	Статусы
+The answer carries a private key. The value is hidden here.	В ответе есть закрытый ключ. Значение здесь скрыто.
+The answer has not come yet.	Ответ ещё не пришёл.
+The answer says nothing about caching, so it is downloaded again every time.	В ответе ничего не сказано о кэшировании, поэтому он каждый раз загружается заново.
+The app refused Spectra's certificate and stayed unread: it accepts only its own, or the certificate is not trusted on this phone. That protects it and is not a fault.	Приложение отказалось от сертификата Spectra и осталось непрочитанным: оно принимает только свой, или сертификату на этом телефоне не доверяют. Это защита, а не неисправность.
+The same request went out %d times within %d s: repeats nobody needed, or a retry loop.	Один и тот же запрос: отправок %d за %d с. Лишние повторы или зацикленные попытки.
+The server failed: status %d.	Сервер ответил ошибкой: статус %d.
+These requests are no longer in the list.	Этих запросов больше нет в списке.
+Trace the path to %s	Проследить путь до %s
+Typical duration	Типичная длительность
+Unencrypted HTTP, as usual for this kind of service check.	Незашифрованный HTTP, для таких служебных проверок это обычно.
+Unencrypted HTTP: anyone on the way can read and change it.	Незашифрованный HTTP: любой по пути может прочитать и изменить его.
+Usually %s, at worst %s.	Обычно %s, в худшем случае %s.
+Usually %s, but once it took %s.	Обычно %s, но однажды заняло %s.
+WebSocket: %d messages sent, %d received.	WebSocket: отправлено сообщений %d, получено %d.
+a WebSocket message	сообщение WebSocket
+access token	токен доступа
+advertising	реклама
+analytics	аналитика
+body field “%s”	поле тела «%s»
+card number	номер карты
+crash reports	отчёты о сбоях
+e-mail address	адрес почты
+field “%s” of the answer	поле ответа «%s»
+header “%s”	заголовок «%s»
+header “%s” of the answer	заголовок ответа «%s»
+install tracking	учёт установок
+no answer ×%d	без ответа ×%d
+no permission	нет прав
+not signed in, or the sign-in has expired	вход не выполнен или истёк
+parameter “%s”	параметр «%s»
+password	пароль
+private key	закрытый ключ
+push messages	push-уведомления
+repeated request	повтор запроса
+secret key	секретный ключ
+session cookie or identifier	куки или идентификатор сессии
+the answer's body	тело ответа
+the path	путь
+the request body	тело запроса
+the request itself is wrong	запрос составлен неверно
+the request took too long to arrive	запрос шёл слишком долго
+the server did not accept it	сервер его не принял
+there is nothing at this address	по этому адресу ничего нет
+without	без
+{id} stands for the part that changes from request to request.	{id} — часть, которая меняется от запроса к запросу.
+Usually %s.	Обычно %s.

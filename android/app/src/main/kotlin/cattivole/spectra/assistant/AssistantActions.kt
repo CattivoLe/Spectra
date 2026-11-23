@@ -6,7 +6,11 @@ import cattivole.spectra.core.PcapAnalyzer
 import cattivole.spectra.platform.BleGattClient
 import cattivole.spectra.platform.SensorLink
 import cattivole.spectra.ui.tr
+import cattivole.spectra.core.RepeatRequest
+import cattivole.spectra.platform.RequestRepeater
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
 import org.json.JSONObject
 import kotlin.coroutines.coroutineContext
@@ -37,7 +41,16 @@ class AssistantActions(val sources: AssistantSources) {
         /** The certificate and the registry record of the link in "text". */
         CHECK_SITE("check_site"),
         /** The redirects of the link in "text", followed by their headers only. */
-        EXPAND_REDIRECTS("expand_redirects");
+        EXPAND_REDIRECTS("expand_redirects"),
+        /** The recorded request "text" points to (a [TrafficRef]), sent once more as it was. GET and HEAD only. */
+        REPEAT_REQUEST("repeat_request"),
+        /** These three run nothing: their button opens a screen of the sniffer, filled in, where the user decides. */
+        OPEN_REPEAT("open_repeat"),
+        OPEN_MAP_LOCAL("open_map_local"),
+        OPEN_TLS_HOSTS("open_tls_hosts");
+
+        /** The step opens a screen instead of running a check. */
+        val opensScreen: Boolean get() = this == OPEN_REPEAT || this == OPEN_MAP_LOCAL || this == OPEN_TLS_HOSTS
 
         companion object {
             fun of(raw: String): Name? = entries.firstOrNull { it.raw == raw }
@@ -116,6 +129,8 @@ class AssistantActions(val sources: AssistantSources) {
                 sources.links.keepRedirects(target.link, trace)
                 InternetCards.redirectText(trace)
             }
+            Name.REPEAT_REQUEST -> repeatRequest(argsJson)
+            Name.OPEN_REPEAT, Name.OPEN_MAP_LOCAL, Name.OPEN_TLS_HOSTS -> "This step opens a screen."
             Name.SCAN_PORTS -> {
                 val host = argument(argsJson, "host", "bssid")
                     ?: return "Missing or invalid \"host\". Name an IP address already seen in the LAN hosts list."
@@ -139,6 +154,22 @@ class AssistantActions(val sources: AssistantSources) {
             }
             Name.CAPTURE_PCAP -> capture(argsJson)
             Name.CONNECT_BLUETOOTH -> connectBluetooth(argsJson)
+        }
+    }
+
+    private suspend fun repeatRequest(argsJson: String): String {
+        val ref = argument(argsJson, "text")?.let(TrafficRef::of)
+        val index = ref?.index
+        val found = ref?.let { sources.library.find(it) }
+        val exchange = index?.let { found?.second?.exchanges?.getOrNull(it) }
+        if (found == null || index == null || exchange == null) return "The recorded request is no longer there."
+        if (exchange.method.uppercase() !in setOf("GET", "HEAD")) {
+            return "Only a request that changes nothing on the server (GET, HEAD) is sent again by itself."
+        }
+        val (session, flow) = found
+        return withContext(Dispatchers.IO) {
+            val body = if (exchange.requestBodyStored) sources.library.body(session, flow.id, index, true) else null
+            TrafficCards.compare(exchange, RequestRepeater.send(RepeatRequest.from(flow, exchange, body)))
         }
     }
 
@@ -292,7 +323,8 @@ class AssistantActions(val sources: AssistantSources) {
             Name.CHECK_SITES -> tr("check of your sites")
             Name.CHECK_SITE -> tr("certificate and domain check")
             Name.EXPAND_REDIRECTS -> tr("redirects")
-            null -> name
+            Name.REPEAT_REQUEST -> tr("repeated request")
+            Name.OPEN_REPEAT, Name.OPEN_MAP_LOCAL, Name.OPEN_TLS_HOSTS, null -> name
         }
 
         fun runningLabel(name: String): String = when (Name.of(name)) {
@@ -309,7 +341,8 @@ class AssistantActions(val sources: AssistantSources) {
             Name.CHECK_SITES -> tr("Trying your sites…")
             Name.CHECK_SITE -> tr("Asking the site and the registry…")
             Name.EXPAND_REDIRECTS -> tr("Following redirects…")
-            null -> tr("Running %s…", name)
+            Name.REPEAT_REQUEST -> tr("Sending the request again…")
+            Name.OPEN_REPEAT, Name.OPEN_MAP_LOCAL, Name.OPEN_TLS_HOSTS, null -> tr("Running %s…", name)
         }
 
         private fun argument(argsJson: String, vararg keys: String): String? {

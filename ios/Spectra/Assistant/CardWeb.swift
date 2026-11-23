@@ -30,7 +30,8 @@ enum CardWeb {
             return device(product(maker: maker, name: name), action: action, russian: russian, router: true)
         case .link(let text):
             return linkLookup(text, russian: russian)
-        case .lan, .traffic, .capture, .internet:
+        // Nothing of recorded traffic goes out, not even a server's name: which services a phone talks to is personal.
+        case .lan, .traffic, .capture, .internet, .request, .endpoint, .connection:
             return nil
         }
     }

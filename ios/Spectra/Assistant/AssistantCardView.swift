@@ -9,7 +9,10 @@ struct AssistantCardView: View {
     let id: UUID
 
     @Environment(AssistantModel.self) private var assistant
+    @Environment(TrafficSniffer.self) private var sniffer
+    @Environment(CaptureShelf.self) private var captures
     @Environment(\.dismiss) private var dismiss
+    @State private var screen: StepScreen?
     @State private var card: AssistantCard?
     @State private var folderName: String?
     @State private var fresh: UUID?
@@ -36,6 +39,13 @@ struct AssistantCardView: View {
             folderName = await assistant.folderName(of: id)
         }
         .navigationDestination(item: $fresh) { AssistantCardView(id: $0) }
+        .navigationDestination(item: $screen) { screen in
+            switch screen {
+            case .repeatRequest(let draft): RepeatView(draft: draft)
+            case .mapLocal(let rule): MapRuleView(rule: rule, isNew: true)
+            case .tlsHosts: TLSHostsView()
+            }
+        }
         .sheet(item: Binding(get: { assistant.pendingSearch }, set: { value in
             // Closing the sheet without choosing sends nothing.
             if value == nil {
@@ -112,8 +122,13 @@ struct AssistantCardView: View {
         if !steps.isEmpty {
             Section("Next steps") {
                 ForEach(steps, id: \.call) { step in
-                    Button(step.label) { runner?.runStep(card, step: step) }
-                        .disabled(card.busy)
+                    // A step that opens a screen decides nothing by itself and does not disturb the text being written.
+                    if let name = AssistantActions.Name(rawValue: step.tool), name.opensScreen {
+                        Button(step.label) { open(name, step) }
+                    } else {
+                        Button(step.label) { runner?.runStep(card, step: step) }
+                            .disabled(card.busy)
+                    }
                 }
             }
         }
@@ -135,6 +150,32 @@ struct AssistantCardView: View {
                              webHint(card)].compactMap { $0 }
                 if !parts.isEmpty { Text(parts.joined(separator: " ")) }
             }
+        }
+    }
+
+    /// A sniffer screen a step opens, filled in with the recorded request; what happens there is the user's doing.
+    private enum StepScreen: Hashable {
+        case repeatRequest(RepeatRequest)
+        case mapLocal(MapRule)
+        case tlsHosts
+    }
+
+    private func open(_ name: AssistantActions.Name, _ step: CardStep) {
+        if name == .openTLSHosts {
+            screen = .tlsHosts
+            return
+        }
+        guard let ref = step.text.flatMap(TrafficRef.init), let index = ref.index, let (session, flow) = captures.library.find(ref),
+              flow.exchanges.indices.contains(index) else {
+            nothingToSummarize = true
+            return
+        }
+        if name == .openMapLocal {
+            screen = .mapLocal(sniffer.localRule(flow, index, sessionID: session))
+        } else {
+            let exchange = flow.exchanges[index]
+            let body = exchange.requestBodyStored ? sniffer.body(sessionID: session, flowID: flow.id, index: index, request: true) : nil
+            screen = .repeatRequest(RepeatRequest.from(flow, exchange, body: body))
         }
     }
 

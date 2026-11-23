@@ -57,9 +57,15 @@ nonisolated enum CardSubject: Equatable, Hashable, Sendable {
     case internet
     /// One link from the Check a link screen; what was checked about it is kept on the `LinkShelf`.
     case link(String)
+    /// One recorded request, by its place in the recording: what it says is read there, never kept here.
+    case request(TrafficRef)
+    /// The requests of one endpoint in a recording (nil is the live one): `GET api.example.com/v1/users/{id}`.
+    case endpoint(session: String?, key: String)
+    /// One recorded connection.
+    case connection(TrafficRef)
 
     /// Which narrow prompt the model gets for it.
-    enum Kind: String, Sendable { case lan, host, bluetooth, wifi, traffic, capture, internet, link }
+    enum Kind: String, Sendable { case lan, host, bluetooth, wifi, traffic, capture, internet, link, request, endpoint, connection }
 
     var kind: Kind {
         switch self {
@@ -71,6 +77,9 @@ nonisolated enum CardSubject: Equatable, Hashable, Sendable {
         case .capture: .capture
         case .internet: .internet
         case .link: .link
+        case .request: .request
+        case .endpoint: .endpoint
+        case .connection: .connection
         }
     }
 }
@@ -90,6 +99,9 @@ nonisolated enum CardSubjects {
             case .capture: "capture"
             case .internet: "internet"
             case .link(let link): "link:" + link
+            case .request(let ref): "request:" + ref.text
+            case .endpoint(let session, let key): "endpoint:\(session ?? "")|\(key)"
+            case .connection(let ref): "connection:" + ref.text
             }
         }()
     }
@@ -108,6 +120,12 @@ nonisolated enum CardSubjects {
         case "capture": return .capture
         case "internet": return .internet
         case "link": return value.isEmpty ? nil : .link(value)
+        case "request": return TrafficRef(value).flatMap { $0.index == nil ? nil : .request($0) }
+        case "connection": return TrafficRef(value).map { .connection($0) }
+        case "endpoint":
+            guard let bar = value.firstIndex(of: "|") else { return nil }
+            let key = String(value[value.index(after: bar)...])
+            return key.isEmpty ? nil : .endpoint(session: bar == value.startIndex ? nil : String(value[..<bar]), key: key)
         default: return nil
         }
     }
@@ -125,6 +143,12 @@ nonisolated struct CardStep: Equatable, Hashable, Sendable {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tool = object["tool"] as? String else { return call }
         return tool
+    }
+
+    /// The call's "text" argument: what the step is about.
+    var text: String? {
+        guard let data = call.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object["text"] as? String
     }
 }
 
@@ -198,8 +222,8 @@ nonisolated enum AssistantCards {
         case .wifi(let bssid): wifi(snapshot, bssid: bssid, now: now)
         case .internet: InternetCards.internet(snapshot, now: now)
         // Recorded traffic, captures and links come from their shelves, not the snapshot: see `traffic`,
-        // `capture` and `InternetCards.link`.
-        case .traffic, .capture, .link: nil
+        // `capture`, `InternetCards.link` and `TrafficCards`.
+        case .traffic, .capture, .link, .request, .endpoint, .connection: nil
         }
     }
 
@@ -514,6 +538,7 @@ nonisolated enum AssistantCards {
                 let hosts = cleartext.prefix(3).map { AssistantDigest.clean($0, limit: 30) }.joined(separator: ", ")
                 found.append(.init(risk: .warning, text: String(localized: "Unencrypted HTTP to \(hosts): what was sent can be read on the way.")))
             }
+            found += endpointFindings(flows)
             let servers = Set(flows.map(\.title)).count
             let apps = Set(flows.compactMap(\.app)).count
             var line = String(localized: "\(flows.count) connections to \(servers) servers.")
@@ -528,6 +553,28 @@ nonisolated enum AssistantCards {
             if cleartext.isEmpty { found.append(.init(risk: .ok, text: String(localized: "Everything went encrypted."))) }
         }
         return CardFacts(subject: .traffic, title: name, findings: ranked(found), steps: [], data: digest, deepData: digest)
+    }
+
+    /// What the recording's endpoints show: secrets in addresses, the one that fails, the slowest, the busiest, trackers.
+    private static func endpointFindings(_ flows: [TrafficFlow]) -> [CardFinding] {
+        let groups = EndpointGroup.build(flows)
+        guard !groups.isEmpty else { return [] }
+        var found: [CardFinding] = []
+        let scans = TrafficAudit.scan(RequestHit.all(flows).filter { !$0.exchange.method.isEmpty })
+        for issue in TrafficAudit.issues(scans) where [.secretUnencrypted, .secretInAddress, .tracker].contains(issue.kind) {
+            found.append(issue.finding)
+        }
+        func name(_ group: EndpointGroup) -> String { AssistantDigest.clean(group.endpoint.key, limit: 60) }
+        if let failing = groups.filter({ $0.errors > 0 }).max(by: { $0.errors < $1.errors }) {
+            found.append(.init(risk: .warning, text: String(localized: "Fails most often: \(name(failing)), errors \(failing.errors) of \(failing.hits.count).")))
+        }
+        if let slowest = groups.max(by: { ($0.typicalMs ?? 0) < ($1.typicalMs ?? 0) }), let typical = slowest.typicalMs, typical >= TrafficAudit.slowTypicalMs {
+            found.append(.init(risk: .warning, text: String(localized: "Slowest: \(name(slowest)), usually \(TrafficAudit.duration(typical)).")))
+        }
+        if let busiest = groups.first, busiest.hits.count > 1 {
+            found.append(.init(risk: .info, text: String(localized: "Most requested: \(name(busiest)), \(busiest.hits.count) times; endpoints in all: \(groups.count).")))
+        }
+        return found
     }
 
     /// Plain-text protocols in a capture: logins and pages there can be read by anyone who records them.
@@ -647,6 +694,9 @@ nonisolated enum CardPrompts {
         case .traffic: "The subject is the traffic recorded from the user's own phone: which servers and apps it talked to, anything unencrypted, tracking or unexpected."
         case .capture: "The subject is a captured traffic file: what is in it, the busiest devices, and anything unusual (deauthentication bursts, plain-text protocols, unknown devices)."
         case .internet: "The subject is the user's internet connection as the app measured it: whether it works, name lookups (DNS), latency, the provider and public address, whether HTTPS is intercepted, which sites and services open, the speed, and the path out. When often-blocked services do not open while the rest works, that is filtering on the way, not a fault of the phone. Say what a measurement means for everyday use (calls, video, games). A check that has not been run is not a problem: say what is known and that the buttons below run the rest; do not guess at faults it might find."
+        case .request: "The subject is one HTTP request an app on the user's phone made: say in plain words which service it goes to and, from its method and path, what it is probably for; what is wrong with it, if anything; and what to check next. The app sends it, not the user: never tell the user they pass or expose something. Values are hidden from you on purpose: never guess them. Signing in through headers over an encrypted connection is normal, not a leak."
+        case .endpoint: "The subject is one endpoint (a method, a server and a path) an app on the user's phone calls: what it is probably for, how often it is called, how often it fails, how fast it is, and what is wrong, if anything. The app sends it, not the user: never tell the user they pass or expose something. Values are hidden from you on purpose: never guess them. Signing in through headers over an encrypted connection is normal, not a leak."
+        case .connection: "The subject is one network connection an app on the user's phone opened: which service it goes to, whether it is encrypted, what is known about what went through it, and what is wrong, if anything. An app that refuses Spectra's certificate protects itself: that is not a fault. When nothing was read, say the content is unknown; do not guess it."
         case .link: "The subject is one link the user may open: whether the address looks like phishing (look-alike names, a brand in the wrong place, free hosting, a link hidden inside a link), what its certificate and the domain's age say, and where its redirects lead. A young domain or certificate is a warning sign, not proof; a clean address does not prove the page is safe."
         }
     }
@@ -694,6 +744,7 @@ nonisolated enum CardPrompts {
         case .checkSites: "This check tried to open the user's own sites: say which open and which do not, and what a site that does not open most likely means (blocked on the way, the site is down, or a DNS problem)."
         case .checkSite: "This check read the site's certificate and asked the domain's registry: say what it found about the certificate (who issued it and when, only if the result names them) and how old the domain is, and whether that is a warning sign (phishing sites are usually only days or weeks old). When no certificate was received or the registry has no record, say exactly that: it matters in itself. Never name an issuer, a registrar or a date that is not in the result."
         case .expandRedirects: "This check followed the link's redirects without opening the page: say where the link really leads and whether the final site differs from the one in the link."
+        case .repeatRequest: "This check sent the recorded request once more: say whether the answer is the same as the recorded one (status, time, size) and whether the problem is still there. A status of 401 or 403 now can simply mean that the recorded sign-in has expired."
         case .scanLAN, .scanWifi, .scanBluetooth: "This check scanned again: say only what changed or what is new."
         default: nil
         }

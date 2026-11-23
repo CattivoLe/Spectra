@@ -25,11 +25,8 @@ struct AssistantSources {
     /// nothing to summarize (no recorded traffic or capture handed over).
     func cardFacts(_ subject: CardSubject, now: Date = .now) -> CardFacts? {
         switch subject {
-        case .traffic:
-            guard let recording = captures.currentRecording else { return nil }
-            return AssistantCards.traffic(recording.flows, name: recording.name,
-                                          digest: TrafficDigest.text(recording.flows, name: recording.name,
-                                                                     origin: "recorded on the phone (Traffic screen)"))
+        case .traffic, .request, .endpoint, .connection:
+            return captures.prepared(subject) ?? trafficWork(subject, bodies: false)?()
         case .capture:
             guard let entry = captures.latest else { return nil }
             return AssistantCards.capture(entry.analysis, name: entry.name,
@@ -38,6 +35,44 @@ struct AssistantSources {
             return links.facts(link, now: now)
         default:
             return AssistantCards.facts(subject, snapshot: snapshot(now: now), now: now)
+        }
+    }
+
+    /// Works out a card of recorded traffic off the main thread, bodies included: it looks through every request of a
+    /// recording. `cardFacts` then finds it ready; without this it reads the recording alone, at once.
+    func prepare(_ subject: CardSubject) async {
+        guard let work = trafficWork(subject, bodies: true) else { return }
+        if let facts = await Task.detached(priority: .userInitiated, operation: work).value { captures.keep(facts, for: subject) }
+    }
+
+    private func trafficWork(_ subject: CardSubject, bodies: Bool) -> (@Sendable () -> CardFacts?)? {
+        let library = captures.library
+        func context(_ session: String?, _ flows: [TrafficFlow]) -> TrafficCards.Context {
+            TrafficCards.Context(session: session, flows: flows, bodies: bodies ? library.bodies(session) : nil,
+                                 recording: library.recording())
+        }
+        switch subject {
+        case .traffic:
+            guard let recording = captures.currentRecording else { return nil }
+            return {
+                AssistantCards.traffic(recording.flows, name: recording.name,
+                                       digest: TrafficDigest.text(recording.flows, name: recording.name,
+                                                                  origin: "recorded on the phone (Traffic screen)"))
+            }
+        case .request(let ref):
+            guard let index = ref.index, let (session, flow) = library.find(ref) else { return nil }
+            let context = context(session, library.flows(session) ?? [flow])
+            return { TrafficCards.request(flow, index, context) }
+        case .connection(let ref):
+            guard let (session, flow) = library.find(ref) else { return nil }
+            let context = context(session, library.flows(session) ?? [flow])
+            return { TrafficCards.connection(flow, context) }
+        case .endpoint(let session, let key):
+            guard let flows = library.flows(session) else { return nil }
+            let context = context(session, flows)
+            return { TrafficCards.endpoint(key, context) }
+        default:
+            return nil
         }
     }
 

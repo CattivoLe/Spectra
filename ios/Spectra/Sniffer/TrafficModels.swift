@@ -1,7 +1,7 @@
 import Foundation
 
 /// One header or query/body parameter. Port of Android `HttpField`.
-nonisolated struct HttpField: Codable, Equatable, Sendable {
+nonisolated struct HttpField: Codable, Hashable, Sendable {
     let name: String
     let value: String
 }

@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.core.ConnectionFilter
 import cattivole.spectra.core.RequestFilter
+import cattivole.spectra.core.RequestHit
 import cattivole.spectra.core.matches
 
 /**
@@ -57,6 +58,10 @@ fun TrafficListScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
     LaunchedEffect(focus) {
         if (focus != null) listState.animateScrollToItem(0)
     }
+    var byEndpoint by remember { mutableStateOf(prefs.getBoolean(BY_ENDPOINT, false)) }
+    var expanded by rememberSaveable { mutableStateOf(listOf<String>()) }
+    val grouped = byEndpoint && !connections
+    val groups = rememberEndpointGroups(flows, filter, grouped)
     val all = flows.flatMap { flow -> flow.exchanges.indices.map { TrafficHit(flow, it) } }
     val hits = if (connections) {
         flows.filter { ConnectionFilter.passes(kind, it) && it.matches(needle) }
@@ -82,7 +87,7 @@ fun TrafficListScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
         searchPlaceholder = tr("Host, app or address"),
         listState = listState,
         overlay = {
-            if (hits.isEmpty()) {
+            if (if (grouped) groups?.isEmpty() == true else hits.isEmpty()) {
                 when {
                     narrowing -> EmptyState(
                         Icons.Rounded.WifiTethering,
@@ -141,13 +146,42 @@ fun TrafficListScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
             }
         }
         val refused = flows.count { it.refused }
-        cardSection(
+        val open: (RequestHit) -> Unit = { hit ->
+            if (session != null) nav.savedTrafficFlow(session.id, hit.flow.id, hit.index) else nav.trafficFlow(hit.flow.id, hit.index)
+        }
+        if (!connections && all.isNotEmpty()) {
+            item(key = "grouping") {
+                GroupingRow(
+                    count = when {
+                        grouped -> tr("Endpoints: %d · requests: %d", groups.orEmpty().size, groups.orEmpty().sumOf { it.shown.size })
+                        hits.size == total -> tr("Requests: %d", total)
+                        else -> tr("Requests: %d of %d", hits.size, total)
+                    },
+                    byEndpoint = byEndpoint,
+                    onChange = {
+                        byEndpoint = it
+                        prefs.edit().putBoolean(BY_ENDPOINT, it).apply()
+                    },
+                )
+            }
+        }
+        if (grouped) {
+            endpointRows(
+                groups.orEmpty(),
+                expanded = expanded.toSet(),
+                onToggle = { key -> expanded = if (key in expanded) expanded - key else expanded + key },
+                onAbout = { key -> nav.trafficEndpoint(key, session?.id) },
+                focus = focus,
+                scope = scope,
+                onFocus = traffic::toggleFocus,
+                onOpen = open,
+            )
+            if (refused > 0 && !groups.isNullOrEmpty()) {
+                item(key = "refused") { SectionFooter(tr("Connections that refused the certificate and went through unread: %d.", refused)) }
+            }
+        } else cardSection(
             hits,
-            header = when {
-                connections -> tr("Connections: %d of %d", hits.size, total)
-                hits.size == total -> tr("Requests: %d", total)
-                else -> tr("Requests: %d of %d", hits.size, total)
-            },
+            header = if (connections) tr("Connections: %d of %d", hits.size, total) else null,
             footer = when {
                 connections && kind == null -> tr("DNS lookups are left out until their filter is on.")
                 !connections && refused > 0 -> tr("Connections that refused the certificate and went through unread: %d.", refused)
@@ -172,3 +206,4 @@ fun TrafficListScreen(model: SpectraModel, nav: Navigator, sessionId: String?) {
 }
 
 private const val SHOWS_CONNECTIONS = "trafficShowsConnections"
+private const val BY_ENDPOINT = "trafficByEndpoint"

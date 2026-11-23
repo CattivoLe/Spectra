@@ -502,7 +502,17 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
     val coroutines = rememberCoroutineScope()
     val context = LocalContext.current
     val copy = rememberCopier()
-    SpectraScreen(title = http?.summary ?: flow.title, subtitle = flow.host ?: flow.app, onBack = nav::back) {
+    SpectraScreen(
+        title = http?.summary ?: flow.title,
+        subtitle = flow.host ?: flow.app,
+        onBack = nav::back,
+        actions = {
+            AskAssistantButton(model, nav, subject = {
+                val ref = cattivole.spectra.assistant.TrafficRef(sessionId, flow, exchange?.takeIf { http != null })
+                if (ref.index != null) cattivole.spectra.assistant.CardSubject.Request(ref) else cattivole.spectra.assistant.CardSubject.Connection(ref)
+            })
+        },
+    ) {
         freeCard("hero") {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconTile(flow.icon(), flow.tint(), size = 56.dp)
@@ -554,10 +564,7 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
                     add {
                         ActionRow(tr("Repeat request"), Icons.Rounded.Replay, onClick = {
                             coroutines.launch {
-                                val body = withContext(Dispatchers.IO) {
-                                    if (http.requestBodyStored) traffic.body(sessionId, flow.id, exchange!!, true) else null
-                                }
-                                traffic.repeatDraft = RepeatRequest.from(flow, http, body)
+                                traffic.draftRepeat(flow, exchange!!, sessionId)
                                 nav.trafficRepeat()
                             }
                         })
@@ -565,24 +572,7 @@ fun TrafficFlowScreen(model: SpectraModel, nav: Navigator, flowId: Long, session
                     add {
                         ActionRow(tr("Map locally"), Icons.Rounded.SwapHoriz, onClick = {
                             coroutines.launch {
-                                val body = withContext(Dispatchers.IO) {
-                                    if (http.responseBodyStored) traffic.body(sessionId, flow.id, exchange!!, false) else null
-                                }
-                                val text = body?.let { BodyPreview.of(it, http.header("Content-Type", response = true)) }.let { view ->
-                                    when (view) {
-                                        is BodyView.Json -> view.text
-                                        is BodyView.Text -> view.text
-                                        else -> http.responseJson.orEmpty()
-                                    }
-                                }
-                                traffic.ruleDraft = MapRule(
-                                    id = java.util.UUID.randomUUID().toString(),
-                                    host = flow.host ?: flow.destination,
-                                    path = http.path,
-                                    status = http.status ?: 200,
-                                    contentType = http.header("Content-Type", response = true)?.substringBefore(';')?.trim() ?: "application/json",
-                                    body = text,
-                                )
+                                traffic.draftRule(flow, exchange!!, sessionId)
                                 nav.trafficMapRule(null)
                             }
                         })
@@ -823,7 +813,7 @@ private fun TlsSwitch(traffic: TrafficSniffer) {
 }
 
 @Composable
-private fun FlowBadges(flow: TrafficFlow, exchange: HttpExchange? = null) {
+internal fun FlowBadges(flow: TrafficFlow, exchange: HttpExchange? = null) {
     if (exchange?.httpVersion == Http2Assembler.VERSION) Pill("H2", MaterialTheme.colorScheme.primary)
     if (exchange?.messages?.isNotEmpty() == true) Pill("WS", MaterialTheme.colorScheme.tertiary)
     when (flow.kind()) {
@@ -1531,7 +1521,7 @@ private fun exchangeLine(exchange: HttpExchange): String? {
     return parts.joinToString(" · ").takeIf { it.isNotEmpty() }
 }
 
-private fun millis(ms: Long): String = if (ms < 1000) tr("%d ms", ms) else tr("%.2f s", ms / 1000.0)
+internal fun millis(ms: Long): String = if (ms < 1000) tr("%d ms", ms) else tr("%.2f s", ms / 1000.0)
 
 private fun preciseTime(millis: Long): String = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date(millis))
 

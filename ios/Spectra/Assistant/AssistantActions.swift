@@ -32,6 +32,15 @@ struct AssistantActions {
         case checkSite = "check_site"
         /// The redirects of the link in "text", followed by their headers only. Card steps only.
         case expandRedirects = "expand_redirects"
+        /// The recorded request "text" points to (a `TrafficRef`), sent once more as it was. GET and HEAD only.
+        case repeatRequest = "repeat_request"
+        /// These three run nothing: their button opens a screen of the sniffer, filled in, where the user decides.
+        case openRepeat = "open_repeat"
+        case openMapLocal = "open_map_local"
+        case openTLSHosts = "open_tls_hosts"
+
+        /// The step opens a screen instead of running a check.
+        var opensScreen: Bool { [.openRepeat, .openMapLocal, .openTLSHosts].contains(self) }
     }
 
     /// Runs a summary card's step: a bare tool name or a whole call (`{"tool": "scan_ports", "host": …}`), as the
@@ -79,7 +88,8 @@ struct AssistantActions {
         case .checkSites: String(localized: "check of your sites")
         case .checkSite: String(localized: "certificate and domain check")
         case .expandRedirects: String(localized: "redirects")
-        case nil: name
+        case .repeatRequest: String(localized: "repeated request")
+        case .openRepeat, .openMapLocal, .openTLSHosts, nil: name
         }
     }
 
@@ -98,7 +108,8 @@ struct AssistantActions {
         case .checkSites: String(localized: "Trying your sites…")
         case .checkSite: String(localized: "Asking the site and the registry…")
         case .expandRedirects: String(localized: "Following redirects…")
-        case nil: String(localized: "Running \(name)…")
+        case .repeatRequest: String(localized: "Sending the request again…")
+        case .openRepeat, .openMapLocal, .openTLSHosts, nil: String(localized: "Running \(name)…")
         }
     }
 
@@ -170,6 +181,21 @@ struct AssistantActions {
             let trace = await RedirectTracer.trace(start)
             sources.links.keep(redirects: trace, for: target.link)
             return InternetCards.redirectText(trace)
+
+        case .repeatRequest:
+            guard let ref = decodeArg(argsJSON, keys: ["text"]).flatMap(TrafficRef.init), let index = ref.index,
+                  let (session, flow) = sources.captures.library.find(ref), flow.exchanges.indices.contains(index) else {
+                return "The recorded request is no longer there."
+            }
+            let exchange = flow.exchanges[index]
+            guard ["GET", "HEAD"].contains(exchange.method.uppercased()) else {
+                return "Only a request that changes nothing on the server (GET, HEAD) is sent again by itself."
+            }
+            let body = exchange.requestBodyStored ? sources.captures.library.body(session, flow.id, index, true) : nil
+            return TrafficCards.compare(exchange, await RequestRepeater.send(RepeatRequest.from(flow, exchange, body: body)))
+
+        case .openRepeat, .openMapLocal, .openTLSHosts:
+            return "This step opens a screen."
 
         case .scanPorts:
             guard let host = decodeArg(argsJSON, keys: ["host", "bssid"]) else {

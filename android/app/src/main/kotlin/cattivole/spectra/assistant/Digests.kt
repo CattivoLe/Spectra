@@ -2,7 +2,11 @@ package cattivole.spectra.assistant
 
 import cattivole.spectra.core.CaptureAnalysis
 import cattivole.spectra.core.Catalog
+import cattivole.spectra.core.Endpoint
+import cattivole.spectra.core.EndpointGroup
 import cattivole.spectra.core.GattValue
+import cattivole.spectra.core.RequestHit
+import cattivole.spectra.core.TrackerHosts
 import cattivole.spectra.core.TrafficFlow
 import cattivole.spectra.core.kind
 import cattivole.spectra.platform.BleGattClient
@@ -80,6 +84,49 @@ object TrafficDigest {
         }
         val kinds = flows.groupBy { it.kind() }.map { it.key.name to it.value.size }.sortedByDescending { it.second }
         lines.add("By kind: " + kinds.joinToString(", ") { "${it.first} ${it.second}" } + ".")
+        // What was asked of those servers, by endpoint: the paths' changing parts are left out, they can name a person.
+        val groups = EndpointGroup.build(flows)
+        if (groups.isNotEmpty()) {
+            fun name(group: EndpointGroup) = AssistantDigest.clean(group.key, 60)
+            fun line(title: String, items: List<String>) = lines.add("$title: " + if (items.isEmpty()) "none." else items.joinToString("; ") + ".")
+            lines.add("HTTP requests read: ${groups.sumOf { it.hits.size }}, endpoints: ${groups.size} ({id} stands for a changing part).")
+            line("Most requested", groups.take(4).map { "${name(it)} ×${it.hits.size}" })
+            line("With errors", groups.filter { it.errors > 0 }.sortedByDescending { it.errors }.take(3).map { "${name(it)} ${it.errors} of ${it.hits.size}" })
+            line(
+                "Slow (usually a second or more)",
+                groups.filter { (it.typicalMs ?: 0) >= TrafficAudit.SLOW_TYPICAL_MS }.sortedByDescending { it.typicalMs }.take(3).map { "${name(it)} ${it.typicalMs} ms" },
+            )
+            val scans = TrafficAudit.scan(RequestHit.all(flows).filter { it.exchange.method.isNotEmpty() })
+            val exposed = scans.filter { scan -> scan.secrets.any { scan.cleartext || it.place.inAddress } }
+            line(
+                "Secrets in addresses or sent unencrypted (values hidden)",
+                if (exposed.isEmpty()) emptyList() else listOf("${exposed.size} requests, ${TrafficAudit.englishList(exposed.flatMap { it.secrets }.distinct(), 3)}"),
+            )
+        } else {
+            val requests = flows.mapNotNull { flow -> flow.request?.let { flow.title to it } }
+            if (requests.isNotEmpty()) {
+                lines.add(
+                    "Requests seen: " + requests.take(8).joinToString("; ") { (host, request) ->
+                        val shown = if (' ' in request) "${request.substringBefore(' ')} ${Endpoint.template(request.substringAfter(' '))}" else request
+                        "${AssistantDigest.clean(host, 40)} ${AssistantDigest.clean(shown, 60)}"
+                    } + ".",
+                )
+            }
+        }
+        val trackers = flows.mapNotNull { TrackerHosts.serviceOf(it.title) }.distinctBy { it.name }
+        lines.add(
+            "Known analytics and advertising services contacted: " +
+                if (trackers.isEmpty()) "none." else trackers.take(6).joinToString(", ") { "${it.name} (${TrafficAudit.englishKind(it.kind)})" } + ".",
+        )
+        val cleartext = flows.filter { it.kind() == cattivole.spectra.core.TrafficKind.HTTP && !it.tls }
+        if (cleartext.isNotEmpty()) {
+            lines.add("Unencrypted HTTP to: " + cleartext.map { it.title }.toSortedSet().take(8).joinToString(", ") { AssistantDigest.clean(it, 40) } + ".")
+        }
+        val refused = flows.count { it.refused }
+        if (refused > 0) lines.add("$refused connections refused Spectra's certificate (the app pins its own, or the certificate is not trusted yet).")
+        val dns = flows.count { it.kind() == cattivole.spectra.core.TrafficKind.DNS }
+        if (dns > 0) lines.add("$dns DNS lookups.")
+        // Last, so a long list of servers gives way.
         val byHost = flows.groupBy { it.title }.map { (host, group) ->
             HostRow(
                 host,
@@ -89,8 +136,10 @@ object TrafficDigest {
                 group.map { it.destinationPort }.toSortedSet().toList(),
                 group.mapNotNull { it.app }.toSortedSet().toList(),
             )
-        }.sortedByDescending { it.bytes }
+        }.sortedWith(compareByDescending<HostRow> { it.bytes }.thenBy { it.host })
         lines.add("Busiest servers (${byHost.size} in all):")
+        var room = BUDGET - lines.sumOf { it.length + 1 } - 20
+        var listed = 0
         for (entry in byHost.take(14)) {
             val parts = mutableListOf(
                 AssistantDigest.clean(entry.host, 50),
@@ -100,31 +149,13 @@ object TrafficDigest {
                 "port " + entry.ports.take(3).joinToString(","),
             )
             if (entry.apps.isNotEmpty()) parts.add("app " + entry.apps.take(2).joinToString(", ") { AssistantDigest.clean(it, 30) })
-            lines.add("- " + parts.joinToString(" · "))
+            val line = "- " + parts.joinToString(" · ")
+            room -= line.length + 1
+            if (room < 0) break
+            lines.add(line)
+            listed += 1
         }
-        if (byHost.size > 14) lines.add("- …and ${byHost.size - 14} more.")
-        val exchanges = flows.flatMap { flow -> flow.exchanges.map { flow.title to it } }
-        if (exchanges.isNotEmpty()) {
-            lines.add("HTTP requests seen (${exchanges.size}):")
-            for ((host, exchange) in exchanges.take(10)) {
-                var line = "- ${AssistantDigest.clean(host, 40)} ${AssistantDigest.clean(exchange.summary, 80)}"
-                exchange.status?.let { line += " → $it" }
-                lines.add(line)
-            }
-        } else {
-            val requests = flows.mapNotNull { flow -> flow.request?.let { flow.title to it } }
-            if (requests.isNotEmpty()) {
-                lines.add("Requests seen: " + requests.take(8).joinToString("; ") { "${AssistantDigest.clean(it.first, 40)} ${AssistantDigest.clean(it.second, 60)}" } + ".")
-            }
-        }
-        val cleartext = flows.filter { it.kind() == cattivole.spectra.core.TrafficKind.HTTP && !it.tls }
-        if (cleartext.isNotEmpty()) {
-            lines.add("Unencrypted HTTP to: " + cleartext.map { it.title }.toSortedSet().take(8).joinToString(", ") { AssistantDigest.clean(it, 40) } + ".")
-        }
-        val refused = flows.count { it.refused }
-        if (refused > 0) lines.add("$refused connections refused Spectra's certificate (the app pins its own, or the certificate is not trusted yet).")
-        val dns = flows.count { it.kind() == cattivole.spectra.core.TrafficKind.DNS }
-        if (dns > 0) lines.add("$dns DNS lookups.")
+        if (byHost.size > listed) lines.add("- …and ${byHost.size - listed} more.")
         var text = lines.joinToString("\n")
         if (text.length > BUDGET) text = text.take(BUDGET) + "\n…(cut)"
         return text
@@ -184,6 +215,12 @@ class CaptureShelf {
     /** The phone's own traffic recorded on the Traffic screen, handed over with its ✨ button. */
     class Recording(val name: String, val flows: List<TrafficFlow>, val keptAt: Long)
 
+    /** Where the cards of recorded requests read the recordings. Set once at launch. */
+    var library = TrafficLibrary()
+
+    /** Cards worked out off the main thread just before they are shown, newest last. */
+    private val prepared = ArrayDeque<Pair<CardSubject, CardFacts>>()
+
     var latest: Entry? = null
         private set
     private var recording: Recording? = null
@@ -198,6 +235,14 @@ class CaptureShelf {
     fun keep(traffic: List<TrafficFlow>, name: String, at: Long = System.currentTimeMillis()) {
         recording = Recording(name, traffic, at)
     }
+
+    fun keep(facts: CardFacts, subject: CardSubject) {
+        prepared.removeAll { it.first == subject }
+        prepared.addLast(subject to facts)
+        if (prepared.size > 4) prepared.removeFirst()
+    }
+
+    fun prepared(subject: CardSubject): CardFacts? = prepared.lastOrNull { it.first == subject }?.second
 
     /** What the assistant reads as the recorded traffic: the one handed over last, else whatever the screen holds. */
     val currentRecording: Recording? get() = recording ?: recordedTraffic()

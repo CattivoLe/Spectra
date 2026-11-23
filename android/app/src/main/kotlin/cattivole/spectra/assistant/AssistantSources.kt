@@ -1,5 +1,8 @@
 package cattivole.spectra.assistant
 
+import cattivole.spectra.core.TrafficFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import cattivole.spectra.SpectraModel
 import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.PcapAnalyzer
@@ -22,14 +25,53 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf) {
      * nothing to summarize (no recorded traffic or capture handed over).
      */
     fun cardFacts(subject: CardSubject, now: Long = System.currentTimeMillis()): CardFacts? = when (subject) {
-        CardSubject.Traffic -> captures.currentRecording?.let { recording ->
-            AssistantCards.traffic(recording.flows, recording.name, TrafficDigest.text(recording.flows, recording.name, "recorded on the phone (Traffic screen)"))
-        }
+        CardSubject.Traffic, is CardSubject.Request, is CardSubject.Endpoint, is CardSubject.Connection ->
+            captures.prepared(subject) ?: trafficWork(subject, bodies = false)?.invoke()
         CardSubject.Capture -> captures.latest?.let { entry ->
             AssistantCards.capture(entry.analysis, entry.name, CaptureDigest.text(entry.analysis, entry.name, entry.origin, ::describe))
         }
         is CardSubject.Link -> links.facts(subject.link, now)
         else -> AssistantCards.facts(subject, snapshot(now), now)
+    }
+
+    /** What the cards of recorded requests read the recordings through. */
+    val library: TrafficLibrary get() = captures.library
+
+    /**
+     * Works out a card of recorded traffic off the main thread, bodies included: it looks through every request of a
+     * recording. [cardFacts] then finds it ready; without this it reads the recording alone, at once.
+     */
+    suspend fun prepare(subject: CardSubject) {
+        val work = trafficWork(subject, bodies = true) ?: return
+        withContext(Dispatchers.IO) { work() }?.let { captures.keep(it, subject) }
+    }
+
+    private fun trafficWork(subject: CardSubject, bodies: Boolean): (() -> CardFacts?)? {
+        fun context(session: String?, flows: List<TrafficFlow>) =
+            TrafficCards.Context(session, flows, if (bodies) library.bodies(session) else null, library.recording())
+        return when (subject) {
+            CardSubject.Traffic -> captures.currentRecording?.let { recording ->
+                {
+                    AssistantCards.traffic(recording.flows, recording.name, TrafficDigest.text(recording.flows, recording.name, "recorded on the phone (Traffic screen)"))
+                }
+            }
+            is CardSubject.Request -> {
+                val index = subject.ref.index ?: return null
+                val (session, flow) = library.find(subject.ref) ?: return null
+                val context = context(session, library.flows(session) ?: listOf(flow));
+                { TrafficCards.request(flow, index, context) }
+            }
+            is CardSubject.Connection -> {
+                val (session, flow) = library.find(subject.ref) ?: return null
+                val context = context(session, library.flows(session) ?: listOf(flow));
+                { TrafficCards.connection(flow, context) }
+            }
+            is CardSubject.Endpoint -> {
+                val context = context(subject.session, library.flows(subject.session) ?: return null);
+                { TrafficCards.endpoint(subject.key, context) }
+            }
+            else -> null
+        }
     }
 
     fun snapshot(now: Long = System.currentTimeMillis()): AssistantSnapshot {

@@ -327,11 +327,11 @@ struct AssistantCardsTests {
 
     @Test func everyActionAndSubjectGetsItsOwnShortPrompt() {
         let english = Locale(identifier: "en")
-        let kinds: [CardSubject.Kind] = [.lan, .host, .bluetooth, .wifi, .traffic, .capture, .internet, .link]
+        let kinds: [CardSubject.Kind] = [.lan, .host, .bluetooth, .wifi, .traffic, .capture, .internet, .link, .request, .endpoint, .connection]
         let prompts = CardAction.allCases.filter { $0 != .check }.flatMap { action in kinds.map { CardPrompts.system(action, kind: $0, locale: english) } }
         #expect(Set(prompts).count == prompts.count)
         // After a check the prompt follows the check, not the subject: each kind of check gets its own.
-        let checks = ["check_port_forwarding", "connect_bluetooth", "scan_ports", "capture_pcap"]
+        let checks = ["check_port_forwarding", "connect_bluetooth", "scan_ports", "capture_pcap", "repeat_request"]
             .map { CardPrompts.system(.check, kind: .host, locale: english, tool: $0) }
         #expect(Set(checks).count == checks.count)
         #expect(prompts.map(\.count).max()! < 2200)

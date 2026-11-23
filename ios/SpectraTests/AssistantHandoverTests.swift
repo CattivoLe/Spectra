@@ -26,9 +26,11 @@ struct AssistantHandoverTests {
         let text = TrafficDigest.text(flows, name: "current recording", origin: "recorded on the phone")
         #expect(text.contains("3 connections"))
         #expect(text.contains("api.example.com"))
-        // The busiest server comes first.
-        #expect(text.range(of: "api.example.com")!.lowerBound < text.range(of: "ads.tracker.net")!.lowerBound)
-        #expect(text.contains("GET /track?id=1 → 200"))
+        // The busiest server comes first in their list.
+        let servers = text[text.range(of: "Busiest servers")!.lowerBound...]
+        #expect(servers.range(of: "api.example.com")!.lowerBound < servers.range(of: "ads.tracker.net")!.lowerBound)
+        // A request is named by its endpoint: what its query carries stays out.
+        #expect(text.contains("Most requested: GET ads.tracker.net/track ×1") && !text.contains("id=1"))
         #expect(text.contains("Unencrypted HTTP to: ads.tracker.net"))
         #expect(text.contains("1 DNS lookups"))
         #expect(text.count <= TrafficDigest.budget + 10)
