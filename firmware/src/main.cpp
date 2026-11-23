@@ -11,6 +11,7 @@
 #include "Crc32.h"
 #include "LoraCap.h"
 #include "Protocol.h"
+#include "Stream.h"
 
 #if SPECTRA_HAS_UI
 #include <M5Cardputer.h>
@@ -35,7 +36,7 @@
 
 // The phone app finds this tag in a firmware.bin to show which version it
 // carries. The version below points into it, so the linker keeps the tag.
-static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.10.1";
+static constexpr char kFirmwareTag[] = "SPECTRA-FW:0.11.0";
 static constexpr const char* kFirmwareVersion = kFirmwareTag + 11;
 
 // Wire protocol constants (UUIDs, command/message/update bytes) live in
@@ -48,11 +49,8 @@ static constexpr uint32_t kMsPerChannel = 120;
 // Fixed identity for this firmware. Other boards ship with their own name.
 static constexpr char kSensorName[] = SPECTRA_SENSOR_NAME;
 
-// Same bar the phone uses: bytes on one AP during the sniff window.
-static constexpr uint32_t kStreamingBytes = 120000;
-
-// How long promiscuous mode listens on each channel for clients.
-static constexpr uint32_t kSniffMsPerChannel = 250;
+// Channels promiscuous mode listens on for clients, besides any other channel
+// an access point was heard on. How long it stays is in Stream.h.
 static constexpr uint8_t kSniffChannels[] = {
     1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13,
 #if SPECTRA_WIFI_5G
@@ -318,7 +316,25 @@ static std::vector<StationEntry> capturedStations;
 static std::vector<ProbeEntry> capturedProbes;
 static std::vector<DeauthEntry> capturedDeauths;
 static std::vector<RevealEntry> capturedReveals;
+// Per-AP volume, scaled to kTrafficWindowMs when the sweep moves on.
 static std::vector<TrafficEntry> capturedTraffic;
+// The same two counts for the channel being listened to. Written by the
+// promiscuous callback, taken by loop() at the end of each channel.
+static TrafficEntry passTraffic[64];
+static size_t passTrafficCount = 0;
+static ClientPass<48> passClients;
+static portMUX_TYPE sniffMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint8_t sniffChannel = 0;    // 0: between channels, nothing is counted
+static volatile uint32_t sniffStartedMs = 0;
+// What each client sent in the latest sweep, and who has kept it up.
+static ClientSweep<64> clientSweep;
+static StreamWatch<16> streamWatch;
+static bool newStream = false;
+// Most per-client records sent per scan, busiest first.
+static constexpr size_t kClientTrafficMax = 32;
+// Where each access point of the latest scan lives.
+struct ApChannel { uint8_t bssid[6]; uint8_t channel; };
+static std::vector<ApChannel> apChannels;
 static std::vector<VendorIEEntry> capturedVendorIEs;
 // BSSIDs of hidden APs from the latest scan, for filtering probe responses.
 struct HiddenAP { uint8_t bssid[6]; };
@@ -496,21 +512,84 @@ static void recordReveal(const uint8_t *bssid, int8_t rssi,
   capturedReveals.push_back(entry);
 }
 
-/// Accumulate traffic volume for a BSSID.
-static void recordTraffic(const uint8_t *bssid, uint16_t frameLen) {
-  for (auto &t : capturedTraffic) {
-    if (macEqual(t.bssid, bssid)) {
-      t.bytes += frameLen;
-      t.packets++;
-      return;
+/// The channel the latest scan heard a BSSID on, 0 when it did not.
+static uint8_t homeChannel(const uint8_t *bssid) {
+  for (const auto &ap : apChannels) {
+    if (macEqual(ap.bssid, bssid)) return ap.channel;
+  }
+  return 0;
+}
+
+/// Accumulate one data frame: its volume for the access point, and its
+/// direction for the client.
+static void recordTraffic(const uint8_t *client, const uint8_t *bssid, bool uplink,
+                          uint8_t subtype, uint16_t frameLen, int8_t rssi) {
+  const uint8_t channel = sniffChannel;
+  if (channel == 0) return;
+  const uint32_t elapsed = millis() - sniffStartedMs;
+  // Group-addressed downlink has no client; our own frames are not findings.
+  const bool countClient = !isBroadcast(client) && !isMulticast(client) && !macEqual(client, ownMac) &&
+                           dataSubtypeCarriesData(subtype);
+  // A strong frame leaks onto neighbouring channels, where part of it is lost.
+  const uint8_t home = countClient ? homeChannel(bssid) : 0;
+
+  taskENTER_CRITICAL(&sniffMux);
+  size_t at = 0;
+  while (at < passTrafficCount && !macEqual(passTraffic[at].bssid, bssid)) ++at;
+  if (at == passTrafficCount && passTrafficCount < sizeof(passTraffic) / sizeof(passTraffic[0])) {
+    memcpy(passTraffic[at].bssid, bssid, 6);
+    passTraffic[at].bytes = 0;
+    passTraffic[at].packets = 0;
+    ++passTrafficCount;
+  }
+  if (at < passTrafficCount) {
+    passTraffic[at].bytes += frameLen;
+    if (passTraffic[at].packets < 0xFFFF) passTraffic[at].packets++;
+  }
+  if (countClient && (home == 0 || home == channel)) {
+    if (uplink) {
+      passClients.uplink(client, bssid, frameLen, rssi, elapsed);
+    } else {
+      passClients.downlink(client, bssid, frameLen);
     }
   }
-  if (capturedTraffic.size() >= 64) return;
-  TrafficEntry entry;
-  memcpy(entry.bssid, bssid, 6);
-  entry.bytes = frameLen;
-  entry.packets = 1;
-  capturedTraffic.push_back(entry);
+  taskEXIT_CRITICAL(&sniffMux);
+}
+
+/// Move one channel's counts into the sweep, now that it is known how long the
+/// channel was really listened to.
+static void foldPass(uint8_t channel, uint32_t listenMs) {
+  static TrafficEntry traffic[sizeof(passTraffic) / sizeof(passTraffic[0])];
+  static ClientPass<48> clients;
+  taskENTER_CRITICAL(&sniffMux);
+  const size_t trafficCount = passTrafficCount;
+  memcpy(traffic, passTraffic, trafficCount * sizeof(TrafficEntry));
+  clients = passClients;
+  passTrafficCount = 0;
+  passClients.count = 0;
+  taskEXIT_CRITICAL(&sniffMux);
+
+  if (listenMs == 0) return;
+  for (size_t i = 0; i < trafficCount; ++i) {
+    const uint32_t bytes = scaleToWindow(traffic[i].bytes, listenMs);
+    const uint32_t packets = scaleToWindow(traffic[i].packets, listenMs);
+    bool known = false;
+    for (auto &t : capturedTraffic) {
+      if (macEqual(t.bssid, traffic[i].bssid)) {
+        t.bytes += bytes;
+        t.packets = static_cast<uint16_t>(std::min<uint32_t>(t.packets + packets, 0xFFFF));
+        known = true;
+        break;
+      }
+    }
+    if (known || capturedTraffic.size() >= 64) continue;
+    TrafficEntry entry = traffic[i];
+    entry.bytes = bytes;
+    entry.packets = static_cast<uint16_t>(std::min<uint32_t>(packets, 0xFFFF));
+    capturedTraffic.push_back(entry);
+  }
+  clientSweep.fold(clients.rows, clients.count, channel,
+                   static_cast<uint16_t>(std::min<uint32_t>(listenMs, 0xFFFF)));
 }
 
 /// Record WPS vendor info for a BSSID, deduplicating.
@@ -702,21 +781,18 @@ static void IRAM_ATTR promiscuousCallback(void *buf, wifi_promiscuous_pkt_type_t
     }
   } else if (frameType == 2) {
     // Data frame.
-    const uint8_t toDS = (fc0 >> 0) & 0x01;   // actually fc1 bit 0
-    const uint8_t fromDS = (fc0 >> 1) & 0x01;  // actually fc1 bit 1
-    // Re-read from fc1 which is frame[1].
     const uint8_t ds = frame[1] & 0x03;
 
     if (ds == 0x01) {
       // ToDS=1, FromDS=0: client → AP.
       // Addr1 = BSSID, Addr2 = source (client), Addr3 = destination.
       recordStation(addr2, addr1, rssi, true);
-      recordTraffic(addr1, pkt->rx_ctrl.sig_len);
+      recordTraffic(addr2, addr1, true, subtype, pkt->rx_ctrl.sig_len, rssi);
     } else if (ds == 0x02) {
       // ToDS=0, FromDS=1: AP → client.
       // Addr1 = destination (client), Addr2 = BSSID, Addr3 = source.
       recordStation(addr1, addr2, rssi, true);
-      recordTraffic(addr2, pkt->rx_ctrl.sig_len);
+      recordTraffic(addr1, addr2, false, subtype, pkt->rx_ctrl.sig_len, rssi);
     }
   }
 }
@@ -1177,6 +1253,12 @@ static void sendTraffic(const TrafficEntry &t) {
   sendMessage(msg, sizeof(msg));
 }
 
+static void sendClientTraffic(const ClientTraffic &c) {
+  uint8_t msg[kClientTrafficLength];
+  encodeClientTraffic(msg, scanId, c);
+  sendMessage(msg, sizeof(msg));
+}
+
 static void sendVendorIE(const VendorIEEntry &v) {
   const uint8_t dnLen = static_cast<uint8_t>(strnlen(v.deviceName, 32));
   const uint8_t mfLen = static_cast<uint8_t>(strnlen(v.manufacturer, 32));
@@ -1236,13 +1318,14 @@ static void sendBattery() {
 }
 
 static void sendScanFinished(uint16_t apCount, uint16_t staCount,
-                             uint16_t probeCount, uint16_t durationMs) {
-  uint8_t msg[11] = {kMsgScanFinished};
+                             uint16_t probeCount, uint16_t durationMs, uint16_t clientCount) {
+  uint8_t msg[13] = {kMsgScanFinished};
   putU16(msg + 1, scanId);
   putU16(msg + 3, apCount);
   putU16(msg + 5, durationMs);
   putU16(msg + 7, staCount);
   putU16(msg + 9, probeCount);
+  putU16(msg + 11, clientCount);
   sendMessage(msg, sizeof(msg));
 }
 
@@ -2840,19 +2923,12 @@ static int evilTwinSeverity() {
   return worst;
 }
 
-static bool streamingPresent() {
-  for (const TrafficEntry &traffic : capturedTraffic) {
-    if (traffic.bytes >= kStreamingBytes) {
-      return true;
-    }
-  }
-  return false;
-}
-
 static void alertScanFindings() {
   Findings found;
   int worst = evilTwinSeverity();
-  if (streamingPresent()) {
+  // A client that has just turned out to be streaming. Said once: a camera
+  // that is always on would otherwise sound on every sweep.
+  if (newStream) {
     worst = std::max(worst, 1);
   }
   for (const DeauthEntry &event : capturedDeauths) {
@@ -2871,7 +2947,13 @@ static void alertScanFindings() {
   announce(found);
 }
 
-/// Sniff Wi-Fi frames in promiscuous mode to discover client stations.
+/// Sniff Wi-Fi frames in promiscuous mode: which clients there are, and what
+/// each of them sends and receives.
+///
+/// What this cannot hear is described in docs/protocol.md ("What the sensor
+/// does not hear"). The DATA bit of the filter already lets aggregated frames
+/// through: the driver tests MPDUs against DATA|DATA_MPDU and A-MPDU subframes
+/// against DATA|DATA_AMPDU, on the ESP32, the S3 and the C5 alike.
 static void sniffStations() {
   capturedStations.clear();
   capturedProbes.clear();
@@ -2879,9 +2961,30 @@ static void sniffStations() {
   capturedReveals.clear();
   capturedTraffic.clear();
   capturedVendorIEs.clear();
+  clientSweep.count = 0;
+  taskENTER_CRITICAL(&sniffMux);
+  passTrafficCount = 0;
+  passClients.count = 0;
+  taskEXIT_CRITICAL(&sniffMux);
 
   // Remember our own STA MAC so we filter it out.
   esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
+
+  // The fixed list, then any other channel an access point was heard on.
+  // Listening sends nothing, so a DFS channel is fine; one the country rules
+  // reject is skipped below.
+  std::vector<uint8_t> channels(std::begin(kSniffChannels), std::end(kSniffChannels));
+  std::vector<uint8_t> audible;
+  for (const auto &ap : apChannels) {
+    if (std::find(audible.begin(), audible.end(), ap.channel) == audible.end()) {
+      audible.push_back(ap.channel);
+    }
+    if (std::find(channels.begin(), channels.end(), ap.channel) == channels.end()) {
+      channels.push_back(ap.channel);
+    }
+  }
+  const uint32_t extra = sniffExtraMs(audible.size());
+  uint8_t surprises = 0;
 
   wifi_promiscuous_filter_t filt = {
       .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA};
@@ -2889,15 +2992,34 @@ static void sniffStations() {
   esp_wifi_set_promiscuous_rx_cb(promiscuousCallback);
   esp_wifi_set_promiscuous(true);
 
-  for (uint8_t ch : kSniffChannels) {
+  for (uint8_t ch : channels) {
     if (esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE) != ESP_OK) {
       continue;
     }
-    delay(kSniffMsPerChannel);
+    const uint32_t started = millis();
+    sniffStartedMs = started;
+    sniffChannel = ch;
+    delay(kSniffBaseMs);
+    if (std::find(audible.begin(), audible.end(), ch) != audible.end()) {
+      delay(extra);
+    } else if (surprises < kSniffSurprisesMax) {
+      taskENTER_CRITICAL(&sniffMux);
+      const bool sending = passClients.anySending();
+      taskEXIT_CRITICAL(&sniffMux);
+      if (sending) {
+        ++surprises;
+        delay(kSniffSurpriseMs);
+      }
+    }
+    const uint32_t listened = millis() - started;
+    sniffChannel = 0;
+    foldPass(ch, listened);
     esp_task_wdt_reset();
   }
 
   esp_wifi_set_promiscuous(false);
+  clientSweep.sort();
+  newStream = streamWatch.note(clientSweep.rows, clientSweep.count);
 }
 
 // Send one captured frame, split into as many 0x24 notifications as the ATT
@@ -3050,9 +3172,18 @@ static void runScan() {
 
   // Build hidden-AP list before promiscuous sniffing so the callback can
   // match probe responses and association requests against it.
+  // The sniff stays longer where an access point is, and counts a client only
+  // on its access point's own channel.
   hiddenAPs.clear();
+  apChannels.clear();
   for (int16_t i = 0; i < found; ++i) {
     const auto *ap = static_cast<const wifi_ap_record_t *>(WiFi.getScanInfoByIndex(i));
+    if (ap && ap->primary != 0 && apChannels.size() < 128) {
+      ApChannel where;
+      memcpy(where.bssid, ap->bssid, 6);
+      where.channel = ap->primary;
+      apChannels.push_back(where);
+    }
     if (ap && strnlen(reinterpret_cast<const char *>(ap->ssid), 32) == 0) {
       HiddenAP h;
       memcpy(h.bssid, ap->bssid, 6);
@@ -3096,6 +3227,11 @@ static void runScan() {
     sendTraffic(t);
   }
 
+  const size_t clientsSent = std::min(clientSweep.count, kClientTrafficMax);
+  for (size_t i = 0; i < clientsSent; ++i) {
+    sendClientTraffic(clientSweep.rows[i]);
+  }
+
   for (const auto &v : capturedVendorIEs) {
     sendVendorIE(v);
   }
@@ -3106,7 +3242,8 @@ static void runScan() {
   lastScanMs = millis();
 
   sendScanFinished(apSent, staSent, probeSent,
-                   static_cast<uint16_t>(std::min<uint32_t>(lastScanDurationMs, 0xFFFF)));
+                   static_cast<uint16_t>(std::min<uint32_t>(lastScanDurationMs, 0xFFFF)),
+                   static_cast<uint16_t>(clientsSent));
   alertScanFindings();
   uiDirty = true;
 }

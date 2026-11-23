@@ -1,7 +1,7 @@
 # Spectra BLE protocol
 
 The Cardputer runs a GATT server; the iPhone is the central. Everything is
-little-endian. Version 9.
+little-endian. Version 10.
 
 ## Service
 
@@ -58,6 +58,12 @@ bits as `alerts` (bit0 sound, bit1 LED): `3` on the Cardputer, `2` on the
 ESP32-C5 (its RGB LED), `0` on the WROOM-32. When it is absent the phone
 offers every mode, as before.
 
+Version 10 (firmware 0.11.0) adds client traffic (`0x25`) and its count in
+`0x12`. Older apps ignore both: the record type is unknown to them and the
+count is past the fields they read. An app that gets a `0x12` without the
+count is talking to an older sensor and judges access points by `0x17`, as
+before. Either way round, the app only says the versions differ.
+
 ## Control (write)
 
 First byte is the command.
@@ -109,7 +115,9 @@ also happens when the phone disconnects.
 
 `0x0C` chooses how the sensor announces what a scan finds on its own. The
 LED blinks red for a critical finding and yellow for a warning, ranked the
-same way as the phone's threat banners; orange for an item tracker (a Find
+same way as the phone's threat banners (a client that streams, see `0x25`, is
+announced once, when it is first sure, and again if it stops and comes back);
+orange for an item tracker (a Find
 My accessory away from its owner, a Samsung SmartTag or a Tile) heard in
 three Bluetooth scans in a row; green for an open network; blue for a
 watched Bluetooth device; purple for a watched Wi-Fi BSSID. Sound and LED
@@ -193,6 +201,7 @@ must negotiate an ATT MTU of at least 64 (iOS always does).
 | 5 | 2 | scan duration, ms |
 | 7 | 2 | number of stations sent (v2+; absent in v1) |
 | 9 | 2 | number of probe requests sent (v3; absent in v1–v2) |
+| 11 | 2 | number of client traffic records (`0x25`) sent (v10; absent before) |
 
 ### `0x13` Station (v2)
 
@@ -259,16 +268,19 @@ so the app can unmask the network.
 ### `0x17` Traffic (v5)
 
 Estimated traffic volume per AP, accumulated from data frames captured in
-promiscuous mode during the sniffing window. Useful for spotting streaming
-devices (cameras, microphones) that generate continuous traffic.
+promiscuous mode. The numbers stand for **250 ms** of listening: firmware up
+to 0.10.1 listens that long on every channel, firmware 0.11.0 listens longer
+where access points are and scales what it counted back to 250 ms, rounding
+up. A phone can therefore compare it with one fixed bar whatever the sensor.
+It has no direction and no client; `0x25` has both.
 
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 1 | type = `0x17` |
 | 1 | 2 | scan id |
 | 3 | 6 | BSSID |
-| 9 | 4 | total bytes (`u32`, all data frames to/from this AP) |
-| 13 | 2 | total packets (`u16`) |
+| 9 | 4 | bytes in 250 ms (`u32`, all data frames to/from this AP) |
+| 13 | 2 | packets in 250 ms (`u16`) |
 
 ### `0x18` Vendor IE (v6)
 
@@ -444,6 +456,93 @@ The frame is a bare 802.11 MAC frame (no radiotap); the phone adds a radiotap
 header carrying the channel and RSSI when it writes the `.pcap` (link type 127).
 The timestamp is only good for spacing frames apart: the phone anchors the first
 one to the wall-clock moment the capture began.
+
+### `0x25` Client traffic (v10)
+
+What one client sent (ToDS) and received (FromDS) while the sensor listened on
+its channel, and for how long it really listened. Sent after the `0x17`
+records, busiest sender first, at most 32 per scan. Only clients heard sending
+data have a record.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | type = `0x25` |
+| 1 | 2 | scan id |
+| 3 | 6 | client MAC address |
+| 9 | 6 | AP BSSID |
+| 15 | 1 | channel the counts are from |
+| 16 | 1 | RSSI of the client's strongest frame, dBm (`i8`) |
+| 17 | 2 | time spent listening on that channel, ms (`u16`) |
+| 19 | 4 | uplink bytes (`u32`, client → AP) |
+| 23 | 2 | uplink frames (`u16`) |
+| 25 | 4 | downlink bytes (`u32`, AP → client) |
+| 29 | 2 | downlink frames (`u16`) |
+| 31 | 1 | busy slots: how many 100 ms slices of the listening time had uplink data in them (a slice at the end may be shorter) |
+
+Bytes are whole 802.11 frames with their header and FCS, retransmissions
+included. Null and QoS Null frames (power saving) are not counted. Downlink is
+counted from the client's first uplink frame on. Group-addressed frames and
+four-address frames (mesh backhaul, repeaters) are left out.
+
+A strong frame is also heard, in part, on the neighbouring channels. Where the
+scan knows the AP's channel only that channel counts; for an AP the scan did
+not hear, the channel with the highest uplink rate is the one reported. Counts
+from different channels are never added up.
+
+How long the sensor listens: 250 ms on every channel it sweeps, plus, where
+the scan heard an access point, an equal share of 4 s (at most 1 s more per
+channel). Where it heard none but a client keeps sending, 750 ms more, on at
+most two channels per sweep: the access point can be out of earshot while the
+camera is in the room. Channels with an access point that are not in the fixed
+list (DFS channels on the ESP32-C5) are added to the sweep. A sweep takes up
+to 4 s longer than before, 5.5 s with two such quiet channels, and a little
+more for added ones. Longer listening also finds more deauthentication frames
+and stations.
+
+**The streaming rule.** A client looks like a camera or a microphone in one
+sweep when all of these hold:
+
+- uplink of at least 8000 bytes per second of listening time (64 kbit/s);
+- uplink frames of at least 200 bytes on average: acknowledgements of a
+  download are about 100, and the download itself may be in frames the sensor
+  cannot decode;
+- uplink bytes at least twice the downlink bytes: a call goes both ways;
+- at least 60 % of the 100 ms slices busy.
+
+Each sweep like that adds one to the client's score (at most 4), each other
+sweep takes one off; at 3 the client is reported. The sensor's own alert and
+both phone apps use the same rule and numbers (`firmware/src/Stream.h`). They
+have **not been calibrated on a real camera**: they are derived from typical
+bitrates. A microphone with a low-bitrate codec (small packets) stays below
+them. A backup or a live broadcast from a phone looks the same as a camera.
+An app judges access points by `0x17` only when the sensor sends no client
+records, because a network is also busy when someone watches a film.
+
+**What the sensor does not hear.** The counts are what it decoded, not what
+was sent:
+
+- *Aggregated frames are heard.* The promiscuous filter MGMT | DATA lets
+  A-MPDU subframes through one by one: the driver checks an MPDU against
+  DATA | DATA_MPDU and an A-MPDU subframe against DATA | DATA_AMPDU, so the
+  DATA bit alone is enough. Checked in the driver library of the pinned IDF
+  for ESP32, ESP32-S3 and ESP32-C5 (`wDev_SnifferRxAmpdu`); not measured on
+  the air.
+- *40 MHz frames* are not decoded: the radio is tuned to a 20 MHz channel. On
+  2.4 GHz most cameras use 20 MHz; an access point advertising a secondary
+  channel (`0x11`, offset 11) may carry some clients at 40 MHz.
+- *802.11ax (HE) frames* are not decoded by the ESP32 and ESP32-S3. The
+  ESP32-C5 decodes 20 MHz HE; uplink OFDMA, which the access point triggers,
+  is not expected to be heard.
+- *More than one spatial stream* (MIMO) is not decoded: the driver reports
+  such frames with no contents. Cameras normally have one antenna; phones,
+  laptops and access points have more.
+- *5 GHz* only on the ESP32-C5, *6 GHz* on none. On 5 GHz it hears 20 MHz
+  only, so most 80 MHz traffic passes it by.
+- The radio is shared with Bluetooth while a phone is connected, and frames
+  are dropped when the driver runs out of buffers. Both lower the counts.
+- Distance: a client that the access point hears well may be too weak here.
+
+So a missing record does not prove that a device is silent.
 
 ### `0x20` Saved LoRa device (v7)
 
