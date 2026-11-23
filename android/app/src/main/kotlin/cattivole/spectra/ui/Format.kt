@@ -78,17 +78,20 @@ fun byteSize(bytes: Long): String = when {
 }
 
 /** Bits per second over a capture window, in the reader's units. */
-fun bitrate(bytes: Long, durationMs: Int): String? {
-    if (durationMs <= 0) return null
-    val bits = bytes * 8.0 / (durationMs / 1000.0)
-    return when {
-        bits >= 1_000_000 -> tr("%.1f Mbit/s", bits / 1_000_000)
-        bits >= 1_000 -> tr("%.0f kbit/s", bits / 1_000)
-        else -> tr("%.0f bit/s", bits)
-    }
+fun bitrate(bits: Double): String = when {
+    bits >= 1_000_000 -> tr("%.1f Mbit/s", bits / 1_000_000)
+    bits >= 1_000 -> tr("%.0f kbit/s", bits / 1_000)
+    else -> tr("%.0f bit/s", bits)
 }
 
 // Wi-Fi
+
+/** The protection in the reader's language; the standards' own names stay as they are. */
+fun AuthMode.shownName(): String = when (name) {
+    "Open" -> tr("Open##security")
+    "Other" -> tr("Other##security")
+    else -> name
+}
 
 fun AuthMode.isOpen(): Boolean = strength == AuthMode.Strength.NONE
 

@@ -36,7 +36,7 @@ class WifiJoiner(private val context: Context) {
     sealed interface Status {
         data object Idle : Status
         data class Joining(val ssid: String) : Status
-        /** Connected now (legacy path). */
+        /** The phone was seen on the network it was asked to join. */
         data class Joined(val ssid: String) : Status
         /** Added as a suggestion; the system connects when the network is in range. */
         data class Suggested(val ssid: String) : Status
@@ -45,13 +45,20 @@ class WifiJoiner(private val context: Context) {
         data class Failed(val ssid: String, val reason: Reason) : Status
     }
 
-    enum class Reason { GENERIC, WEP_UNSUPPORTED, ADD_FAILED, PERMISSION }
+    enum class Reason { GENERIC, WEP_UNSUPPORTED, ADD_FAILED, PERMISSION, NOT_JOINED }
 
     var status: Status by mutableStateOf(Status.Idle)
         private set
 
     /** The SSID the phone is on, or null when it is on none or Android hides it (no location permission). */
     var currentSsid: String? by mutableStateOf(null)
+        private set
+
+    /**
+     * Whether the phone is on a Wi-Fi network, named or not. Null until Android has answered. Not the same as having
+     * [currentSsid]: without the location permission, or with location off, Android hides the name.
+     */
+    var onWifi: Boolean? by mutableStateOf(null)
         private set
 
     /** The access point the phone is associated with, when Android reports it. */
@@ -70,7 +77,11 @@ class WifiJoiner(private val context: Context) {
     private val connectivity: ConnectivityManager?
         get() = context.applicationContext.getSystemService(ConnectivityManager::class.java)
 
+    private val handler = Handler(Looper.getMainLooper())
     private var watching: ConnectivityManager.NetworkCallback? = null
+
+    /** The Wi-Fi networks up now: a phone can hold two at once. */
+    private val present = mutableSetOf<Network>()
 
     /** True when [network] is the access point the phone is on: by BSSID when known, otherwise by name. */
     fun isCurrent(network: TrackedNetwork): Boolean {
@@ -90,6 +101,10 @@ class WifiJoiner(private val context: Context) {
 
     /** Whether the phone is on [ssid] right now. */
     fun isOn(ssid: String): Boolean = currentSsid == ssid
+
+    /** The failure to show for [ssid]: none once the phone is on it after all. */
+    fun failure(ssid: String): Reason? =
+        (status as? Status.Failed)?.takeIf { it.ssid == ssid && !isOn(ssid) }?.reason
 
     /**
      * Android 11+: the system's "Save this network?" sheet. The network lands in Android's own Wi-Fi list like one
@@ -140,6 +155,12 @@ class WifiJoiner(private val context: Context) {
             Status.Failed(ssid, Reason.GENERIC)
         }
         if (status is Status.Failed) pending = null
+        if (status is Status.Joining) {
+            // What the system answered is not whether the phone is there: its network is watched for a while.
+            handler.postDelayed({
+                if (status == Status.Joining(ssid)) status = Status.Failed(ssid, Reason.NOT_JOINED)
+            }, JOIN_WAIT_MS)
+        }
     }
 
     fun forget(ssid: String) {
@@ -163,13 +184,15 @@ class WifiJoiner(private val context: Context) {
         val manager = connectivity ?: return
         val callback = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             object : ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {
-                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = read(caps)
-                override fun onLost(network: Network) = noteCurrent(null, null)
+                override fun onAvailable(network: Network) = notePresent(network, up = true)
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = read(network, caps)
+                override fun onLost(network: Network) = notePresent(network, up = false)
             }
         } else {
             object : ConnectivityManager.NetworkCallback() {
-                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = read(caps)
-                override fun onLost(network: Network) = noteCurrent(null, null)
+                override fun onAvailable(network: Network) = notePresent(network, up = true)
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = read(network, caps)
+                override fun onLost(network: Network) = notePresent(network, up = false)
             }
         }
         val request = NetworkRequest.Builder()
@@ -177,8 +200,10 @@ class WifiJoiner(private val context: Context) {
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
         try {
-            manager.registerNetworkCallback(request, callback, Handler(Looper.getMainLooper()))
+            manager.registerNetworkCallback(request, callback, handler)
             watching = callback
+            // Without any Wi-Fi the callback stays silent, so ask once.
+            handler.postDelayed({ onWifi = present.isNotEmpty() }, 500)
         } catch (_: Exception) {
             // Without the callback the list simply marks nothing.
         }
@@ -190,7 +215,8 @@ class WifiJoiner(private val context: Context) {
     }
 
     @Suppress("DEPRECATION")
-    private fun read(caps: NetworkCapabilities) {
+    private fun read(network: Network, caps: NetworkCapabilities) {
+        named = network
         val info = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) caps.transportInfo as? WifiInfo else null)
             ?: runCatching { wifi?.connectionInfo }.getOrNull()
         val ssid = info?.ssid?.removeSurrounding("\"")?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }
@@ -199,13 +225,23 @@ class WifiJoiner(private val context: Context) {
         noteCurrent(ssid, bssid)
     }
 
+    /** The network [currentSsid] was read from. */
+    private var named: Network? = null
+
+    private fun notePresent(network: Network, up: Boolean) {
+        if (up) present.add(network) else present.remove(network)
+        onWifi = present.isNotEmpty()
+        if (!up && (named == network || present.isEmpty())) noteCurrent(null, null)
+    }
+
     private fun noteCurrent(ssid: String?, bssid: MacAddress?) {
         currentSsid = ssid
         currentBssid = bssid
+        (status as? Status.Joined)?.let { if (it.ssid != ssid) status = Status.Idle }
         val (wanted, password) = pending ?: return
         if (ssid != wanted) return
         pending = null
-        if (status !is Status.Failed) status = Status.Joined(wanted)
+        status = Status.Joined(wanted)
         onJoined?.invoke(wanted, password.orEmpty())
     }
 
@@ -261,12 +297,17 @@ class WifiJoiner(private val context: Context) {
         manager.disconnect()
         manager.enableNetwork(netId, true)
         manager.reconnect()
-        return Status.Joined(ssid)
+        return if (isOn(ssid)) Status.Joined(ssid) else Status.Joining(ssid)
     }
 
     @Suppress("DEPRECATION")
     private fun forgetLegacy(manager: WifiManager, ssid: String) {
         val quoted = "\"$ssid\""
         manager.configuredNetworks?.firstOrNull { it.SSID == quoted }?.let { manager.removeNetwork(it.networkId) }
+    }
+
+    private companion object {
+        /** How long a join is watched before it counts as failed. */
+        const val JOIN_WAIT_MS = 20_000L
     }
 }

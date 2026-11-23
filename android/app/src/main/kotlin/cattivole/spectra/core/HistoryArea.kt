@@ -42,6 +42,33 @@ fun HistoryEntry.without(area: HistoryArea): HistoryEntry? {
     return rebuilt { it != area }.takeIf { rest -> HistoryArea.entries.any { rest.holds(it) } }
 }
 
+/** The session narrowed to the records [needle] finds. The whole of it when the place or the source is what matched. */
+fun HistoryEntry.matching(needle: String): HistoryEntry {
+    val query = needle.trim()
+    if (query.isEmpty()) return this
+    fun hit(value: String?) = value?.contains(query, ignoreCase = true) == true
+    val found = HistoryEntry(
+        id = id,
+        kind = kind,
+        savedAt = savedAt,
+        source = source,
+        captureId = captureId,
+        placeKey = placeKey,
+        placeLabel = placeLabel,
+        lines = lines.filter { hit(it.title) || hit(it.detail) || hit(it.trailing) },
+        networks = networks.filter { hit(it.title) || hit(it.id.text) || hit(it.latest.ssid) || hit(it.id.vendor()) },
+        probes = probes.filter { hit(it.displayName) || hit(it.mac.text) || it.ssids.any(::hit) },
+        deauths = deauths.filter { hit(it.bssid.text) || hit(it.source.text) || hit(it.target.text) },
+        lan = lan.filter { hit(it.displayName) || hit(it.ipAddress) || hit(it.macAddress?.text) || hit(it.manufacturer) },
+        bluetooth = bluetooth.filter { hit(it.displayName) || hit(it.address) },
+        connections = connections.filter { hit(it.external?.ip) },
+        latitude = latitude,
+        longitude = longitude,
+        importedFrom = importedFrom,
+    )
+    return if (found.itemCount == 0) this else found
+}
+
 /** [entries] as [area]'s tab lists them. */
 fun List<HistoryEntry>.forArea(area: HistoryArea): List<HistoryEntry> = mapNotNull { it.only(area) }
 

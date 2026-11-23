@@ -54,7 +54,7 @@ object Miio {
         "fryer" to "Air fryer",
         "airpurifier" to "Air purifier",
         "airp" to "Air purifier",
-        "airfresh" to "Air freshener",
+        "airfresh" to "Fresh air system",
         "aircondition" to "Air conditioner",
         "acpartner" to "Air conditioner",
         "humidifier" to "Humidifier",

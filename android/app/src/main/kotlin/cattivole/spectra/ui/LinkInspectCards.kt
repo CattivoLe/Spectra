@@ -54,7 +54,7 @@ internal fun LazyListScope.tlsCard(check: TlsCheck) {
                 ListRow(
                     title = seen.host,
                     subtitle = seen.issuer ?: seen.error.orEmpty(),
-                    detail = seen.trustError?.takeIf { seen.error == null },
+                    detail = seen.trustError?.takeIf { seen.error == null }?.let { tr(it) },
                     onClick = { open = true },
                     leading = {
                         IconTile(
@@ -135,7 +135,7 @@ private fun CertificateDialog(seen: TlsObservation, onDismiss: () -> Unit) {
                                 tr("Chain of trust") + ":\n" + chain.mapIndexed { index, name -> "  ".repeat(index) + "↳ " + name }.joinToString("\n")
                             },
                             tr("Trusted by Android") + ": " + (if (seen.trusted) tr("Yes") else tr("No")),
-                            seen.trustError,
+                            seen.trustError?.let { tr(it) },
                             tr("Expected authority") + ": " + (if (seen.expected) tr("Yes") else tr("No")),
                         ),
                     )
@@ -271,7 +271,7 @@ internal fun LazyListScope.exposureCard(report: LinkReport, link: LinkProbe?) {
                     add {
                         InfoRow(
                             "${port.port}  ${tr(DiscoveredPort.serviceName(port.port))}",
-                            if (port.open) tr("Open") else tr("Closed"),
+                            if (port.open) tr("Open##port") else tr("Closed##port"),
                             valueColor = if (port.open) Spectra.colors.danger else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }

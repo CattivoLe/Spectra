@@ -36,7 +36,7 @@ import java.util.concurrent.atomic.AtomicLong
  * Uses Cloudflare's speed endpoints or a Measurement Lab ndt7 server, over
  * the connection the route setting names, like the connection check.
  */
-class SpeedTester(context: Context, private val route: suspend () -> Network?) {
+class SpeedTester(context: Context, private val route: suspend () -> RouteAnswer) {
     enum class Phase { IDLE, PREPARING, LATENCY, DOWNLOAD, UPLOAD, DONE, FAILED }
 
     var phase: Phase = Phase.IDLE
@@ -104,7 +104,7 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
         loadingServers = true
         publish()
         scope.launch {
-            val network = route()
+            val network = (route() as? RouteAnswer.Open)?.network
             val found = if (network == null) emptyList() else withContext(Dispatchers.IO) { locate(network) }
             if (found.isNotEmpty()) mlabServers = found
             loadingServers = false
@@ -150,10 +150,16 @@ class SpeedTester(context: Context, private val route: suspend () -> Network?) {
     /** The whole test, one phase after another. */
     private suspend fun measure() {
         run {
-            val network = route()
-            if (network == null) {
-                fail("There is no network for the chosen connection. Check Wi-Fi, or pick another route under Connection.")
-                return
+            val network = when (val answer = route()) {
+                is RouteAnswer.Open -> answer.network
+                RouteAnswer.Missing -> {
+                    fail("There is no network for the chosen connection. Check Wi-Fi, or pick another route under Connection.")
+                    return
+                }
+                RouteAnswer.HeldByVpn -> {
+                    fail(LinkProbe.HELD_BY_VPN)
+                    return
+                }
             }
             phase = Phase.LATENCY
             progress = 0.06f

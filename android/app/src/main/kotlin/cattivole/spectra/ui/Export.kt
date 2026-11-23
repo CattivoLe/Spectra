@@ -110,22 +110,30 @@ fun ExportMenu(entries: List<HistoryEntry>) {
             Icon(Icons.Rounded.IosShare, contentDescription = tr("Export"))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text(tr("Spectra")) },
-                onClick = {
-                    open = false
-                    shareHistory(context, entries)
-                },
-            )
-            for (format in Exporter.Format.entries) {
-                DropdownMenuItem(
-                    text = { Text(format.label) },
-                    onClick = {
-                        open = false
-                        shareExport(context, format, entries)
-                    },
-                )
-            }
+            ExportMenuItems(context, entries) { open = false }
         }
+    }
+}
+
+/** The export formats as lines of a menu. "Spectra" is the history file another Spectra can import. */
+@Composable
+fun ExportMenuItems(context: Context, entries: List<HistoryEntry>, onPick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(tr("Spectra")) },
+        leadingIcon = { Icon(Icons.Rounded.IosShare, contentDescription = null) },
+        onClick = {
+            onPick()
+            shareHistory(context, entries)
+        },
+    )
+    for (format in Exporter.Format.entries) {
+        DropdownMenuItem(
+            text = { Text(tr(format.label)) },
+            leadingIcon = { Icon(Icons.Rounded.IosShare, contentDescription = null) },
+            onClick = {
+                onPick()
+                shareExport(context, format, entries)
+            },
+        )
     }
 }

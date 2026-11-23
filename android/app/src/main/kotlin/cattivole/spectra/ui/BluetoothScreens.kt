@@ -69,39 +69,32 @@ import cattivole.spectra.core.hex
 import cattivole.spectra.platform.DeviceBleScanner
 
 internal enum class BleSort { SIGNAL, NAME, RECENT }
-internal enum class BleScope { ALL, NAMED, CONNECTABLE }
 
-@Composable
-internal fun BleSortRow(sort: BleSort, onSort: (BleSort) -> Unit) {
-    ChipRow(contentPadding = SortChipPadding) {
-        ToggleChip(tr("Signal"), sort == BleSort.SIGNAL, { onSort(BleSort.SIGNAL) })
-        ToggleChip(tr("Name"), sort == BleSort.NAME, { onSort(BleSort.NAME) })
-        ToggleChip(tr("Recently seen"), sort == BleSort.RECENT, { onSort(BleSort.RECENT) })
-    }
+/** What the list is narrowed to; both chips may be on at once. */
+internal data class BleFilter(val namedOnly: Boolean = false, val connectableOnly: Boolean = false) {
+    val isOn: Boolean get() = namedOnly || connectableOnly
+
+    fun passes(device: BleDevice): Boolean =
+        (!namedOnly || device.hasOwnName) && (!connectableOnly || device.isConnectable == true)
 }
 
 @Composable
-internal fun BleFilterRow(scope: BleScope, onScope: (BleScope) -> Unit, showOut: Boolean, onShowOut: () -> Unit) {
+internal fun BleFilterRow(filter: BleFilter, onFilter: (BleFilter) -> Unit) {
     ChipRow(contentPadding = FilterChipPadding) {
-        ToggleChip(tr("With a name"), scope == BleScope.NAMED, { onScope(if (scope == BleScope.NAMED) BleScope.ALL else BleScope.NAMED) })
-        ToggleChip(tr("Connectable"), scope == BleScope.CONNECTABLE, { onScope(if (scope == BleScope.CONNECTABLE) BleScope.ALL else BleScope.CONNECTABLE) })
-        ToggleChip(tr("Out of range"), showOut, onShowOut)
+        ToggleChip(tr("With a name"), filter.namedOnly, { onFilter(filter.copy(namedOnly = !filter.namedOnly)) })
+        ToggleChip(tr("Connectable"), filter.connectableOnly, { onFilter(filter.copy(connectableOnly = !filter.connectableOnly)) })
     }
 }
 
 internal fun Iterable<BleDevice>.arranged(
     now: Long,
     sort: BleSort,
-    scope: BleScope,
+    filter: BleFilter,
     showOut: Boolean,
     needle: String,
 ): List<BleDevice> = filter { device ->
     (showOut || device.isNearby(now)) &&
-        when (scope) {
-            BleScope.ALL -> true
-            BleScope.NAMED -> device.hasOwnName
-            BleScope.CONNECTABLE -> device.isConnectable == true
-        } &&
+        filter.passes(device) &&
         (
             needle.isEmpty() ||
                 device.shownName().contains(needle, true) ||
@@ -133,7 +126,13 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
     val ble = model.ble
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(BleSort.SIGNAL) }
-    var scope by rememberSaveable { mutableStateOf(BleScope.ALL) }
+    var namedOnly by rememberSaveable { mutableStateOf(false) }
+    var connectableOnly by rememberSaveable { mutableStateOf(false) }
+    val filter = BleFilter(namedOnly, connectableOnly)
+    val setFilter = { next: BleFilter ->
+        namedOnly = next.namedOnly
+        connectableOnly = next.connectableOnly
+    }
     var showOut by rememberSaveable { mutableStateOf(false) }
     var menu by rememberSaveable { mutableStateOf(false) }
     /** The Trackers section, folded to the tags that need a look; open, it lists every tag heard. */
@@ -141,7 +140,7 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
     val now = ble.now
     val needle = query.trim()
     val heard = ble.devices.values
-    val rows = heard.arranged(now, sort, scope, showOut, needle)
+    val rows = heard.arranged(now, sort, filter, showOut, needle)
     val watching = WatchList.presentDevices(model.watchedIds, heard, now)
     val trackers = if (needle.isEmpty()) TrackerDetector.trackers(heard.filter { it.isNearby(now) }, now) else emptyList()
     val alarming = trackers.any { it.second.level == TrackerAssessment.Level.ALERT }
@@ -162,19 +161,7 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
                         )
                     }
                     HorizontalDivider()
-                    MenuLabel(tr("Show"))
-                    BleScope.entries.forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(option.label()) },
-                            leadingIcon = { MenuCheck(scope == option) },
-                            onClick = { scope = option },
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text(tr("Show out of range")) },
-                        leadingIcon = { Icon(if (showOut) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank, null) },
-                        onClick = { showOut = !showOut },
-                    )
+                    CheckedMenuItem(tr("Show out of range"), showOut) { showOut = !showOut }
                     HorizontalDivider()
                     DropdownMenuItem(
                         text = { Text(if (ble.isScanning) tr("Stop") else tr("Scan now")) },
@@ -242,7 +229,13 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
                     onAction = ble::start,
                 )
                 rows.isEmpty() && needle.isNotEmpty() -> EmptyState(Icons.Rounded.SearchOff, tr("No results"), tr("Nothing matches “%s”.", needle))
-                rows.isEmpty() -> EmptyState(Icons.Rounded.Bluetooth, tr("No devices"), tr("Nothing in this filter is nearby."))
+                rows.isEmpty() -> EmptyState(
+                    Icons.Rounded.Bluetooth,
+                    tr("No devices"),
+                    tr("Nothing in this filter is nearby."),
+                    action = if (filter.isOn) tr("Show all") else null,
+                    onAction = if (filter.isOn) ({ setFilter(BleFilter()) }) else null,
+                )
             }
         },
     ) {
@@ -266,10 +259,7 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
             }
         }
         if (heard.isNotEmpty()) {
-            item(key = "sort") { BleSortRow(sort) { sort = it } }
-            item(key = "filters") {
-                BleFilterRow(scope, { scope = it }, showOut) { showOut = !showOut }
-            }
+            item(key = "filters") { BleFilterRow(filter, setFilter) }
         }
         if (ble.classicInquiry) {
             card(key = "classic", rows = listOf {
@@ -334,7 +324,8 @@ fun BluetoothScreen(model: SpectraModel, nav: Navigator) {
         ) { device -> BleRow(device, now, onClick = { nav.ble(device.address) }, watched = true) }
         cardSection(
             rows,
-            header = tr("Nearby: %d", ble.nearbyCount),
+            // With a filter on, the count is of what is listed.
+            header = if (filter.isOn) tr("Nearby: %d of %d", rows.count { it.isNearby(now) }, ble.nearbyCount) else tr("Nearby: %d", ble.nearbyCount),
             footer = tr("Android reports the hardware address. A resolvable private address still changes, so the same device can reappear under a new one."),
             key = { it.address },
             sectionKey = "devices",
@@ -347,12 +338,6 @@ private fun BleSort.label(): String = when (this) {
     BleSort.SIGNAL -> tr("Signal")
     BleSort.NAME -> tr("Name")
     BleSort.RECENT -> tr("Recently seen")
-}
-
-private fun BleScope.label(): String = when (this) {
-    BleScope.ALL -> tr("All devices")
-    BleScope.NAMED -> tr("With a name")
-    BleScope.CONNECTABLE -> tr("Connectable")
 }
 
 @Composable
@@ -605,7 +590,7 @@ fun BleDetail(model: SpectraModel, nav: Navigator, address: String, entryId: Str
             header = tr("Observed"),
             key = "observed",
             rows = listOf(
-                { InfoRow(tr("First seen"), clockTime(device.firstSeen)) },
+                { InfoRow(tr("First seen"), dateTime(device.firstSeen)) },
                 { InfoRow(tr("Last seen"), ago(device.lastSeen, if (snapshot) entry?.savedAt ?: now else now)) },
                 { InfoRow(tr("Packets"), "${device.packetCount}") },
             ),
@@ -640,7 +625,7 @@ private fun GattServiceRow(service: BleGattClient.Service) {
                     modifier = Modifier.weight(1f),
                 )
                 if (ch.properties.isNotEmpty()) {
-                    Text(ch.properties, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp))
+                    Text(ch.properties.split(" · ").joinToString(" · ") { tr(it) }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp))
                 }
             }
             if (ch.name != null) {

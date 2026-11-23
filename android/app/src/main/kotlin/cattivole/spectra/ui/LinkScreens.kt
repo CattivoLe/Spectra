@@ -64,7 +64,7 @@ fun LazyListScope.connectionEntry(model: SpectraModel, nav: Navigator) {
                 )
             }
         }
-        add { RouteRow(link, model.wifiJoiner.currentSsid != null) }
+        add { RouteRow(link, model.wifiJoiner.onWifi) }
         if (link.running) {
             add { ProgressRow(tr(link.phase.ifEmpty { "Checking…" }), link.fraction) }
         } else {
@@ -101,7 +101,7 @@ fun LinkScreen(model: SpectraModel, nav: Navigator) {
             }
         },
     ) {
-        card(key = "route", rows = listOf { RouteRow(link, model.wifiJoiner.currentSsid != null) })
+        card(key = "route", rows = listOf { RouteRow(link, model.wifiJoiner.onWifi) })
         if (link.running) {
             card(key = "progress", rows = listOf { ProgressRow(tr(link.phase.ifEmpty { "Checking…" }), link.fraction) })
         }
@@ -367,7 +367,7 @@ private fun RemoteRow(trace: RemoteTrace) {
 @Composable
 private fun connectionTint(link: LinkProbe): Color = when (link.report?.status) {
     LinkStatus.ONLINE -> Spectra.colors.success
-    LinkStatus.CAPTIVE, LinkStatus.LAN -> Spectra.colors.warning
+    LinkStatus.CAPTIVE, LinkStatus.LAN, LinkStatus.VPN_ONLY -> Spectra.colors.warning
     LinkStatus.OFFLINE, LinkStatus.NO_NETWORK -> Spectra.colors.danger
     null -> MaterialTheme.colorScheme.primary
 }
@@ -378,6 +378,7 @@ private fun connectionTitle(link: LinkProbe): String = when (link.report?.status
     LinkStatus.LAN -> tr("Local only")
     LinkStatus.OFFLINE -> tr("Offline")
     LinkStatus.NO_NETWORK -> tr("No Wi-Fi")
+    LinkStatus.VPN_ONLY -> tr("Held by the VPN")
     null -> if (link.running) tr("Checking…") else tr("Connection")
 }
 
@@ -409,13 +410,14 @@ internal fun statusLabel(status: LinkStatus?): String = when (status) {
     LinkStatus.LAN -> tr("Local only")
     LinkStatus.OFFLINE -> tr("Offline")
     LinkStatus.NO_NETWORK -> tr("No Wi-Fi")
+    LinkStatus.VPN_ONLY -> tr("Held by the VPN")
     null -> tr("Checking…")
 }
 
 @Composable
 internal fun statusColor(status: LinkStatus?): Color = when (status) {
     LinkStatus.ONLINE -> Spectra.colors.success
-    LinkStatus.CAPTIVE, LinkStatus.LAN -> Spectra.colors.warning
+    LinkStatus.CAPTIVE, LinkStatus.LAN, LinkStatus.VPN_ONLY -> Spectra.colors.warning
     LinkStatus.OFFLINE, LinkStatus.NO_NETWORK -> Spectra.colors.danger
     null -> MaterialTheme.colorScheme.onSurfaceVariant
 }

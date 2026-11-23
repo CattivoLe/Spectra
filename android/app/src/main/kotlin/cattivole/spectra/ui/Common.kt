@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CheckBox
+import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -100,6 +102,16 @@ fun ToggleChip(text: String, selected: Boolean, onClick: () -> Unit, icon: Image
             selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
         ),
         border = null,
+    )
+}
+
+/** A line of a menu that turns something on and off. */
+@Composable
+fun CheckedMenuItem(text: String, checked: Boolean, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(text) },
+        leadingIcon = { Icon(if (checked) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank, contentDescription = null) },
+        onClick = onClick,
     )
 }
 

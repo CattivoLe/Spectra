@@ -248,6 +248,19 @@ class DeviceBleScanner(
         publish()
     }
 
+    /** When a device was first met, if it was before. */
+    var earlier: ((String) -> Long?)? = null
+
+    /** The dates came in after the list had started to fill. */
+    fun datesChanged() {
+        rows.values.forEach { it.dated() }
+        publish()
+    }
+
+    private fun BleDevice.dated(): BleDevice = apply {
+        earlier?.invoke(address)?.let { if (it < firstSeen) firstSeen = it }
+    }
+
     @SuppressLint("MissingPermission")
     private fun remember(result: ScanResult) {
         if (state !is State.Scanning) return
@@ -255,7 +268,7 @@ class DeviceBleScanner(
         val kind = addressKind(result.device)
         val seen = System.currentTimeMillis()
         val device = rows.getOrPut(address) {
-            BleDevice(address, kind, result.rssi, seen, BleDevice.Transport.LE)
+            BleDevice(address, kind, result.rssi, seen, BleDevice.Transport.LE).dated()
         }
         val name = result.scanRecord?.deviceName ?: result.device.name
         val fields = result.scanRecord.toFields().copy(isConnectable = result.isConnectable)
@@ -325,7 +338,7 @@ class DeviceBleScanner(
                 val address = device.address ?: return
                 val seen = System.currentTimeMillis()
                 val row = rows.getOrPut(address) {
-                    BleDevice(address, "Classic", rssi, seen, BleDevice.Transport.CLASSIC)
+                    BleDevice(address, "Classic", rssi, seen, BleDevice.Transport.CLASSIC).dated()
                 }
                 row.transportNote(device.name, klass, rssi, seen)
                 publishSoon()

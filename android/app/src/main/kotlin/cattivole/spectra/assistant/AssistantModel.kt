@@ -145,7 +145,7 @@ class AssistantModel(context: Context, private val scope: CoroutineScope, val so
             // Encrypted (SQLCipher, AES-256) with a key wrapped by the Android Keystore, as in LocalChat.
             ChatStore(CipherSqlDatabase.open(databaseFile, KeystoreKeyProvider(File(base, "database.key"), "Spectra.assistant-database").key()))
         } catch (error: Throwable) {
-            storageWarning = tr("Could not open the saved chats: %s. New chats will not be saved.", error.localizedMessage ?: error.toString())
+            storageWarning = tr("Could not open the saved summaries: %s. New ones will not be saved.", error.localizedMessage ?: error.toString())
             ChatStore(CipherSqlDatabase.inMemory())
         }
         val catalogJson = runCatching { app.assets.open("AssistantModels.json").bufferedReader().use { it.readText() } }.getOrDefault("{\"models\":[]}")

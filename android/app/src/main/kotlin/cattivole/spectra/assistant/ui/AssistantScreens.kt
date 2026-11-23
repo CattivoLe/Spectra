@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import alexcattivo.localchat.kit.web.PastSearch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.rounded.Add
@@ -54,6 +55,7 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.StopCircle
+import androidx.compose.material.icons.rounded.TravelExplore
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -118,6 +120,10 @@ interface AssistantNav {
     fun card(id: UUID)
     fun models()
     fun internet()
+    /** Every search that went out. */
+    fun searches()
+    /** What one search found. */
+    fun search(id: String)
 }
 
 /**
@@ -667,15 +673,7 @@ private fun SwitchLine(title: String, checked: Boolean, onChange: (Boolean) -> U
 fun AssistantInternetScreen(model: SpectraModel, nav: AssistantNav) {
     val assistant = model.assistant
     val web = assistant.web
-    val scope = rememberCoroutineScope()
-    val notify = LocalNotify.current
-    val changes = assistant.store.changes.collectAsStateValue()
-    var log by remember { mutableStateOf<List<alexcattivo.localchat.kit.SearchLogEntry>>(emptyList()) }
-    var cached by remember { mutableStateOf(0) }
-    LaunchedEffect(changes) {
-        log = runCatching { assistant.store.searchLog() }.getOrDefault(emptyList())
-        cached = runCatching { assistant.store.searchCacheCount() }.getOrDefault(0)
-    }
+    val searches = rememberSearches(assistant)
     SpectraScreen(tr("Internet"), onBack = nav::back) {
         card(
             key = "enabled",
@@ -727,38 +725,155 @@ fun AssistantInternetScreen(model: SpectraModel, nav: AssistantNav) {
                 { SwitchLine(tr("Confirm each search"), web.confirmEachSearch) { web.confirmEachSearch = it } },
                 { SwitchLine(tr("Read the pages found"), web.readPages) { web.readPages = it } },
             ))
-            card(
-                header = tr("Saved searches"),
-                key = "cache",
-                footer = tr("A similar question within a day reuses an earlier search: nothing is sent again."),
-                rows = listOf(
-                    { InfoRow(tr("Kept"), "$cached") },
-                    {
-                        ActionRow(tr("Forget saved searches"), Icons.Rounded.DeleteSweep, enabled = cached > 0, onClick = {
-                            scope.launch {
-                                assistant.store.clearSearchCache()
-                                cached = 0
-                                notify(tr("Saved searches forgotten"))
-                            }
-                        })
-                    },
-                ),
+        }
+        card(
+            key = "searches",
+            footer = tr("Everything that was sent to the internet, and what it found."),
+            rows = listOf {
+                ListRow(
+                    title = tr("Searches (%d)", searches?.size ?: 0),
+                    leading = { IconTile(Icons.Rounded.TravelExplore, MaterialTheme.colorScheme.secondary) },
+                    onClick = nav::searches,
+                )
+            },
+        )
+    }
+}
+
+/** Null until they are read. */
+@Composable
+private fun rememberSearches(assistant: AssistantModel): List<PastSearch>? {
+    val changes = assistant.store.changes.collectAsStateValue()
+    var searches by remember { mutableStateOf<List<PastSearch>?>(null) }
+    LaunchedEffect(changes) {
+        searches = runCatching { assistant.store.searches() }.getOrDefault(emptyList())
+    }
+    return searches
+}
+
+/** Every search: what was sent, when and where, and what it found while that is kept for reuse. */
+@Composable
+fun AssistantSearchesScreen(model: SpectraModel, nav: AssistantNav) {
+    val assistant = model.assistant
+    val scope = rememberCoroutineScope()
+    val searches = rememberSearches(assistant)
+    var confirmClear by remember { mutableStateOf(false) }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            icon = { Icon(Icons.Rounded.DeleteSweep, null) },
+            title = { Text(tr("Forget all searches?")) },
+            text = { Text(tr("The list and what the searches found are erased. Summaries stay.")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = false
+                    scope.launch { assistant.store.clearSearches() }
+                }) { Text(tr("Forget"), color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(tr("Cancel")) } },
+        )
+    }
+    SpectraScreen(
+        tr("Searches"),
+        onBack = nav::back,
+        actions = {
+            if (!searches.isNullOrEmpty()) {
+                IconButton(onClick = { confirmClear = true }) { Icon(Icons.Rounded.DeleteSweep, tr("Clear")) }
+            }
+        },
+        overlay = {
+            if (searches?.isEmpty() == true) EmptyState(Icons.Rounded.TravelExplore, tr("No searches yet"), tr("What the assistant looks up on the web is listed here."))
+        },
+    ) {
+        cardSection(
+            searches.orEmpty(),
+            footer = tr("What a search found is kept for 24 hours: a query worded almost the same is answered from it, and nothing is sent again. The pages are kept on the phone, encrypted with the summaries."),
+            key = { it.id },
+            sectionKey = "searches",
+        ) { search ->
+            SearchRow(
+                search,
+                onOpen = { nav.search(search.id) }.takeIf { search.results.isNotEmpty() },
+                onDelete = { scope.launch { assistant.store.deleteSearch(search) } },
             )
         }
-        if (log.isNotEmpty()) {
-            cardSection(
-                log,
-                header = tr("What was sent"),
-                footer = tr("Hold an entry to delete it."),
-                key = { it.id.toString() },
-                sectionKey = "log",
-            ) { entry ->
-                ListRow(
-                    title = entry.query,
-                    subtitle = listOf(dateTime(entry.date), entry.provider, if (entry.succeeded) tr("sent") else tr("failed")).joinToString(" · "),
-                    onLongClick = { scope.launch { assistant.store.deleteSearchLogEntry(entry.id) } },
-                )
+    }
+}
+
+@Composable
+private fun SearchRow(search: PastSearch, onOpen: (() -> Unit)?, onDelete: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        ListRow(
+            title = search.query,
+            subtitle = listOfNotNull(
+                dateTime(search.date),
+                search.provider,
+                when {
+                    !search.succeeded -> tr("failed")
+                    search.results.isNotEmpty() -> tr("found: %d", search.results.size)
+                    else -> null
+                },
+            ).joinToString(" · "),
+            trailing = {
+                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, tr("More")) }
+            },
+            onClick = onOpen,
+            onLongClick = { menu = true },
+        )
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(
+                text = { Text(tr("Delete"), color = MaterialTheme.colorScheme.error) },
+                leadingIcon = { Icon(Icons.Rounded.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                onClick = {
+                    menu = false
+                    onDelete()
+                },
+            )
+        }
+    }
+}
+
+/** What one search found, while it is kept. */
+@Composable
+fun AssistantSearchScreen(model: SpectraModel, nav: AssistantNav, id: String) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val searches = rememberSearches(model.assistant)
+    val search = searches?.firstOrNull { it.id == id }
+    SpectraScreen(
+        tr("Found"),
+        subtitle = search?.provider,
+        onBack = nav::back,
+        overlay = {
+            if (searches != null && search?.results.isNullOrEmpty()) {
+                EmptyState(Icons.Rounded.TravelExplore, tr("Gone"), tr("What this search found is no longer kept."))
             }
+        },
+    ) {
+        cardSection(
+            search?.results.orEmpty().withIndex().toList(),
+            header = search?.query,
+            footer = search?.keptUntil?.let { tr("Reused for similar queries until %s.", dateTime(it)) },
+            key = { it.index },
+            sectionKey = "found",
+        ) { (_, result) ->
+            ListRow(
+                title = result.title.ifBlank { result.host },
+                subtitle = result.host,
+                subtitleLines = 1,
+                detailContent = if (result.snippet.isBlank()) null else ({
+                    Text(
+                        result.snippet,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 4,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }),
+                onClick = {
+                    runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(result.url))) }
+                },
+            )
         }
     }
 }

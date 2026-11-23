@@ -147,6 +147,7 @@ fun SavedNetworksScreen(model: SpectraModel, nav: Navigator) {
                 rssi = here.maxOfOrNull { it.latest.rssi },
                 current = model.wifiJoiner.isOn(ssid),
                 joining = (status as? WifiJoiner.Status.Joining)?.ssid == ssid,
+                failure = model.wifiJoiner.failure(ssid)?.let(::reasonText),
                 onConnect = { join(ssid, password.ifEmpty { null }, here.firstOrNull()?.latest?.auth?.raw ?: if (password.isEmpty()) 0 else -1) },
                 onCopy = { copy(tr("Password"), password) },
                 onEdit = { editing = ssid to password },
@@ -164,6 +165,7 @@ private fun SavedNetworkRow(
     rssi: Int?,
     current: Boolean,
     joining: Boolean,
+    failure: String?,
     onConnect: () -> Unit,
     onCopy: () -> Unit,
     onEdit: () -> Unit,
@@ -183,6 +185,7 @@ private fun SavedNetworkRow(
             detail = when {
                 current -> tr("Connected")
                 joining -> tr("Connecting…")
+                failure != null -> failure
                 inRange -> tr("In range")
                 else -> null
             },

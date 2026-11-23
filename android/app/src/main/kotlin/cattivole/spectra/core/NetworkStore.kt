@@ -42,6 +42,18 @@ class NetworkStore {
     /** Gets networks just before they leave the list, so History can keep them. */
     var onEvict: ((List<TrackedNetwork>) -> Unit)? = null
 
+    /** When a network was first met, if it was before: its card says so instead of "today". */
+    var earlier: ((MacAddress) -> Long?)? = null
+
+    /** The dates came in after the list had started to fill. */
+    fun datesChanged() {
+        val lookup = earlier ?: return
+        for (network in sensor.values + phone.values) {
+            lookup(network.id)?.let { if (it < network.firstSeen) network.firstSeen = it }
+        }
+        publish()
+    }
+
     fun observe(listener: () -> Unit): () -> Unit {
         listeners.add(listener)
         return { listeners.remove(listener) }
@@ -155,10 +167,7 @@ class NetworkStore {
             aggregateProbes()
             deauthEvents = pendingDeauths.sortedByDescending { it.count }
             pendingDeauths.clear()
-            for ((bssid, snapshot) in pendingTraffic) sensor[bssid]?.traffic = snapshot
-            for (id in sensor.keys) {
-                if (id !in pendingTraffic) sensor[id]?.traffic = null
-            }
+            for ((id, network) in sensor) network.noteTraffic(pendingTraffic[id])
             pendingTraffic.clear()
         }
         currentScanId = null
@@ -189,7 +198,7 @@ class NetworkStore {
         } else {
             into[reading.bssid] = TrackedNetwork(
                 latest = reading,
-                firstSeen = at,
+                firstSeen = earlier?.invoke(reading.bssid)?.takeIf { it < at } ?: at,
                 lastSeen = at,
                 samples = mutableListOf(sample),
                 source = source,

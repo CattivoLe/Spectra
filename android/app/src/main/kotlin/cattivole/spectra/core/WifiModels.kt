@@ -309,27 +309,17 @@ data class DeauthEvent(
 data class VendorDeviceInfo(val deviceName: String, val manufacturer: String)
 
 data class TrafficSnapshot(val bytes: Long, val packets: Int) {
-    val formattedBytes: String
-        get() = when {
-            bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
-            bytes >= 1_000 -> "%.1f KB".format(bytes / 1_000.0)
-            else -> "$bytes B"
-        }
+    val estimatedBitsPerSecond: Double get() = bytes * 8 / SECONDS_PER_CHANNEL
 
-    fun estimatedBitrate(durationMs: Int): String? {
-        if (durationMs <= 0) return null
-        val bitsPerSecond = bytes * 8.0 / (durationMs / 1000.0)
-        return when {
-            bitsPerSecond >= 1_000_000 -> "%.1f Mbps".format(bitsPerSecond / 1_000_000)
-            bitsPerSecond >= 1_000 -> "%.0f Kbps".format(bitsPerSecond / 1_000)
-            else -> "%.0f bps".format(bitsPerSecond)
-        }
+    companion object {
+        /** How long a sweep listens on one channel (`kSniffMsPerChannel` in the firmware): the time these bytes took. */
+        const val SECONDS_PER_CHANNEL = 0.25
     }
 }
 
 class TrackedNetwork(
     var latest: AccessPointReading,
-    val firstSeen: Long,
+    var firstSeen: Long,
     var lastSeen: Long,
     val samples: MutableList<Sample>,
     var missedScans: Int = 0,
@@ -338,8 +328,20 @@ class TrackedNetwork(
     var vendorInfo: VendorDeviceInfo? = null,
     var traffic: TrafficSnapshot? = null,
     val source: RadioSource,
+    /** Goes up with each sweep that hears a stream's worth of data, down with each that does not. */
+    var steadyScans: Int = 0,
 ) {
     data class Sample(val date: Long, val rssi: Int)
+
+    /** Data in nearly every recent sweep, as a camera's or microphone's feed would leave. */
+    val movesDataSteadily: Boolean get() = steadyScans >= Threats.STREAMING_SCANS
+
+    /** What the sweep that just ended heard of this network's data; null when nothing. */
+    fun noteTraffic(snapshot: TrafficSnapshot?) {
+        traffic = snapshot
+        val busy = (snapshot?.bytes ?: 0L) >= Threats.STREAMING_BYTE_THRESHOLD
+        steadyScans = (steadyScans + if (busy) 1 else -1).coerceIn(0, Threats.STREAMING_SCANS_KEPT)
+    }
 
     val id: MacAddress get() = latest.bssid
     val wasInLastScan: Boolean get() = missedScans == 0
@@ -421,3 +423,11 @@ fun ProbingDevice.passesWifiFilter(
         mac.vendor()?.contains(needle, ignoreCase = true) == true ||
         ssids.any { it.contains(needle, ignoreCase = true) }
 }
+
+/**
+ * Whether the network the phone is on is worth a "no password" warning. One open reading is not enough: a password
+ * kept for the network, or another reading of it that is protected, says otherwise, and a false warning is worse
+ * than none.
+ */
+fun isOpenWifi(joined: AuthMode, savedPassword: String?, heard: List<AuthMode>): Boolean =
+    joined == AuthMode.OPEN && savedPassword.isNullOrEmpty() && heard.all { it == AuthMode.OPEN }

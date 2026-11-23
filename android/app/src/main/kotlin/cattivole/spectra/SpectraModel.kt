@@ -101,12 +101,35 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         generation += 1
     }
 
+    /** Whether to warn that the Wi-Fi the phone is on has no password. */
+    val onOpenWifi: Boolean
+        get() {
+            val all = store.networks().values + store.phoneSightings()
+            val joined = all.firstOrNull { wifiJoiner.isCurrent(it) } ?: return false
+            val name = joined.revealedSsid ?: joined.latest.ssid
+            return cattivole.spectra.core.isOpenWifi(
+                joined.latest.auth,
+                savedPassword = name?.let(link::knownPassword),
+                heard = all.filter { name != null && (it.revealedSsid ?: it.latest.ssid) == name }.map { it.latest.auth },
+            )
+        }
+
     private var lastWifiScan = 0
     private var lastLanScan: Long? = null
     private var savedCheckAt = 0L
     private var savedRevision = 0
 
     init {
+        // Before anything listens: the lists may start filling before any screen shows, and the saved sessions are
+        // read from disk meanwhile.
+        store.earlier = { history.sightings.first(it) }
+        ble.earlier = { history.sightings.firstBluetooth(it) }
+        lan.earlier = { device, networks -> history.sightings.first(device, networks) }
+        history.onSightings = {
+            store.datesChanged()
+            ble.datesChanged()
+            lan.datesChanged()
+        }
         link.setWatched(watchedIds)
         val bump = {
             generation += 1
@@ -133,6 +156,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         ble.keep = { gatt.deviceAddress }
         wifiJoiner.onJoined = { ssid, password -> link.rememberJoined(ssid, password) }
         wifiJoiner.start()
+        connection.watch()
         phone.start()
         // Without its ✨ button the assistant still reads the Traffic screen: the live list, or the newest saved session.
         captures.recordedTraffic = {
@@ -168,7 +192,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         if (!autosaveHistory) return
         if (connection.running) return
         val report = connection.report ?: return
-        if (report.status == null || report.status == LinkStatus.NO_NETWORK) return
+        if (report.status == null || report.status == LinkStatus.NO_NETWORK || report.status == LinkStatus.VPN_ONLY) return
         if (report.checkedAt == savedCheckAt && connection.revision == savedRevision) return
         val saved = SavedConnection.from(report, connection.viaVpn, connection.route == cattivole.spectra.core.ProbeRoute.CELLULAR) ?: return
         savedCheckAt = report.checkedAt
@@ -237,6 +261,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         lan.stop()
         traffic.close()
         connection.stop()
+        connection.unwatch()
         speed.close()
         link.close()
         usb.close()

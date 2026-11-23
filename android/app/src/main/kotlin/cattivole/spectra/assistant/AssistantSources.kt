@@ -49,7 +49,7 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf) {
                 isHidden = name.isNullOrEmpty(),
                 inRange = network.isInRange,
                 clients = network.clients.size,
-                streaming = (network.traffic?.bytes ?: 0L) >= Threats.STREAMING_BYTE_THRESHOLD,
+                streaming = network.movesDataSteadily,
             )
         }
         val findings = Threats.assess(networks, model.store.deauthEvents).map { finding ->

@@ -92,6 +92,7 @@ object PhoneWifi {
             wpa2 -> AuthMode.WPA2_PSK
             wpa -> AuthMode.WPA_PSK
             wep -> AuthMode.WEP
+            "WAPI" in text -> AuthMode(8)
             else -> AuthMode.OPEN
         }
         val ccmp = "CCMP" in text

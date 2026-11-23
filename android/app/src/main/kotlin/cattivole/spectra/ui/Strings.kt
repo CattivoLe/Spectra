@@ -18,7 +18,7 @@ object Strings {
             current = language to load(language)
             loaded = current
         }
-        return current.second[english] ?: english
+        return current.second[english] ?: english.substringBefore(MEANING)
     }
 
     private fun load(language: String): Map<String, String> {
@@ -34,6 +34,12 @@ object Strings {
             }.toMap()
         }
     }
+
+    /**
+     * Sets apart two meanings of one English word that Russian tells apart: `Open##port` and `Open##security` are keys
+     * of their own, and English shows both as "Open".
+     */
+    private const val MEANING = "##"
 
     private fun String.unescape(): String = replace("\\n", "\n").replace("\\t", "\t")
 }
