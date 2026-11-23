@@ -7,6 +7,7 @@ struct NetworksView: View {
     @Environment(SensorLink.self) private var link
     @Environment(WatchList.self) private var watchList
     @Environment(WiFiJoiner.self) private var joiner
+    @Environment(LANScanner.self) private var scanner
     @Environment(\.scenePhase) private var scenePhase
     @State private var search = ""
     @State private var showChannels = false
@@ -35,7 +36,7 @@ struct NetworksView: View {
     }
 
     private var threats: [Threats.Finding] {
-        Threats.assess(networks: Array(store.networks.values), deauths: store.deauthEvents)
+        Threats.assess(networks: Array(store.networks.values), deauths: store.deauthEvents, senders: store.steadySenders, lanName: scanner.name(of:))
     }
 
     private func isCurrent(_ network: TrackedNetwork) -> Bool {
@@ -126,6 +127,14 @@ struct NetworksView: View {
                             if open {
                                 if let event = finding.deauth {
                                     DeauthRow(event: event)
+                                }
+                                if let sender = finding.sender {
+                                    let client = WiFiClient(mac: sender.mac, apBSSID: sender.bssid, rssi: sender.rssi, isAssociated: true)
+                                    NavigationLink {
+                                        ClientDetailView(client: client)
+                                    } label: {
+                                        ClientRow(client: client)
+                                    }
                                 }
                                 ForEach(finding.networks.compactMap { store.networks[$0] }) { network in
                                     NavigationLink(value: network.id) {
@@ -468,6 +477,8 @@ struct ThreatRow: View {
             "Someone is sending frames that throw devices off the network. It is how handshakes are captured for password cracking and how devices are pushed toward a fake access point. The frames are listed below."
         case .evilTwin:
             "Copies of one network that differ in security or maker can be an impostor waiting for devices that join by name. Compare the access points below and avoid the one you do not recognise."
+        case .streaming where finding.sender != nil:
+            "The sensor heard this device send far more than it receives, in sweep after sweep, the way a camera or a microphone does. A backup or a live broadcast looks the same. The device and its network are below."
         case .streaming:
             "A network that moves data the whole time may be carrying a camera or microphone feed. Open it below to see which devices are connected."
         }

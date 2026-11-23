@@ -17882,6 +17882,56 @@
           }
         }
       }
+    },
+    "A device keeps sending data": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Устройство постоянно передаёт данные"
+          }
+        }
+      }
+    },
+    "%@ sends about %@ through %@ without pausing — it may be a camera or a microphone.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ без пауз отправляет около %2$@ через %3$@ — возможно, это камера или микрофон."
+          }
+        }
+      }
+    },
+    "The sensor heard this device send far more than it receives, in sweep after sweep, the way a camera or a microphone does. A backup or a live broadcast looks the same. The device and its network are below.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сенсор проход за проходом слышит, что устройство отдаёт намного больше, чем получает: так работают камеры и микрофоны. Резервное копирование и прямой эфир выглядят так же. Устройство и его сеть — ниже."
+          }
+        }
+      }
+    },
+    "Sends": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отдаёт"
+          }
+        }
+      }
+    },
+    "Receives": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Получает"
+          }
+        }
+      }
     }
   },
   "version": "1.1"

@@ -95,6 +95,10 @@ struct ClientDetailView: View {
                 } else if let maker = client.manufacturer {
                     InfoRow("Maker", value: maker)
                 }
+                if let traffic = store.clientTraffic.filter({ $0.mac == client.mac }).max(by: { $0.upBytes < $1.upBytes }) {
+                    InfoRow("Sends", value: Bitrate.text(bytesPerSecond: traffic.upBytesPerSecond))
+                    InfoRow("Receives", value: Bitrate.text(bytesPerSecond: traffic.downBytesPerSecond))
+                }
                 InfoRow("Associated", value: client.isAssociated ? String(localized: "Yes") : String(localized: "Probe only"))
                 if let ap = client.apBSSID, let network = store.networks[ap] {
                     InfoRow("Network", value: network.revealedSSID ?? network.latest.displayName)

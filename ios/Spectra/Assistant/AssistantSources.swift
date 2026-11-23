@@ -66,10 +66,10 @@ struct AssistantSources {
                 isHidden: name == nil,
                 inRange: network.isInRange,
                 clients: network.clients.count,
-                streaming: network.movesDataSteadily
+                streaming: network.movesDataSteadily || store.steadySenders.contains { $0.traffic.bssid == network.id }
             )
         }
-        snapshot.findings = Threats.assess(networks: networks, deauths: store.deauthEvents).map {
+        snapshot.findings = Threats.assess(networks: networks, deauths: store.deauthEvents, senders: store.steadySenders, lanName: lan.name(of:)).map {
             AssistantSnapshot.Finding(severity: $0.severity == .critical ? "critical" : "warning", title: $0.title, detail: $0.detail,
                                       bssids: $0.networks.map(\.description))
         }

@@ -4,7 +4,7 @@ import Foundation
 /// The BLE contract with the Cardputer firmware. docs/protocol.md is the
 /// source of truth; keep the two in step.
 nonisolated enum SensorProtocol {
-    static let version = 9
+    static let version = 10
 
     static let service = CBUUID(string: "53500001-8F2D-4B6A-9C1E-737065637472")
     static let info = CBUUID(string: "53500002-8F2D-4B6A-9C1E-737065637472")
@@ -127,7 +127,8 @@ nonisolated enum SensorProtocol {
     enum Message: Equatable {
         case scanStarted(scanID: UInt16)
         case accessPoint(scanID: UInt16, reading: AccessPointReading)
-        case scanFinished(scanID: UInt16, count: Int, duration: Duration, stationCount: Int, probeCount: Int)
+        /// `clientCount`: how many `clientTraffic` records came with the scan, nil from a sensor that sends none.
+        case scanFinished(scanID: UInt16, count: Int, duration: Duration, stationCount: Int, probeCount: Int, clientCount: Int? = nil)
         case station(scanID: UInt16, client: WiFiClient)
         case probeReq(scanID: UInt16, probe: ProbeRequest)
         case deauth(scanID: UInt16, event: DeauthEvent)
@@ -143,6 +144,7 @@ nonisolated enum SensorProtocol {
         case saved(SavedRecord)
         case knownWifi(index: Int, total: Int, ssid: String, password: String)
         case rawFrame(RawFrameFragment)
+        case clientTraffic(scanID: UInt16, traffic: ClientTraffic)
     }
 
     /// One `0x24` notification: a whole captured frame, or a slice of one. The
@@ -215,6 +217,7 @@ nonisolated enum SensorProtocol {
         case loraProgress = 0x22
         case knownWifi = 0x23
         case rawFrame = 0x24
+        case clientTraffic = 0x25
     }
 
     /// Decodes one Results notification, or returns nil for anything malformed
@@ -248,7 +251,7 @@ nonisolated enum SensorProtocol {
 
         case .scanFinished:
             guard bytes.count >= 7 else { return nil }
-            // v2 adds station count at offset 7; v3 adds probe count at offset 9.
+            // v2 adds station count at offset 7; v3 adds probe count at offset 9; v10 client traffic count at 11.
             let staCount = bytes.count >= 9 ? Int(u16(bytes, 7)) : 0
             let probeCount = bytes.count >= 11 ? Int(u16(bytes, 9)) : 0
             return .scanFinished(
@@ -256,7 +259,8 @@ nonisolated enum SensorProtocol {
                 count: Int(u16(bytes, 3)),
                 duration: .milliseconds(Int(u16(bytes, 5))),
                 stationCount: staCount,
-                probeCount: probeCount
+                probeCount: probeCount,
+                clientCount: bytes.count >= 13 ? Int(u16(bytes, 11)) : nil
             )
 
         case .accessPoint:
@@ -407,6 +411,21 @@ nonisolated enum SensorProtocol {
 
         case .rawFrame:
             return decodeRawFrame(bytes)
+
+        case .clientTraffic:
+            guard bytes.count >= 32 else { return nil }
+            return .clientTraffic(scanID: scanID, traffic: ClientTraffic(
+                mac: BSSID(bytes: Array(bytes[3..<9])),
+                bssid: BSSID(bytes: Array(bytes[9..<15])),
+                channel: Int(bytes[15]),
+                rssi: Int(Int8(bitPattern: bytes[16])),
+                listenMs: Int(u16(bytes, 17)),
+                upBytes: u32(bytes, 19),
+                upFrames: Int(u16(bytes, 23)),
+                downBytes: u32(bytes, 25),
+                downFrames: Int(u16(bytes, 29)),
+                busySlots: Int(bytes[31])
+            ))
         }
     }
 
@@ -497,13 +516,14 @@ nonisolated enum SensorProtocol {
             bytes.append(MessageType.scanStarted.rawValue)
             put16(scanID)
 
-        case .scanFinished(let scanID, let count, let duration, let stationCount, let probeCount):
+        case .scanFinished(let scanID, let count, let duration, let stationCount, let probeCount, let clientCount):
             bytes.append(MessageType.scanFinished.rawValue)
             put16(scanID)
             put16(UInt16(clamping: count))
             put16(UInt16(clamping: Int(duration / .milliseconds(1))))
             put16(UInt16(clamping: stationCount))
             put16(UInt16(clamping: probeCount))
+            if let clientCount { put16(UInt16(clamping: clientCount)) }
 
         case .accessPoint(let scanID, let reading):
             bytes.append(MessageType.accessPoint.rawValue)
@@ -569,6 +589,20 @@ nonisolated enum SensorProtocol {
             bytes.append(UInt8((totalBytes >> 16) & 0xFF))
             bytes.append(UInt8((totalBytes >> 24) & 0xFF))
             put16(UInt16(clamping: packets))
+
+        case .clientTraffic(let scanID, let traffic):
+            bytes.append(MessageType.clientTraffic.rawValue)
+            put16(scanID)
+            bytes.append(contentsOf: traffic.mac.bytes)
+            bytes.append(contentsOf: traffic.bssid.bytes)
+            bytes.append(UInt8(clamping: traffic.channel))
+            bytes.append(UInt8(bitPattern: Int8(clamping: traffic.rssi)))
+            put16(UInt16(clamping: traffic.listenMs))
+            put32(traffic.upBytes)
+            put16(UInt16(clamping: traffic.upFrames))
+            put32(traffic.downBytes)
+            put16(UInt16(clamping: traffic.downFrames))
+            bytes.append(UInt8(clamping: traffic.busySlots))
 
         case .vendorIE(let scanID, let bssid, let deviceName, let manufacturer):
             bytes.append(MessageType.vendorIE.rawValue)
