@@ -81,6 +81,42 @@ nonisolated enum TrafficHints {
         return nil
     }
 
+    /// The protocols a TLS ClientHello offers (ALPN), in its order. Empty when it offers none.
+    static func tlsAlpn(_ data: [UInt8]) -> [String] {
+        guard data.count >= 5, data[0] == 22 else { return [] }
+        var index = 9
+        guard index + 34 < data.count else { return [] }
+        index += 34
+        index += 1 + Int(data[index])
+        guard index + 2 <= data.count else { return [] }
+        index += 2 + u16(data, index)
+        guard index + 1 <= data.count else { return [] }
+        index += 1 + Int(data[index])
+        guard index + 2 <= data.count else { return [] }
+        let end = min(index + 2 + u16(data, index), data.count)
+        index += 2
+        while index + 4 <= end {
+            let type = u16(data, index)
+            let length = u16(data, index + 2)
+            index += 4
+            guard index + length <= end else { return [] }
+            if type == 16, length >= 2 {
+                var found: [String] = []
+                var at = index + 2
+                let stop = min(index + 2 + u16(data, index), index + length)
+                while at < stop {
+                    let size = Int(data[at])
+                    guard at + 1 + size <= stop else { break }
+                    found.append(String(decoding: data[at + 1..<at + 1 + size], as: UTF8.self))
+                    at += 1 + size
+                }
+                return found
+            }
+            index += length
+        }
+        return []
+    }
+
     /// True once a TLS record header is present and its body has arrived.
     static func tlsRecordComplete(_ data: [UInt8]) -> Bool {
         guard data.count >= 5, (Int(data[0]) & 0xFF) == 22 else { return false }

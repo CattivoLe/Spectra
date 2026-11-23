@@ -784,7 +784,6 @@ Stop keeping at top	Больше не держать вверху
 Parameters	Параметры
 Request headers	Заголовки запроса
 Response headers	Заголовки ответа
-Response JSON	JSON ответа
 Response	Ответ
 This response has no body.	В этом ответе нет тела.
 The body is encoded as %s and is not text.	Тело сжато как %s и это не текст.
@@ -793,9 +792,6 @@ Status	Статус
 Nothing in this filter	В этом фильтре пусто
 No connection matches these filters.	Ни одно соединение не подходит под эти фильтры.
 Connections are forwarded. Names, headers, parameters and JSON come from cleartext DNS and HTTP, not from decrypted TLS.	Соединения проксируются. Имена, заголовки, параметры и JSON берутся из открытых DNS и HTTP, а не из расшифрованного TLS.
-The body was cut short, so the JSON may be incomplete.	Тело обрезано, поэтому JSON может быть неполным.
-No JSON	Нет JSON
-No JSON in this response.	В этом ответе нет JSON.
 Copy	Копировать
 Copy request	Копировать запрос
 Decrypt TLS	Расшифровывать TLS
@@ -1627,3 +1623,98 @@ too many requests	слишком много запросов
 New summaries are saved to «%s»	Новые сводки сохраняются в «%s»
 New summaries go to the highlighted folder. Hold another folder to save there.	Новые сводки идут в выделенную папку. Удержите другую, чтобы сохранять в неё.
 Every summary and folder is erased from this phone. Models and settings stay.	Все сводки и папки будут удалены с телефона. Модели и настройки останутся.
+Export HAR	Экспорт в HAR
+Export HAR for this connection	Экспорт соединения в HAR
+Hosts to decrypt	Какие хосты расшифровывать
+Copy as cURL	Скопировать как cURL
+cURL	cURL
+Leave %s encrypted	Не расшифровывать %s
+Timing	Время
+Waiting for the response	Ожидание ответа
+Request size	Размер запроса
+Response size	Размер ответа
+%s (headers %s, body %s)	%s (заголовки %s, тело %s)
+%.2f s	%.2f с
+Request body	Тело запроса
+Only the first %s of this body were kept.	Сохранены только первые %s тела.
+This body was not kept: the recording reached its limit for stored bodies.	Тело не сохранено: запись исчерпала лимит на хранение тел.
+This request has no body.	В этом запросе нет тела.
+Loading…	Загрузка…
+The stored body could not be read.	Не удалось прочитать сохранённое тело.
+Image, %d × %d, %s	Картинка, %d × %d, %s
+Image, %s. This phone cannot draw this format.	Картинка, %s. Этот телефон не умеет показывать такой формат.
+Binary data, %s.	Двоичные данные, %s.
+The first %s are shown.	Показаны первые %s.
+%d characters	%d символов
+Show all	Показать все
+Every host is decrypted. A host whose app refuses the certificate goes through unread.	Расшифровываются все хосты. Если приложение отвергает сертификат, его хост пропускается без расшифровки.
+Only the hosts in the first list are decrypted, except those in the second. Everything else goes through unread.	Расшифровываются только хосты из первого списка, кроме тех, что во втором. Всё остальное идёт без расшифровки.
+Every host is decrypted except those in the list. They go through unread.	Расшифровываются все хосты, кроме перечисленных: они идут без расшифровки.
+Decrypt these hosts	Расшифровывать эти хосты
+Leave these encrypted	Не расшифровывать эти
+Add a host	Добавить хост
+*.example.com matches example.com and all its subdomains. * stands for any characters. Changes apply to new connections.	*.example.com подходит к example.com и всем его поддоменам, * означает любые символы. Изменения действуют на новые соединения.
+Host or pattern	Хост или шаблон
+Decrypt	Расшифровывать
+Leave encrypted	Не расшифровывать
+Refused the certificate	Отвергли сертификат
+These hosts did not trust the Spectra certificate in this recording, often because the app pins its own. Leaving them encrypted saves a failed first connection next time.	Эти хосты не приняли сертификат Spectra в этой записи, чаще всего потому, что приложение доверяет только своему. Если их не расшифровывать, в следующий раз первое соединение не сорвётся.
+The list is empty.	Список пуст.
+All hosts	Все хосты
+Only these	Только эти
+All except these	Все, кроме этих
+Only listed hosts (%d)	Только из списка (%d)
+All except listed hosts (%d)	Все, кроме списка (%d)
+HTTP version	Версия HTTP
+WebSocket messages (%d)	Сообщения WebSocket (%d)
+%d later messages were counted but not listed.	Ещё %d сообщений учтено, но не показано.
+↑ sent	↑ отправлено
+↓ received	↓ получено
+Text	Текст
+Binary	Двоичное
+Close frame	Закрытие
+Message	Сообщение
+Direction	Направление
+Type	Тип
+Time	Время
+Compression	Сжатие
+Only the start of this message was kept.	Сохранено только начало сообщения.
+This message is empty.	Сообщение пустое.
+%d kbit/s	%d кбит/с
+A matching request over decrypted HTTPS gets this answer from the phone and never reaches the server. Hosts with rules are kept on HTTP/1.1. Changes apply to new connections.	Подходящий запрос по расшифрованному HTTPS получает этот ответ от телефона и до сервера не доходит. Хосты с правилами остаются на HTTP/1.1. Изменения действуют на новые соединения.
+Add rule	Добавить правило
+Answer	Ответ
+Answer chosen requests from the phone	Отвечать на выбранные запросы с телефона
+Apply	Применить
+Connections go at full speed.	Соединения идут на полной скорости.
+Custom	Свои
+Custom: %s down, %s up	Свои: приём %s, отдача %s
+Delay, ms	Задержка, мс
+Download %s, upload %s, delay %s. Applies to the recorded connections right away.	Приём %s, отдача %s, задержка %s. Действует на записываемые соединения сразу.
+Download, kbit/s	Приём, кбит/с
+Empty or 0 leaves that direction unlimited.	Пусто или 0 — без ограничения в эту сторону.
+Fast 3G	Быстрый 3G
+Headers, one per line	Заголовки, по одному в строке
+Map Local	Map Local
+Map locally	Подменить ответ (Map Local)
+Method	Метод
+New rule	Новое правило
+No rules	Правил нет
+Open a request and choose Map locally, or add a rule here.	Откройте запрос и выберите «Подменить ответ» или добавьте правило здесь.
+Path	Путь
+Path: * stands for any characters; empty matches every path. The query is compared too when the path has one.	Путь: * означает любые символы, пусто — любой путь. Если в пути есть запрос (?…), сравнивается и он.
+Repeat request	Повторить запрос
+Requests	Запросы
+Response body	Тело ответа
+Rule	Правило
+Rules on: %d	Включено правил: %d
+Rules on: %d. Works only with Decrypt TLS on.	Включено правил: %d. Работает только с расшифровкой TLS.
+Sending…	Отправка…
+Sent from this app. While recording, it shows up in the list like any other request.	Отправляется из этого приложения. Во время записи появится в списке, как любой другой запрос.
+The body is binary, %s, and is sent as recorded.	Тело двоичное, %s, отправляется как записано.
+Throttling	Ограничение скорости
+Upload, kbit/s	Отдача, кбит/с
+unlimited	без ограничения
+The certificate is installed. Apps that trust user certificates can be read; most others refuse it.	Сертификат установлен. Читаются приложения, которые доверяют пользовательским сертификатам; большинство остальных его отвергает.
+The certificate is not installed on this phone yet: nothing can be decrypted.	Сертификат ещё не установлен на этот телефон: расшифровать ничего нельзя.
+Android lets no app install a CA certificate, so spectra-ca.crt was saved to Downloads.\n\n1. In Settings search for “CA certificate”. On Samsung: Security and privacy → More security settings → Install from phone storage → CA certificate.\n2. Choose “Install anyway” and pick spectra-ca.crt in Downloads.\n3. Restart the app you want to read.	Android не даёт приложению самому установить сертификат ЦС, поэтому spectra-ca.crt сохранён в «Загрузки».\n\n1. В настройках найдите «Сертификат ЦС». На Samsung: «Безопасность и конфиденциальность» → «Другие параметры безопасности» → «Установка из памяти телефона» → «Сертификат ЦС».\n2. Выберите «Всё равно установить» и укажите spectra-ca.crt в «Загрузках».\n3. Перезапустите приложение, которое хотите читать.

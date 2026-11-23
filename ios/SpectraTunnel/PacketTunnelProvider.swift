@@ -29,6 +29,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// The "Decrypt TLS" switch, read from the App Group on the watchdog's tick rather than on every packet:
     /// each read is a round trip to the preferences daemon, and the loop asks for it per packet.
     private let decryptFlag = OSAllocatedUnfairLock(initialState: false)
+    /// Which hosts are decrypted, read with the switch on the watchdog's tick.
+    private let hostFilter = OSAllocatedUnfairLock(initialState: TlsHostFilter())
+    /// Throttle settings and Map Local rules, read with the switch on the watchdog's tick.
+    private let throttle = OSAllocatedUnfairLock(initialState: ThrottleSettings())
+    private let mapRules = OSAllocatedUnfairLock(initialState: [MapRule]())
     /// Written when decryption switched itself off for the run, for the app to explain.
     static let tlsNoticeKey = "traffic_tls_notice"
 
@@ -37,6 +42,20 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         UserDefaults(suiteName: Self.appGroup)?.removeObject(forKey: Self.tlsNoticeKey)
         let decrypt = decryptEnabled()
         decryptFlag.withLock { $0 = decrypt }
+        let filter = TlsHostFilter.load(UserDefaults(suiteName: Self.appGroup))
+        hostFilter.withLock { $0 = filter }
+        readTools()
+        if decrypt, loadCA() == nil {
+            tunnelLog.error("the certificate authority could not be opened: nothing will be decrypted")
+            UserDefaults(suiteName: Self.appGroup)?.set("noca", forKey: Self.tlsNoticeKey)
+        }
+        // A new run starts with no bodies: what is left belongs to the previous recording.
+        let bodies = container().map { TrafficBodies(dir: $0.appendingPathComponent(PacketTunnelBodies.folder, isDirectory: true)) }
+        bodies?.clear()
+        if let dir = bodies?.dir {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            LocalCertificateAuthority.excludeFromBackup(dir)
+        }
         // Not a loopback address: the remote address is where the system expects the VPN server to be, and
         // nothing of the phone's own loopback traffic may be steered by it.
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "198.18.0.254")
@@ -77,6 +96,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 },
                 decryptTLS: { [decryptFlag = self.decryptFlag] in decryptFlag.withLock { $0 } },
                 certificate: { self.loadCA() },
+                hostFilter: { [hostFilter = self.hostFilter] in hostFilter.withLock { $0 } },
+                bodies: bodies,
+                throttle: { [throttle = self.throttle] in throttle.withLock { $0 } },
+                mapRules: { [mapRules = self.mapRules] in mapRules.withLock { $0 } },
                 onFlows: { [weak self] flows in self?.publish(flows) }
             )
             self.proxy = proxy
@@ -109,6 +132,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             let now = Date()
             let decrypt = self.decryptEnabled()
             self.decryptFlag.withLock { $0 = decrypt }
+            let filter = TlsHostFilter.load(UserDefaults(suiteName: Self.appGroup))
+            self.hostFilter.withLock { $0 = filter }
+            self.readTools()
             if state.decryptOff && !self.toldDecryptOff {
                 self.toldDecryptOff = true
                 UserDefaults(suiteName: Self.appGroup)?.set("untrusted", forKey: Self.tlsNoticeKey)
@@ -162,6 +188,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     // MARK: Shared App Group
+
+    private func readTools() {
+        let defaults = UserDefaults(suiteName: Self.appGroup)
+        let settings = ThrottleSettings.load(defaults)
+        let rules = MapRule.load(defaults)
+        throttle.withLock { $0 = settings }
+        mapRules.withLock { $0 = rules }
+    }
 
     private func decryptEnabled() -> Bool {
         UserDefaults(suiteName: Self.appGroup)?.bool(forKey: Self.tlsKey) ?? false

@@ -1,12 +1,23 @@
 import Foundation
 import Compression
 
-/// Splits a cleartext HTTP byte stream into requests and responses. A body over
-/// `bodyCap` is kept only up to the cap so the next message still lines up.
-/// Direct port of the Android `core/HttpExchange.kt` `HttpAssembler`.
-/// Brotli bodies are not decoded on iOS (no system decoder); gzip/deflate use
-/// the `Compression` framework.
-nonisolated final class HttpAssembler {
+/// Splits a cleartext HTTP byte stream into requests and responses. A body over its cap is read only up to the
+/// cap so the next message still lines up, and the exchange says it was cut. Finished bodies go to `sink` once
+/// Content-Encoding is undone (gzip, deflate and Brotli through the `Compression` framework); the exchanges keep
+/// their times and sizes. Port of the Android `core/HttpExchange.kt` `HttpAssembler`.
+nonisolated final class HttpAssembler: HttpStream {
+    /// Takes a finished body: the exchange's index, whether it is the request's, the decoded bytes. True when kept.
+    typealias Sink = (_ index: Int, _ request: Bool, _ body: [UInt8]) -> Bool
+    /// Takes the payload of WebSocket message `number` of exchange `index`. True when kept.
+    typealias MessageSink = (_ index: Int, _ number: Int, _ body: [UInt8]) -> Bool
+
+    private let sink: Sink
+    private let messageSink: MessageSink
+    /// Reads the frames once the connection became a WebSocket.
+    private var socket: WsReader?
+    /// WebSocket messages listed for one connection; later ones are only counted.
+    static let maxMessages = 1000
+    private let clock: () -> Int64
     private let client = ByteCursor()
     private let server = ByteCursor()
     private var ready: [HttpExchange] = []
@@ -16,22 +27,47 @@ nonisolated final class HttpAssembler {
     private var method = ""
     private var path = ""
     private var target = ""
+    private var version: String?
     private var requestHeaders: [HttpField] = []
-    private var requestBody = BodyReader(plan: .none, limit: bodyCap)
+    private var requestBody = BodyReader(plan: .none, limit: requestCap)
     private var status = 0
+    private var statusText: String?
     private var responseHeaders: [HttpField] = []
-    private var responseBody = BodyReader(plan: .none, limit: bodyCap)
+    private var responseBody = BodyReader(plan: .none, limit: responseCap)
+    private var parameters: [HttpField] = []
+    private var requestCut = false
+    private var requestStored = false
+    private var requestHeaderBytes: Int64 = 0
+    private var responseHeaderBytes: Int64 = 0
+    /// When the oldest byte still waiting in each cursor arrived.
+    private var clientMark: Int64?
+    private var serverMark: Int64?
+    private var startedAt: Int64?
+    private var requestEndAt: Int64?
+    private var responseStartAt: Int64?
+
+    init(sink: @escaping Sink = { _, _, _ in false },
+         messageSink: @escaping MessageSink = { _, _, _ in false },
+         clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
+        self.sink = sink
+        self.messageSink = messageSink
+        self.clock = clock
+    }
 
     func exchanges() -> [HttpExchange] { ready }
 
     func client(_ data: [UInt8]) {
+        if let socket { socket.client(data); return }
         if stopped || data.isEmpty { return }
+        if client.available() == 0 { clientMark = clock() }
         client.append(data)
         pump()
     }
 
     func server(_ data: [UInt8]) {
+        if let socket { socket.server(data); return }
         if stopped || data.isEmpty { return }
+        if server.available() == 0 { serverMark = clock() }
         server.append(data)
         pump()
     }
@@ -45,62 +81,123 @@ nonisolated final class HttpAssembler {
 
     private enum Step { case requestHeaders, requestBody, responseHeaders, responseBody }
 
+    private struct BodyResult {
+        var stored = false
+        var cut = false
+        var wireBytes: Int64 = 0
+    }
+
     private func pump() {
         while !stopped {
             switch step {
             case .requestHeaders:
                 if client.overflow() { stopped = true; return }
+                let mark = clientMark
                 guard let header = client.takeHeaders() else { return }
                 guard let parsed = parseRequest(header) else { stopped = true; return }
                 if ready.count >= Self.maxExchanges { stopped = true; return }
-                method = parsed.0
-                target = parsed.1
+                startedAt = mark ?? clock()
+                clientMark = client.available() > 0 ? clock() : nil
+                requestEndAt = nil
+                responseStartAt = nil
+                requestHeaderBytes = Int64(header.unicodeScalars.count + 4)
+                responseHeaderBytes = 0
+                method = parsed.method
+                target = parsed.target
+                version = parsed.version
                 path = target.components(separatedBy: "?").first.flatMap { $0.isEmpty ? nil : $0 } ?? "/"
-                requestHeaders = parsed.2
-                requestBody = BodyReader(plan: Self.plan(requestHeaders, request: true, method: method, status: 0), limit: Self.bodyCap)
+                requestHeaders = parsed.headers
+                statusText = nil
+                parameters = []
+                requestCut = false
+                requestStored = false
+                requestBody = BodyReader(plan: Self.plan(requestHeaders, request: true, method: method, status: 0), limit: Self.requestCap)
                 step = .requestBody
             case .requestBody:
                 if !requestBody.pump(client) { return }
-                publish(status: nil, responseHeaders: [], body: nil, cut: false)
+                requestEndAt = clock()
+                if client.available() == 0 { clientMark = nil }
+                let (decoded, decodeCut) = decodeBody(requestBody.bytes(), headers: requestHeaders, cap: Self.requestCap)
+                requestCut = requestBody.cut || decodeCut
+                var fields: [HttpField] = []
+                if !requestCut && isForm(requestHeaders) { fields += formFields(decoded) }
+                if !requestCut && isJSONType(requestHeaders) { fields += jsonFields(decoded) }
+                parameters = Array(fields.prefix(Self.fieldCap))
+                requestStored = !decoded.isEmpty && sink(ready.count, true, decoded)
+                publish(response: false, body: nil)
                 step = .responseHeaders
             case .responseHeaders:
                 if server.overflow() { stopped = true; return }
+                let mark = serverMark
                 guard let header = server.takeHeaders() else { return }
                 guard let parsed = parseStatus(header) else { stopped = true; return }
-                status = parsed.0
-                responseHeaders = parsed.1
+                if responseStartAt == nil { responseStartAt = mark ?? clock() }
+                serverMark = server.available() > 0 ? clock() : nil
+                responseHeaderBytes += Int64(header.unicodeScalars.count + 4)
+                status = parsed.status
+                statusText = parsed.text
+                responseHeaders = parsed.headers
                 if status >= 100 && status <= 199 && status != 101 { continue }
                 if status == 101 || method == "CONNECT" {
-                    publish(status: status, responseHeaders: responseHeaders, body: nil, cut: false, complete: true)
+                    publish(response: true, body: BodyResult(), endedAt: clock())
                     stopped = true
+                    let upgrade = responseHeaders.first { $0.name.lowercased() == "upgrade" }?.value.lowercased() ?? ""
+                    if status == 101 && upgrade.contains("websocket") { openSocket() }
                     return
                 }
-                responseBody = BodyReader(plan: Self.plan(responseHeaders, request: false, method: method, status: status), limit: Self.bodyCap)
+                responseBody = BodyReader(plan: Self.plan(responseHeaders, request: false, method: method, status: status), limit: Self.responseCap)
                 step = .responseBody
             case .responseBody:
                 if !responseBody.pump(server) { return }
-                let decoded = inflate(responseBody.bytes(), headers: responseHeaders)
-                let json = decoded.flatMap { prettyJSON($0) }
-                let shown = json?.0 ?? decoded.flatMap { readableText($0) }
-                publish(status: status, responseHeaders: responseHeaders, body: shown, cut: responseBody.cut || (json?.1 ?? false), complete: true)
+                let end = clock()
+                if server.available() == 0 { serverMark = nil }
+                let (decoded, decodeCut) = decodeBody(responseBody.bytes(), headers: responseHeaders, cap: Self.responseCap)
+                let stored = !decoded.isEmpty && sink(max(0, ready.count - 1), false, decoded)
+                publish(response: true,
+                        body: BodyResult(stored: stored, cut: responseBody.cut || decodeCut, wireBytes: responseBody.consumed),
+                        endedAt: end)
                 step = .requestHeaders
             }
         }
     }
 
-    private func publish(status: Int?, responseHeaders: [HttpField], body: String?, cut: Bool, complete: Bool = false) {
-        let raw = requestBody.cut ? [] : (inflate(requestBody.bytes(), headers: requestHeaders) ?? [])
-        var parameters: [HttpField] = []
-        if isForm(requestHeaders) { parameters += formFields(raw) }
-        if isJSONType(requestHeaders) { parameters += jsonFields(raw) }
-        parameters = Array(parameters.prefix(Self.fieldCap))
+    /// Hands what is left in both cursors, and everything after, to a WebSocket reader.
+    private func openSocket() {
+        let index = ready.count - 1
+        let extensions = responseHeaders.first { $0.name.lowercased() == "sec-websocket-extensions" }?.value
+        let reader = WsReader(extensions: extensions, clock: clock) { [unowned self] message, payload in
+            var exchange = self.ready[index]
+            if exchange.messages.count >= Self.maxMessages {
+                exchange.messagesDropped += 1
+            } else {
+                var kept = message
+                kept.stored = !payload.isEmpty && self.messageSink(index, exchange.messages.count, payload)
+                exchange.messages.append(kept)
+            }
+            self.ready[index] = exchange
+        }
+        socket = reader
+        if client.available() > 0 { reader.client(client.read(client.available())) }
+        if server.available() > 0 { reader.server(server.read(server.available())) }
+    }
+
+    private func publish(response: Bool, body: BodyResult?, endedAt: Int64? = nil) {
         let exchange = HttpExchange(
             method: method, path: path, query: queryFields(target),
-            requestHeaders: requestHeaders, parameters: parameters, status: status,
-            responseHeaders: responseHeaders, responseJson: body, responseCut: cut
+            requestHeaders: requestHeaders, parameters: parameters,
+            status: response ? status : nil,
+            responseHeaders: response ? responseHeaders : [],
+            responseJson: nil, responseCut: body?.cut ?? false, requestCut: requestCut,
+            requestBodyStored: requestStored, responseBodyStored: body?.stored ?? false,
+            httpVersion: version, target: target, statusText: response ? statusText : nil,
+            startedAt: startedAt, requestEndAt: requestEndAt,
+            responseStartAt: response ? responseStartAt : nil, endedAt: endedAt,
+            requestHeaderBytes: requestHeaderBytes, requestBodyBytes: requestBody.consumed,
+            responseHeaderBytes: response ? responseHeaderBytes : nil,
+            responseBodyBytes: response ? body?.wireBytes : nil
         )
         if open { ready[ready.count - 1] = exchange } else { ready.append(exchange) }
-        open = !complete
+        open = !response
     }
 
     private static func plan(_ headers: [HttpField], request: Bool, method: String, status: Int) -> BodyPlan {
@@ -116,7 +213,10 @@ nonisolated final class HttpAssembler {
     }
 
     private static let maxExchanges = 24
-    static let bodyCap = 4 * 1024 * 1024
+    /// The most of a request body that is read and kept.
+    static let requestCap = 1024 * 1024
+    /// The most of a response body that is read and kept, before and after it is decompressed.
+    static let responseCap = 4 * 1024 * 1024
     private static let headerCap = 32 * 1024
     private static let fieldCap = 40
 
@@ -179,6 +279,8 @@ nonisolated final class HttpAssembler {
         private var fixedLeft: Int
         private var chunkLeft = 0
         private var phase: Chunk = .size
+        /// Every byte the body took on the wire, chunk framing included.
+        private(set) var consumed: Int64 = 0
 
         init(plan: BodyPlan, limit: Int) {
             self.plan = plan
@@ -189,18 +291,23 @@ nonisolated final class HttpAssembler {
         func bytes() -> [UInt8] { kept }
         func finishAtClose() { atClose = true }
 
+        private func take(_ src: ByteCursor, _ count: Int) -> [UInt8] {
+            consumed += Int64(count)
+            return src.read(count)
+        }
+
         func pump(_ src: ByteCursor) -> Bool {
             if done { return true }
             switch plan {
             case .none:
                 done = true
             case .untilClose:
-                keep(src.read(src.available()))
+                if src.available() > 0 { keep(take(src, src.available())) }
                 if atClose { done = true }
             case .fixed:
                 while fixedLeft > 0 && src.available() > 0 {
                     let count = min(fixedLeft, src.available())
-                    keep(src.read(count))
+                    keep(take(src, count))
                     fixedLeft -= count
                 }
                 if fixedLeft == 0 { done = true }
@@ -216,8 +323,8 @@ nonisolated final class HttpAssembler {
                 case .size:
                     let end = src.indexOf(lineEnd)
                     if end < 0 { return }
-                    let line = latin1(src.read(end)).components(separatedBy: ";").first?.trimmingCharacters(in: .whitespaces) ?? ""
-                    _ = src.read(2)
+                    let line = latin1(take(src, end)).components(separatedBy: ";").first?.trimmingCharacters(in: .whitespaces) ?? ""
+                    _ = take(src, 2)
                     guard let size = Int(line, radix: 16) else { done = true; return }
                     chunkLeft = size
                     phase = size == 0 ? .trailers : .data
@@ -225,22 +332,22 @@ nonisolated final class HttpAssembler {
                     if chunkLeft == 0 { phase = .after; continue }
                     let count = min(chunkLeft, src.available())
                     if count == 0 { return }
-                    keep(src.read(count))
+                    keep(take(src, count))
                     chunkLeft -= count
                     if chunkLeft == 0 { phase = .after }
                 case .after:
                     if src.available() < 2 { return }
-                    _ = src.read(2)
+                    _ = take(src, 2)
                     phase = .size
                 case .trailers:
                     if src.available() < 2 { return }
-                    if src.indexOf(lineEnd) == 0 { _ = src.read(2); done = true; return }
+                    if src.indexOf(lineEnd) == 0 { _ = take(src, 2); done = true; return }
                     let end = src.indexOf(headerEnd)
                     if end < 0 {
                         if src.available() > HttpAssembler.headerCap { done = true }
                         return
                     }
-                    _ = src.read(end + headerEnd.count)
+                    _ = take(src, end + headerEnd.count)
                     done = true
                 }
             }
@@ -258,30 +365,39 @@ nonisolated final class HttpAssembler {
 
 // MARK: - Free helpers (ported)
 
-private let headerEnd: [UInt8] = [13, 10, 13, 10]
-private let lineEnd: [UInt8] = [13, 10]
-private let httpMethods: Set<String> = ["GET", "POST", "HEAD", "PUT", "DELETE", "PATCH", "OPTIONS", "CONNECT", "TRACE"]
+private nonisolated let headerEnd: [UInt8] = [13, 10, 13, 10]
+private nonisolated let lineEnd: [UInt8] = [13, 10]
+private nonisolated let httpMethods: Set<String> = ["GET", "POST", "HEAD", "PUT", "DELETE", "PATCH", "OPTIONS", "CONNECT", "TRACE"]
 
 /// ISO-8859-1 decode: each byte becomes the scalar of the same value.
-private func latin1(_ bytes: [UInt8]) -> String {
+private nonisolated func latin1(_ bytes: [UInt8]) -> String {
     String(String.UnicodeScalarView(bytes.map { Unicode.Scalar($0) }))
 }
 
-private func parseRequest(_ header: String) -> (String, String, [HttpField])? {
+private nonisolated struct RequestLine {
+    let method: String
+    let target: String
+    let version: String?
+    let headers: [HttpField]
+}
+
+private nonisolated func parseRequest(_ header: String) -> RequestLine? {
     let lines = header.components(separatedBy: "\r\n")
     let parts = (lines.first ?? "").components(separatedBy: " ")
     guard parts.count >= 2, httpMethods.contains(parts[0]) else { return nil }
-    return (parts[0], parts[1], headerFields(Array(lines.dropFirst())))
+    let version = parts.count > 2 && parts[2].hasPrefix("HTTP/") ? parts[2] : nil
+    return RequestLine(method: parts[0], target: parts[1], version: version, headers: headerFields(Array(lines.dropFirst())))
 }
 
-private func parseStatus(_ header: String) -> (Int, [HttpField])? {
+private nonisolated func parseStatus(_ header: String) -> (status: Int, text: String?, headers: [HttpField])? {
     let lines = header.components(separatedBy: "\r\n")
     let parts = (lines.first ?? "").components(separatedBy: " ")
     guard parts.count >= 2, parts[0].hasPrefix("HTTP/"), let status = Int(parts[1]) else { return nil }
-    return (status, headerFields(Array(lines.dropFirst())))
+    let text = parts.dropFirst(2).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    return (status, text.isEmpty ? nil : text, headerFields(Array(lines.dropFirst())))
 }
 
-private func headerFields(_ lines: [String]) -> [HttpField] {
+private nonisolated func headerFields(_ lines: [String]) -> [HttpField] {
     lines.compactMap { line in
         guard let colon = line.firstIndex(of: ":"), colon != line.startIndex else { return nil }
         let name = String(line[..<colon]).trimmingCharacters(in: .whitespaces)
@@ -290,7 +406,7 @@ private func headerFields(_ lines: [String]) -> [HttpField] {
     }
 }
 
-private func queryFields(_ target: String) -> [HttpField] {
+nonisolated func queryFields(_ target: String) -> [HttpField] {
     guard let q = target.range(of: "?") else { return [] }
     let query = String(target[target.index(after: q.lowerBound)...])
     if query.isEmpty { return [] }
@@ -302,7 +418,7 @@ private func queryFields(_ target: String) -> [HttpField] {
     }
 }
 
-private func formFields(_ body: [UInt8]) -> [HttpField] {
+nonisolated func formFields(_ body: [UInt8]) -> [HttpField] {
     if body.isEmpty { return [] }
     return String(decoding: body, as: UTF8.self).components(separatedBy: "&").prefix(40).compactMap { pair in
         if pair.isEmpty { return nil }
@@ -312,7 +428,7 @@ private func formFields(_ body: [UInt8]) -> [HttpField] {
     }
 }
 
-private func jsonFields(_ body: [UInt8]) -> [HttpField] {
+nonisolated func jsonFields(_ body: [UInt8]) -> [HttpField] {
     let text = String(decoding: body, as: UTF8.self).trimmingCharacters(in: .whitespaces)
     guard text.hasPrefix("{"), let data = text.data(using: .utf8),
           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
@@ -324,28 +440,36 @@ private func jsonFields(_ body: [UInt8]) -> [HttpField] {
     }
 }
 
-private func isForm(_ headers: [HttpField]) -> Bool {
+nonisolated func isForm(_ headers: [HttpField]) -> Bool {
     headers.contains { $0.name.lowercased() == "content-type" && $0.value.lowercased().contains("application/x-www-form-urlencoded") }
 }
 
-private func isJSONType(_ headers: [HttpField]) -> Bool {
+nonisolated func isJSONType(_ headers: [HttpField]) -> Bool {
     headers.contains { $0.name.lowercased() == "content-type" && $0.value.lowercased().contains("json") }
 }
 
-/// Decompresses the body per Content-Encoding. gzip/deflate via `Compression`;
-/// brotli is not supported on iOS and is left as-is.
-private func inflate(_ body: [UInt8], headers: [HttpField]) -> [UInt8]? {
-    if body.isEmpty { return body }
+/// Undoes Content-Encoding (gzip, deflate, Brotli), keeping at most `cap` bytes; the flag says the result was
+/// cut. What a damaged or cut stream gave before it failed is kept. A body that cannot be decoded at all comes
+/// back as it was.
+nonisolated func decodeBody(_ body: [UInt8], headers: [HttpField], cap: Int) -> ([UInt8], Bool) {
+    if body.isEmpty { return (body, false) }
     let encoding = headers.first { $0.name.lowercased() == "content-encoding" }?.value.lowercased() ?? ""
     let looksGzip = body.count > 2 && body[0] == 0x1f && body[1] == 0x8b
-    if encoding.contains("br") || encoding.contains("brotli") { return body } // unsupported decoder
-    if encoding.contains("gzip") || looksGzip { return gunzip(body) ?? body }
-    if encoding.contains("deflate") { return rawInflate(stripZlibHeader(body)) ?? rawInflate(body) ?? body }
-    return body
+    var decoded: ([UInt8], Bool)?
+    if encoding.contains("br") || encoding.contains("brotli") {
+        decoded = streamDecode(body, algorithm: COMPRESSION_BROTLI, cap: cap)
+    } else if encoding.contains("gzip") || looksGzip {
+        decoded = gzipPayload(body).flatMap { streamDecode($0, algorithm: COMPRESSION_ZLIB, cap: cap) }
+    } else if encoding.contains("deflate") {
+        decoded = streamDecode(stripZlibHeader(body), algorithm: COMPRESSION_ZLIB, cap: cap)
+            ?? streamDecode(body, algorithm: COMPRESSION_ZLIB, cap: cap)
+    }
+    if let decoded { return decoded }
+    return body.count > cap ? (Array(body.prefix(cap)), true) : (body, false)
 }
 
 /// Text worth showing; binary (and undecodable) bodies are skipped.
-private func readableText(_ body: [UInt8]) -> String? {
+nonisolated func readableText(_ body: [UInt8]) -> String? {
     if body.isEmpty { return nil }
     var text = String(decoding: body, as: UTF8.self)
     if text.first == "\u{FEFF}" { text.removeFirst() }
@@ -358,7 +482,7 @@ private func readableText(_ body: [UInt8]) -> String? {
 }
 
 /// Pretty-prints a JSON body; strips the common XSSI guard prefixes first.
-private func prettyJSON(_ body: [UInt8]) -> (String, Bool)? {
+nonisolated func prettyJSON(_ body: [UInt8]) -> (String, Bool)? {
     var text = String(decoding: body, as: UTF8.self)
     if text.first == "\u{FEFF}" { text.removeFirst() }
     text = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -373,13 +497,14 @@ private func prettyJSON(_ body: [UInt8]) -> (String, Bool)? {
     return (String(decoding: pretty, as: UTF8.self), false)
 }
 
-private func urlDecode(_ text: String) -> String {
+private nonisolated func urlDecode(_ text: String) -> String {
     text.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? text
 }
 
 // MARK: Compression helpers
 
-private func gunzip(_ body: [UInt8]) -> [UInt8]? {
+/// The deflate stream inside a gzip member, past its header.
+private nonisolated func gzipPayload(_ body: [UInt8]) -> [UInt8]? {
     guard body.count > 10, body[0] == 0x1f, body[1] == 0x8b, body[2] == 8 else { return nil }
     let flags = body[3]
     var index = 10
@@ -392,31 +517,56 @@ private func gunzip(_ body: [UInt8]) -> [UInt8]? {
     if flags & 0x10 != 0 { while index < body.count && body[index] != 0 { index += 1 }; index += 1 } // FCOMMENT
     if flags & 0x02 != 0 { index += 2 } // FHCRC
     guard index < body.count else { return nil }
-    return rawInflate(Array(body[index...]))
+    return Array(body[index...])
 }
 
-private func stripZlibHeader(_ body: [UInt8]) -> [UInt8] {
+private nonisolated func stripZlibHeader(_ body: [UInt8]) -> [UInt8] {
     if body.count > 2, body[0] & 0x0f == 8, (Int(body[0]) << 8 | Int(body[1])) % 31 == 0 {
         return Array(body[2...])
     }
     return body
 }
 
-/// Raw DEFLATE inflate via the Compression framework, growing the output buffer
-/// until it fits (bodies are capped upstream).
-private func rawInflate(_ data: [UInt8]) -> [UInt8]? {
-    if data.isEmpty { return nil }
-    var capacity = max(data.count * 4, 16 * 1024)
-    for _ in 0..<8 {
-        var dst = [UInt8](repeating: 0, count: capacity)
-        let written = data.withUnsafeBufferPointer { src in
-            dst.withUnsafeMutableBufferPointer { out in
-                compression_decode_buffer(out.baseAddress!, out.count, src.baseAddress!, src.count, nil, COMPRESSION_ZLIB)
+/// Decodes with a `compression_stream`, so the output can be capped and a truncated input still yields what it
+/// holds. Nil when nothing at all came out. (`COMPRESSION_ZLIB` is raw DEFLATE.)
+private nonisolated func streamDecode(_ input: [UInt8], algorithm: compression_algorithm, cap: Int) -> ([UInt8], Bool)? {
+    if input.isEmpty { return nil }
+    let chunk = 64 * 1024
+    let dst = UnsafeMutablePointer<UInt8>.allocate(capacity: chunk)
+    defer { dst.deallocate() }
+    var stream = compression_stream(dst_ptr: dst, dst_size: 0, src_ptr: UnsafePointer(dst), src_size: 0, state: nil)
+    guard compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, algorithm) == COMPRESSION_STATUS_OK else { return nil }
+    defer { compression_stream_destroy(&stream) }
+    var out: [UInt8] = []
+    return input.withUnsafeBufferPointer { src -> ([UInt8], Bool)? in
+        stream.src_ptr = src.baseAddress!
+        stream.src_size = src.count
+        var idle = 0
+        while true {
+            stream.dst_ptr = dst
+            stream.dst_size = chunk
+            let status = compression_stream_process(&stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+            let produced = chunk - stream.dst_size
+            if produced > 0 {
+                let room = cap - out.count
+                if produced > room {
+                    out.append(contentsOf: UnsafeBufferPointer(start: dst, count: room))
+                    return (out, true)
+                }
+                out.append(contentsOf: UnsafeBufferPointer(start: dst, count: produced))
+                idle = 0
+            } else {
+                idle += 1
+            }
+            switch status {
+            case COMPRESSION_STATUS_END:
+                return out.isEmpty ? nil : (out, false)
+            case COMPRESSION_STATUS_OK:
+                // Input used up without an end marker: the body was cut short.
+                if idle > 1 || (produced == 0 && stream.src_size == 0) { return out.isEmpty ? nil : (out, true) }
+            default:
+                return out.isEmpty ? nil : (out, true)
             }
         }
-        if written == 0 { return nil }
-        if written < capacity { return Array(dst[0..<written]) }
-        capacity *= 2
     }
-    return nil
 }

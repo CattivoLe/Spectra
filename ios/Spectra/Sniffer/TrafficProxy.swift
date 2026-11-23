@@ -26,6 +26,20 @@ nonisolated final class TrafficProxy {
     private let onFlows: ([TrafficFlow]) -> Void
     private let decryptTLS: () -> Bool
     private let certificate: () -> LocalCertificateAuthority?
+    private let hostFilter: () -> TlsHostFilter
+    private let throttleSettings: () -> ThrottleSettings
+    let mapRules: () -> [MapRule]
+    /// Tests only: where a destination really is. Nil connects to the packet's own address.
+    nonisolated(unsafe) var redirect: ((String, Int) -> (host: String, port: Int))?
+    /// The buckets for the settings in force; rebuilt when the settings change. Loop only.
+    private(set) var throttle: Throttle?
+    private var throttleFor: ThrottleSettings?
+    /// Links holding data back for the throttle, and whether a tick to resume them is scheduled.
+    private var heldBack: [ObjectIdentifier: TCPLink] = [:]
+    private var tickScheduled = false
+    /// Where finished HTTP bodies are written; nil keeps none. Writes go to their own queue, off the loop.
+    private let bodies: TrafficBodies?
+    private let bodyQueue = DispatchQueue(label: "cattivole.spectra.proxy.bodies", qos: .utility)
 
     private var tcp: [String: TCPLink] = [:]
     private var udp: [String: UDPLink] = [:]
@@ -60,8 +74,16 @@ nonisolated final class TrafficProxy {
         writer: @escaping TunnelWriter,
         decryptTLS: @escaping () -> Bool,
         certificate: @escaping () -> LocalCertificateAuthority?,
+        hostFilter: @escaping () -> TlsHostFilter = { TlsHostFilter() },
+        bodies: TrafficBodies? = nil,
+        throttle: @escaping () -> ThrottleSettings = { ThrottleSettings() },
+        mapRules: @escaping () -> [MapRule] = { [] },
         onFlows: @escaping ([TrafficFlow]) -> Void
     ) {
+        self.hostFilter = hostFilter
+        self.throttleSettings = throttle
+        self.mapRules = mapRules
+        self.bodies = bodies
         self.loop = group.next()
         self.writer = writer
         self.decryptTLS = decryptTLS
@@ -111,7 +133,31 @@ nonisolated final class TrafficProxy {
 
     // MARK: Dispatch
 
+    /// Holds `link` until the next throttle tick, about 10 ms away.
+    func holdBack(_ link: TCPLink) {
+        heldBack[ObjectIdentifier(link)] = link
+        guard !tickScheduled else { return }
+        tickScheduled = true
+        loop.scheduleTask(in: .milliseconds(10)) { [weak self] in
+            guard let self else { return }
+            self.tickScheduled = false
+            self.refreshThrottle()
+            let waiting = Array(self.heldBack.values)
+            self.heldBack.removeAll(keepingCapacity: true)
+            for link in waiting { link.resume() }
+            self.publish(force: false)
+        }
+    }
+
+    private func refreshThrottle() {
+        let settings = throttleSettings()
+        guard settings != throttleFor else { return }
+        throttleFor = settings
+        throttle = settings.enabled ? Throttle(settings) : nil
+    }
+
     private func process(_ raw: [UInt8]) {
+        refreshThrottle()
         guard let ip = IPCodec.parse(raw), IPCodec.unicast(ip.dst) else { return }
         switch ip.protocolNumber {
         case IPCodec.tcp:
@@ -126,7 +172,10 @@ nonisolated final class TrafficProxy {
             }
         case IPCodec.udp:
             guard let header = IPCodec.parseUDP(ip.payload) else { return }
-            if header.dstPort == 443 && shouldDecrypt() {
+            // QUIC hides HTTP from the TLS handshake; dropping it makes the app fall back to TCP, which can be
+            // read. A host the filter leaves encrypted keeps its QUIC; one whose name is not known yet loses it.
+            let name = names[IPCodec.text(ip.dst)]
+            if header.dstPort == 443 && shouldDecrypt() && (name == nil || hostFilter().allows(name)) {
                 udp.removeValue(forKey: key("UDP", ip.src, header.srcPort, ip.dst, header.dstPort))?.close()
                 return
             }
@@ -262,7 +311,26 @@ nonisolated final class TrafficProxy {
     /// Only reported (`Backlog.decryptOff`), since it cannot be told apart from a run of pinned services.
     static let refusalsBeforeNotice = 10
 
-    func mitmAllowed(host: String) -> Bool { !refusedHosts.contains(host) }
+    /// Refused once already, or left encrypted by the host list: straight through.
+    func mitmAllowed(host: String, sni: String?) -> Bool {
+        !refusedHosts.contains(host) && hostFilter().allows(sni?.isEmpty == false ? sni : nil)
+    }
+
+    /// Hands a WebSocket message's payload to the store, within the recording's budget.
+    func keepMessage(flowID: Int64, index: Int, number: Int, body: [UInt8]) -> Bool {
+        guard let bodies, bodies.reserve(body.count) else { return false }
+        let data = Data(body)
+        bodyQueue.async { bodies.writeMessage(flowID: flowID, index: index, number: number, body: data) }
+        return true
+    }
+
+    /// Hands a finished body to the store, within the recording's budget. True when it will be written.
+    func keepBody(flowID: Int64, index: Int, request: Bool, body: [UInt8]) -> Bool {
+        guard let bodies, bodies.reserve(body.count) else { return false }
+        let data = Data(body)
+        bodyQueue.async { bodies.write(flowID: flowID, index: index, request: request, body: data) }
+        return true
+    }
 
     func mitmVerdict(host: String, accepted: Bool) {
         if accepted {

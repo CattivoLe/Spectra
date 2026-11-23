@@ -5,6 +5,10 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import cattivole.spectra.core.MapRule
+import cattivole.spectra.core.ThrottleSettings
+import cattivole.spectra.core.TlsHostFilter
+import cattivole.spectra.core.TrafficBodies
 import cattivole.spectra.core.TrafficFlow
 import cattivole.spectra.core.TrafficSession
 import cattivole.spectra.core.LocalCa
@@ -12,6 +16,7 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /** What the VPN thread last published. The service and the screen share it. */
 internal object CaptureBus {
@@ -26,6 +31,19 @@ internal object CaptureBus {
 
     /** When on, new TLS connections are opened with [LocalCa] and read as HTTP. */
     val decryptTls: AtomicBoolean = AtomicBoolean(false)
+
+    /** Which hosts are decrypted. Read by the proxy for every new TLS connection. */
+    val hostFilter: AtomicReference<TlsHostFilter> = AtomicReference(TlsHostFilter())
+
+    /** How fast connections may go while recording. */
+    val throttle: AtomicReference<ThrottleSettings> = AtomicReference(ThrottleSettings())
+
+    /** Map Local rules, for new decrypted connections. */
+    val mapRules: AtomicReference<List<MapRule>> = AtomicReference(emptyList())
+
+    /** Where the live recording writes HTTP bodies. */
+    @Volatile
+    var bodies: TrafficBodies? = null
 
     /** Apps keep refusing the certificate during this recording. */
     @Volatile
@@ -125,8 +143,24 @@ class TrafficSniffer(context: Context) {
     /** True when new TLS connections are opened with this app's certificate. */
     val decryptTls: Boolean get() = CaptureBus.decryptTls.get()
 
+    /** Which hosts are decrypted, like SSL Proxying in Charles. */
+    val hostFilter: TlsHostFilter get() = CaptureBus.hostFilter.get()
+
+    /** Bodies of the recording on screen. Kept out of backups: they can hold decrypted traffic. */
+    private val liveBodies = TrafficBodies(File(app.noBackupFilesDir, "traffic-live-bodies"))
+
     init {
         CaptureBus.decryptTls.set(prefs.getBoolean(KEY_TLS, false))
+        CaptureBus.hostFilter.set(
+            TlsHostFilter(
+                mode = TlsHostFilter.Mode.of(prefs.getString(KEY_TLS_MODE, null)),
+                only = prefs.getString(KEY_TLS_ONLY, null).orEmpty().lines().filter { it.isNotBlank() },
+                except = prefs.getString(KEY_TLS_EXCEPT, null).orEmpty().lines().filter { it.isNotBlank() },
+            ),
+        )
+        CaptureBus.bodies = liveBodies
+        CaptureBus.throttle.set(ThrottleSettings.fromJson(prefs.getString(KEY_THROTTLE, null)))
+        CaptureBus.mapRules.set(MapRule.listFromJson(prefs.getString(KEY_MAP_LOCAL, null)))
         running = CaptureBus.running
         flows = CaptureBus.flows
         startedAt = CaptureBus.startedAt
@@ -176,11 +210,104 @@ class TrafficSniffer(context: Context) {
         }
     }
 
+    fun setHostFilter(filter: TlsHostFilter) {
+        prefs.edit()
+            .putString(KEY_TLS_MODE, filter.mode.key)
+            .putString(KEY_TLS_ONLY, filter.only.joinToString("\n"))
+            .putString(KEY_TLS_EXCEPT, filter.except.joinToString("\n"))
+            .apply()
+        CaptureBus.hostFilter.set(filter)
+        changed()
+    }
+
+    /** How fast connections may go while recording, like Throttle Settings in Charles. */
+    val throttle: ThrottleSettings get() = CaptureBus.throttle.get()
+
+    fun setThrottle(settings: ThrottleSettings) {
+        prefs.edit().putString(KEY_THROTTLE, settings.toJson()).apply()
+        CaptureBus.throttle.set(settings)
+        changed()
+    }
+
+    /** The request the Repeat screen opens with. */
+    var repeatDraft: cattivole.spectra.core.RepeatRequest? = null
+
+    /** The rule a new Map Local rule screen opens with, made from a recorded response. */
+    var ruleDraft: MapRule? = null
+
+    /** Map Local rules: requests they match are answered by the phone itself. */
+    val mapRules: List<MapRule> get() = CaptureBus.mapRules.get()
+
+    fun setMapRules(rules: List<MapRule>) {
+        prefs.edit().putString(KEY_MAP_LOCAL, MapRule.listToJson(rules)).apply()
+        CaptureBus.mapRules.set(rules)
+        changed()
+    }
+
+    /** Hosts whose apps refused the certificate in the recording on screen, so they can be left encrypted. */
+    fun refusedHosts(flows: List<TrafficFlow> = this.flows): List<String> =
+        flows.filter { it.refused }.mapNotNull { it.host?.takeIf { host -> host.isNotEmpty() } }.distinct().sorted()
+
+    /** A stored body of the live recording, or of the saved session [sessionId]. Reads the disk. */
+    fun body(sessionId: String?, flowId: Long, index: Int, request: Boolean): ByteArray? {
+        val store = if (sessionId == null) liveBodies else TrafficBodies(bodiesDir(sessionId))
+        return store.read(flowId, index, request)
+    }
+
+    /** The payload of a WebSocket message, live or saved. Reads the disk. */
+    fun message(sessionId: String?, flowId: Long, index: Int, number: Int): ByteArray? {
+        val store = if (sessionId == null) liveBodies else TrafficBodies(bodiesDir(sessionId))
+        return store.readMessage(flowId, index, number)
+    }
+
+    private fun bodiesDir(sessionId: String) = File(dir, "$sessionId.bodies")
+
     fun certificateFingerprint(): String? = CaptureBus.authority?.fingerprint()
+
+    /**
+     * Whether the phone has this very certificate among its user-installed authorities. Reads the system store.
+     * Null when the store could not be read. Apps that ignore user certificates refuse it all the same.
+     */
+    fun certificateInstalled(): Boolean? {
+        val wanted = CaptureBus.authority?.certificateDer() ?: return null
+        return runCatching {
+            val store = java.security.KeyStore.getInstance("AndroidCAStore").apply { load(null) }
+            store.aliases().toList().any { alias -> store.getCertificate(alias)?.encoded?.contentEquals(wanted) == true }
+        }.getOrNull()
+    }
+
+    /** Writes the certificate to Downloads for the user to install: Android lets no app install an authority itself. */
+    fun saveCertificate(): Boolean {
+        val der = CaptureBus.authority?.certificateDer() ?: return false
+        val pem = "-----BEGIN CERTIFICATE-----\n" +
+            android.util.Base64.encodeToString(der, android.util.Base64.NO_WRAP).chunked(64).joinToString("\n") +
+            "\n-----END CERTIFICATE-----\n"
+        return runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                val resolver = app.contentResolver
+                val downloads = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                // Saved before by this app: replaced, so there is one file to pick rather than "spectra-ca (2).crt".
+                resolver.delete(downloads, "${android.provider.MediaStore.Downloads.DISPLAY_NAME} = ?", arrayOf(CERTIFICATE_FILE))
+                val uri = resolver.insert(
+                    downloads,
+                    android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.Downloads.DISPLAY_NAME, CERTIFICATE_FILE)
+                        put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/x-x509-ca-cert")
+                    },
+                ) ?: error("no uri")
+                resolver.openOutputStream(uri)!!.use { it.write(pem.toByteArray()) }
+            } else {
+                @Suppress("DEPRECATION")
+                val folder = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                File(folder, CERTIFICATE_FILE).writeText(pem)
+            }
+        }.isSuccess
+    }
 
     fun start() {
         error = null
         currentSessionId = null
+        liveBodies.clear()
         if (CaptureBus.decryptTls.get() && CaptureBus.authority == null) {
             CaptureBus.authority = openAuthority()
         }
@@ -203,8 +330,12 @@ class TrafficSniffer(context: Context) {
         )
         dir.mkdirs()
         File(dir, "${session.id}.json").writeText(session.toJson().toString())
+        liveBodies.copyTo(bodiesDir(id))
         val next = listOf(session) + saved.filterNot { it.id == id }
-        next.drop(KEEP).forEach { File(dir, "${it.id}.json").delete() }
+        next.drop(KEEP).forEach {
+            File(dir, "${it.id}.json").delete()
+            bodiesDir(it.id).deleteRecursively()
+        }
         saved = next.take(KEEP)
         currentSessionId = id
         savedBytes = flows.sumOf { it.sent + it.received }
@@ -217,6 +348,7 @@ class TrafficSniffer(context: Context) {
 
     fun delete(id: String) {
         File(dir, "$id.json").delete()
+        bodiesDir(id).deleteRecursively()
         if (currentSessionId == id) currentSessionId = null
         saved = saved.filterNot { it.id == id }
         changed()
@@ -230,6 +362,7 @@ class TrafficSniffer(context: Context) {
     fun clear() {
         if (running) return
         flows = emptyList()
+        liveBodies.clear()
         unsaved = false
         savedBytes = -1L
         currentSessionId = null
@@ -249,6 +382,12 @@ class TrafficSniffer(context: Context) {
 
     private companion object {
         const val KEEP = 30
+        const val CERTIFICATE_FILE = "spectra-ca.crt"
         const val KEY_TLS = "traffic_decrypt_tls"
+        const val KEY_TLS_MODE = "traffic_tls_mode"
+        const val KEY_TLS_ONLY = "traffic_tls_only"
+        const val KEY_TLS_EXCEPT = "traffic_tls_except"
+        const val KEY_THROTTLE = "traffic_throttle"
+        const val KEY_MAP_LOCAL = "traffic_map_local"
     }
 }

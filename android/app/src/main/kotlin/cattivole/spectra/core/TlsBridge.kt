@@ -10,6 +10,12 @@ import javax.net.ssl.SSLException
 /**
  * Speaks TLS to the phone with our certificate and TLS to the server with the
  * system trust store. Bytes between the two handshakes are the cleartext HTTP.
+ *
+ * The server's handshake runs first: the phone is answered only once the server
+ * has chosen its protocol (ALPN), and is offered exactly that one, so both legs
+ * speak the same HTTP version. HTTP/2 is offered to the server only when the
+ * phone asked for it ([offerHttp2]) and this phone's TLS can pass it on.
+ * [onProtocol] says what was chosen, before any cleartext flows.
  */
 class TlsBridge(
     host: String,
@@ -21,25 +27,49 @@ class TlsBridge(
     private val onServerClosed: () -> Unit,
     private val toClient: (ByteArray) -> Unit,
     private val toServer: (ByteArray) -> Unit,
+    offerHttp2: Boolean = false,
+    private val onProtocol: (String) -> Unit = {},
+    /** Requests these rules match are answered here and never reach the server (HTTP/1.1 only). */
+    mapLocal: MapLocal? = null,
 ) {
     private val clientEngine = clientContext.createSSLEngine().also { engine ->
         engine.useClientMode = false
-        preferHttp1(engine, identify = false)
     }
+    /** Server-side ALPN needs Android 10; without it the phone could not be told "h2", so the server is not offered it. */
+    private val http2 = offerHttp2 && protocols(clientEngine, arrayOf(H2, HTTP1), identify = false)
     private val serverEngine = serverContext.createSSLEngine(host, port).also { engine ->
         engine.useClientMode = true
-        preferHttp1(engine, identify = true)
+        protocols(engine, if (http2) arrayOf(H2, HTTP1) else arrayOf(HTTP1), identify = true)
     }
+
+    /** The protocol both legs speak, once the server's handshake is done. */
+    var protocol: String? = null
+        private set
+
+    /** The server's side failed (its certificate, its TLS), not the phone's. */
+    var serverFailed = false
+        private set
     private val fromClient = PacketBuf()
     private val fromServer = PacketBuf()
-    private val requests = AcceptEncodingStrip()
+    private val requests = AcceptEncodingStrip(host, mapLocal, onLocal = { answer ->
+        toClientApp.add(ByteBuffer.wrap(answer))
+        onServerPlain(answer)
+    })
     private val toServerApp = ArrayDeque<ByteBuffer>()
     private val toClientApp = ArrayDeque<ByteBuffer>()
     private var dead = false
 
     init {
-        clientEngine.beginHandshake()
         serverEngine.beginHandshake()
+    }
+
+    /** The server's handshake is done: answer the phone with the same protocol. */
+    private fun startClient() {
+        val chosen = runCatching { serverEngine.applicationProtocol }.getOrNull()?.takeIf { it.isNotEmpty() } ?: HTTP1
+        protocols(clientEngine, arrayOf(chosen), identify = false)
+        protocol = chosen
+        clientEngine.beginHandshake()
+        onProtocol(chosen)
     }
 
     fun fromClient(data: ByteArray) {
@@ -58,7 +88,7 @@ class TlsBridge(
     fun clientClosed() {
         if (dead) return
         try {
-            requests.finish().forEach { toServerApp.add(ByteBuffer.wrap(it)) }
+            if (protocol == HTTP1) requests.finish().forEach { toServerApp.add(ByteBuffer.wrap(it)) }
             serverEngine.closeOutbound()
             spin()
         } catch (_: SSLException) {
@@ -70,7 +100,7 @@ class TlsBridge(
     fun serverClosed() {
         if (dead) return
         try {
-            clientEngine.closeOutbound()
+            if (protocol != null) clientEngine.closeOutbound()
             spin()
             onServerClosed()
         } catch (_: SSLException) {
@@ -82,12 +112,23 @@ class TlsBridge(
         if (dead) return
         repeat(64) {
             var moved = false
-            moved = tasks(clientEngine) || moved
-            moved = tasks(serverEngine) || moved
-            moved = wrap(serverEngine, toServerApp, toServer) || moved
-            moved = wrap(clientEngine, toClientApp, toClient) || moved
-            moved = unwrap(clientEngine, fromClient, toServerApp, onClientPlain) || moved
-            moved = unwrap(serverEngine, fromServer, toClientApp, onServerPlain) || moved
+            try {
+                moved = tasks(serverEngine) || moved
+                moved = wrap(serverEngine, toServerApp, toServer) || moved
+                moved = unwrap(serverEngine, fromServer, toClientApp, onServerPlain) || moved
+            } catch (error: SSLException) {
+                serverFailed = true
+                throw error
+            }
+            if (protocol == null && serverEngine.handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
+                startClient()
+                moved = true
+            }
+            if (protocol != null) {
+                moved = tasks(clientEngine) || moved
+                moved = wrap(clientEngine, toClientApp, toClient) || moved
+                moved = unwrap(clientEngine, fromClient, toServerApp, onClientPlain) || moved
+            }
             if (!moved) return
         }
     }
@@ -142,7 +183,7 @@ class TlsBridge(
                 app.flip()
                 app.get(plain)
                 onPlain(plain)
-                val forward = if (engine === clientEngine) requests.feed(plain) else listOf(plain)
+                val forward = if (engine === clientEngine && protocol == HTTP1) requests.feed(plain) else listOf(plain)
                 forward.forEach { pending.add(ByteBuffer.wrap(it)) }
             }
             return result.bytesConsumed() > 0 || result.bytesProduced() > 0
@@ -174,17 +215,26 @@ class TlsBridge(
         }
     }
 
-    private companion object {
-        val EMPTY: ByteBuffer = ByteBuffer.allocate(0)
+    companion object {
+        private val EMPTY: ByteBuffer = ByteBuffer.allocate(0)
 
-        fun wantsUnwrap(status: SSLEngineResult.HandshakeStatus): Boolean =
+        private fun wantsUnwrap(status: SSLEngineResult.HandshakeStatus): Boolean =
             status == SSLEngineResult.HandshakeStatus.NEED_UNWRAP || status.name == "NEED_UNWRAP_AGAIN"
 
-        fun preferHttp1(engine: SSLEngine, identify: Boolean) {
-            runCatching {
+        const val H2 = "h2"
+        const val HTTP1 = "http/1.1"
+
+        /** Sets the ALPN list; true when the engine took it (Android 10 and later, any desktop JDK). */
+        private fun protocols(engine: SSLEngine, list: Array<String>, identify: Boolean): Boolean = runCatching {
+            val params = engine.sslParameters
+            if (identify) params.endpointIdentificationAlgorithm = "HTTPS"
+            params.applicationProtocols = list
+            engine.sslParameters = params
+            engine.sslParameters.applicationProtocols.contentEquals(list)
+        }.getOrDefault(false).also { taken ->
+            if (!taken && identify) runCatching {
                 val params = engine.sslParameters
-                params.applicationProtocols = arrayOf("http/1.1")
-                if (identify) params.endpointIdentificationAlgorithm = "HTTPS"
+                params.endpointIdentificationAlgorithm = "HTTPS"
                 engine.sslParameters = params
             }
         }

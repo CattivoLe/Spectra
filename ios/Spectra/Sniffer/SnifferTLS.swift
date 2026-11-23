@@ -9,7 +9,7 @@ import NIOSSL
 extension LocalCertificateAuthority {
     /// A TLS **server** context that presents this CA's leaf for `host` to the
     /// phone. The chain is leaf → CA so a phone that trusts the CA accepts it.
-    func makeServerContext(for host: String) throws -> NIOSSLContext {
+    func makeServerContext(for host: String, protocols: [String] = ["http/1.1"]) throws -> NIOSSLContext {
         let leaf = try NIOSSLCertificate(bytes: leafDER(for: host), format: .der)
         let ca = try NIOSSLCertificate(bytes: certificateDER, format: .der)
         let key = try NIOSSLPrivateKey(bytes: Array(pemString(label: "RSA PRIVATE KEY", der: leafPrivateKeyDER()).utf8), format: .pem)
@@ -17,34 +17,38 @@ extension LocalCertificateAuthority {
             certificateChain: [.certificate(leaf), .certificate(ca)],
             privateKey: .privateKey(key)
         )
-        config.applicationProtocols = ["http/1.1"]
+        config.applicationProtocols = protocols
         return try NIOSSLContext(configuration: config)
     }
 
     /// A TLS **client** context for the real origin leg of a MITM.
     ///
-    /// Verification is **disabled**: swift-nio-ssl on Apple platforms does not
-    /// pick up the system trust store, so `.fullVerification` stalls/fails the
-    /// origin handshake (no trusted roots) — the response never comes back. For
-    /// a local debugging sniffer on the user's own device this is an acceptable
-    /// trade-off (the same as a proxy's "don't verify upstream" option); the
-    /// phone still verifies *our* leaf against the installed CA.
-    static func makeSystemClientContext() throws -> NIOSSLContext {
+    /// Verification is **disabled**. With the default trust roots swift-nio-ssl on
+    /// Apple platforms asks Security.framework, whatever `certificateVerification`
+    /// says, and gets the answer on another thread: the `EmbeddedEventLoop` of
+    /// `TLSBridge` is touched off its thread, nothing drains it afterwards, and the
+    /// origin's handshake never ends. So the roots are an empty list, not the
+    /// default. For a local debugging sniffer on the user's own device not verifying
+    /// the origin is an acceptable trade-off (the same as a proxy's "don't verify
+    /// upstream" option); the phone still verifies *our* leaf against the installed CA.
+    static func makeSystemClientContext(protocols: [String] = ["http/1.1"]) throws -> NIOSSLContext {
         var config = TLSConfiguration.makeClientConfiguration()
         config.certificateVerification = .none
-        config.applicationProtocols = ["http/1.1"]
+        config.trustRoots = .certificates([])
+        config.applicationProtocols = protocols
         return try NIOSSLContext(configuration: config)
     }
 
     /// A TLS **client** context that trusts exactly `caDER`. Production uses the
     /// system trust store (`.default`) toward the real origin; tests pin the
     /// origin's own CA here.
-    static func makeClientContext(trusting caDER: [UInt8], fullVerification: Bool = true) throws -> NIOSSLContext {
+    static func makeClientContext(trusting caDER: [UInt8], fullVerification: Bool = true,
+                                  protocols: [String] = ["http/1.1"]) throws -> NIOSSLContext {
         let ca = try NIOSSLCertificate(bytes: caDER, format: .der)
         var config = TLSConfiguration.makeClientConfiguration()
         config.trustRoots = .certificates([ca])
         config.certificateVerification = fullVerification ? .fullVerification : .noHostnameVerification
-        config.applicationProtocols = ["http/1.1"]
+        config.applicationProtocols = protocols
         return try NIOSSLContext(configuration: config)
     }
 }

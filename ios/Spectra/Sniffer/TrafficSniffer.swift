@@ -12,7 +12,7 @@ import Observation
 /// shared across the two processes lives in the group container, never in memory.
 @MainActor @Observable
 final class TrafficSniffer {
-    static let appGroup = "group.cattivole.Spectra"
+    nonisolated static let appGroup = "group.cattivole.Spectra"
     static let tunnelBundleID = "cattivole.Spectra.SpectraTunnel"
 
     private(set) var running = false
@@ -39,8 +39,23 @@ final class TrafficSniffer {
     private(set) var startedAt: Int64 = 0
     private(set) var error: String?
     private(set) var caFingerprint: String?
+    /// Whether the phone trusts the certificate, asked of the system itself; nil until checked.
+    private(set) var caTrusted: Bool?
     var decryptTLS: Bool {
         didSet { defaults?.set(decryptTLS, forKey: Self.tlsKey) }
+    }
+    /// Which hosts are decrypted, like SSL Proxying in Charles. The tunnel reads it from the App Group within
+    /// a couple of seconds; it applies to new connections.
+    var hostFilter: TlsHostFilter {
+        didSet { hostFilter.save(defaults) }
+    }
+    /// How fast connections may go while recording, like Throttle Settings in Charles.
+    var throttle: ThrottleSettings {
+        didSet { throttle.save(defaults) }
+    }
+    /// Map Local rules: requests they match are answered by the phone itself.
+    var mapRules: [MapRule] {
+        didSet { MapRule.save(mapRules, defaults) }
     }
 
     private var manager: NETunnelProviderManager?
@@ -56,6 +71,9 @@ final class TrafficSniffer {
 
     init() {
         decryptTLS = UserDefaults(suiteName: TrafficSniffer.appGroup)?.bool(forKey: Self.tlsKey) ?? false
+        hostFilter = TlsHostFilter.load(UserDefaults(suiteName: TrafficSniffer.appGroup))
+        throttle = ThrottleSettings.load(UserDefaults(suiteName: TrafficSniffer.appGroup))
+        mapRules = MapRule.load(UserDefaults(suiteName: TrafficSniffer.appGroup))
         loadSaved()
         refreshCA()
         // The tunnel outlives the app: after a relaunch, pick up one that is still recording, so it can be
@@ -141,6 +159,7 @@ final class TrafficSniffer {
         flows = []
         currentSessionID = nil
         savedMark = nil
+        liveBodies()?.clear()
         if let url = containerURL()?.appendingPathComponent("live.json") {
             try? FileManager.default.removeItem(at: url)
         }
@@ -173,9 +192,11 @@ final class TrafficSniffer {
     }
 
     private func readLiveSnapshot() {
-        if defaults?.string(forKey: Self.tlsNoticeKey) != nil {
+        if let notice = defaults?.string(forKey: Self.tlsNoticeKey) {
             defaults?.removeObject(forKey: Self.tlsNoticeKey)
-            error = String(localized: "Apps keep refusing Spectra's certificate, and none has accepted it yet: it is probably not trusted. Connections that refused go through unread.")
+            error = notice == "noca"
+                ? String(localized: "Spectra's certificate could not be opened, so nothing is decrypted. Unlock the phone and start the recording again.")
+                : String(localized: "Apps keep refusing Spectra's certificate, and none has accepted it yet: it is probably not trusted. Connections that refused go through unread.")
         }
         guard let url = containerURL()?.appendingPathComponent("live.json"),
               let data = try? Data(contentsOf: url),
@@ -203,11 +224,13 @@ final class TrafficSniffer {
             self.error = error.localizedDescription
             return false
         }
+        liveBodies()?.copy(to: bodiesDir(dir, id))
         let all = [session] + saved.filter { $0.id != id }
         saved = Array(all.prefix(Self.keepSessions))
         // Whatever no longer fits goes from disk too (the old code computed this after trimming, so never did).
         for old in all.dropFirst(Self.keepSessions) {
             try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(old.id).json"))
+            try? FileManager.default.removeItem(at: bodiesDir(dir, old.id))
         }
         currentSessionID = id
         savedMark = SaveMark(flows)
@@ -217,6 +240,7 @@ final class TrafficSniffer {
     func delete(_ session: TrafficSession) {
         if let dir = sessionsDir() {
             try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(session.id).json"))
+            try? FileManager.default.removeItem(at: bodiesDir(dir, session.id))
         }
         saved.removeAll { $0.id == session.id }
         if session.id == currentSessionID {
@@ -235,11 +259,61 @@ final class TrafficSniffer {
             .prefix(Self.keepSessions).map { $0 }
     }
 
+    // MARK: Bodies
+
+    /// A stored body of the live recording (`sessionID` nil) or of a saved session. Reads the disk.
+    nonisolated func body(sessionID: String?, flowID: Int64, index: Int, request: Bool) -> Data? {
+        guard let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) else { return nil }
+        let dir = sessionID.map { base.appendingPathComponent("traffic/\($0).bodies", isDirectory: true) }
+            ?? base.appendingPathComponent(PacketTunnelBodies.folder, isDirectory: true)
+        return TrafficBodies(dir: dir).read(flowID: flowID, index: index, request: request)
+    }
+
+    /// The payload of a WebSocket message, live or saved. Reads the disk.
+    nonisolated func message(sessionID: String?, flowID: Int64, index: Int, number: Int) -> Data? {
+        guard let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) else { return nil }
+        let dir = sessionID.map { base.appendingPathComponent("traffic/\($0).bodies", isDirectory: true) }
+            ?? base.appendingPathComponent(PacketTunnelBodies.folder, isDirectory: true)
+        return TrafficBodies(dir: dir).readMessage(flowID: flowID, index: index, number: number)
+    }
+
+    /// Hosts whose apps refused the certificate in `flows`, so they can be left encrypted.
+    static func refusedHosts(_ flows: [TrafficFlow]) -> [String] {
+        Array(Set(flows.filter(\.refused).compactMap { $0.host?.isEmpty == false ? $0.host : nil })).sorted()
+    }
+
+    private func liveBodies() -> TrafficBodies? {
+        containerURL().map { TrafficBodies(dir: $0.appendingPathComponent(PacketTunnelBodies.folder, isDirectory: true)) }
+    }
+
+    private func bodiesDir(_ sessions: URL, _ id: String) -> URL {
+        sessions.appendingPathComponent("\(id).bodies", isDirectory: true)
+    }
+
     // MARK: CA (for the TLS-decrypt install flow)
 
     private func refreshCA() {
         guard let dir = caDir() else { return }
         caFingerprint = (try? LocalCertificateAuthority.open(dir, guard: LocalCertificateAuthority.deviceGuard(appGroup: Self.appGroup)))?.fingerprint()
+    }
+
+    /// Asks the system whether it trusts a leaf of this CA for TLS, which it does only once the certificate is
+    /// installed and fully trusted. The answer an app's connection would get, without guessing from refusals.
+    func checkTrust() async {
+        guard let dir = caDir(),
+              let ca = try? LocalCertificateAuthority.open(dir, guard: LocalCertificateAuthority.deviceGuard(appGroup: Self.appGroup)) else {
+            caTrusted = nil
+            return
+        }
+        let host = "trust-check.spectra.app"
+        let leaf = Data(ca.leafDER(for: host)), root = Data(ca.certificateDER)
+        caTrusted = await Task.detached {
+            guard let leaf = SecCertificateCreateWithData(nil, leaf as CFData),
+                  let root = SecCertificateCreateWithData(nil, root as CFData) else { return false }
+            var trust: SecTrust?
+            SecTrustCreateWithCertificates([leaf, root] as CFArray, SecPolicyCreateSSL(true, host as CFString), &trust)
+            return trust.map { SecTrustEvaluateWithError($0, nil) } ?? false
+        }.value
     }
 
     /// The CA certificate in DER, to export for the user to install + trust.

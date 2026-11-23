@@ -163,10 +163,28 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
             else "traffic/saved/${Uri.encode(session)}/flow/$id/e/$exchange",
         )
 
-    fun trafficJson(id: Long, exchange: Int, session: String? = null) =
+    fun trafficBody(id: Long, exchange: Int, session: String? = null, request: Boolean) {
+        val side = if (request) "req" else "res"
         nav.navigate(
-            if (session == null) "traffic/flow/$id/e/$exchange/json"
-            else "traffic/saved/${Uri.encode(session)}/flow/$id/e/$exchange/json",
+            if (session == null) "traffic/flow/$id/e/$exchange/body/$side"
+            else "traffic/saved/${Uri.encode(session)}/flow/$id/e/$exchange/body/$side",
+        )
+    }
+
+    fun trafficHosts() = nav.navigate("traffic/hosts")
+
+    fun trafficRepeat() = nav.navigate("traffic/repeat")
+
+    fun trafficThrottle() = nav.navigate("traffic/throttle")
+
+    fun trafficMapLocal() = nav.navigate("traffic/map")
+
+    fun trafficMapRule(id: String?) = nav.navigate(if (id == null) "traffic/map/new" else "traffic/map/rule/${Uri.encode(id)}")
+
+    fun trafficMessage(id: Long, exchange: Int, number: Int, session: String? = null) =
+        nav.navigate(
+            if (session == null) "traffic/flow/$id/e/$exchange/ws/$number"
+            else "traffic/saved/${Uri.encode(session)}/flow/$id/e/$exchange/ws/$number",
         )
 
     fun savedConnection(entry: String, checkedAt: Long) =
@@ -334,20 +352,46 @@ fun SpectraApp(model: SpectraModel) {
                     composable("traffic") { SnifferScreen(model, navigator, sessionId = null) }
                     composable("traffic/sessions") { SavedTrafficScreen(model, navigator) }
                     composable("traffic/saved/{id}") { SnifferScreen(model, navigator, sessionId = it.text("id")) }
-                    composable("traffic/flow/{id}/e/{exchange}/json") {
-                        TrafficJsonScreen(
+                    composable("traffic/hosts") { TrafficHostsScreen(model, navigator) }
+                    composable("traffic/repeat") { TrafficRepeatScreen(model, navigator) }
+                    composable("traffic/throttle") { TrafficThrottleScreen(model, navigator) }
+                    composable("traffic/map") { TrafficMapLocalScreen(model, navigator) }
+                    composable("traffic/map/new") { TrafficMapRuleScreen(model, navigator, ruleId = null) }
+                    composable("traffic/map/rule/{id}") { TrafficMapRuleScreen(model, navigator, ruleId = it.text("id")) }
+                    composable("traffic/flow/{id}/e/{exchange}/ws/{number}") {
+                        TrafficMessageScreen(
+                            model, navigator,
+                            it.arguments?.getString("id")?.toLongOrNull() ?: -1L,
+                            it.arguments?.getString("exchange")?.toIntOrNull() ?: 0,
+                            it.arguments?.getString("number")?.toIntOrNull() ?: 0,
+                            sessionId = null,
+                        )
+                    }
+                    composable("traffic/saved/{id}/flow/{flow}/e/{exchange}/ws/{number}") {
+                        TrafficMessageScreen(
+                            model, navigator,
+                            it.arguments?.getString("flow")?.toLongOrNull() ?: -1L,
+                            it.arguments?.getString("exchange")?.toIntOrNull() ?: 0,
+                            it.arguments?.getString("number")?.toIntOrNull() ?: 0,
+                            sessionId = it.text("id"),
+                        )
+                    }
+                    composable("traffic/flow/{id}/e/{exchange}/body/{side}") {
+                        TrafficBodyScreen(
                             model, navigator,
                             it.arguments?.getString("id")?.toLongOrNull() ?: -1L,
                             it.arguments?.getString("exchange")?.toIntOrNull() ?: 0,
                             sessionId = null,
+                            request = it.arguments?.getString("side") == "req",
                         )
                     }
-                    composable("traffic/saved/{id}/flow/{flow}/e/{exchange}/json") {
-                        TrafficJsonScreen(
+                    composable("traffic/saved/{id}/flow/{flow}/e/{exchange}/body/{side}") {
+                        TrafficBodyScreen(
                             model, navigator,
                             it.arguments?.getString("flow")?.toLongOrNull() ?: -1L,
                             it.arguments?.getString("exchange")?.toIntOrNull() ?: 0,
                             sessionId = it.text("id"),
+                            request = it.arguments?.getString("side") == "req",
                         )
                     }
                     composable("traffic/flow/{id}/e/{exchange}") {

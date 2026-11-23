@@ -2,11 +2,20 @@ package cattivole.spectra.platform
 
 import android.net.Network
 import android.net.VpnService
+import cattivole.spectra.core.BodySink
+import cattivole.spectra.core.Http2Assembler
 import cattivole.spectra.core.HttpAssembler
+import cattivole.spectra.core.HttpStream
 import cattivole.spectra.core.HttpExchange
 import cattivole.spectra.core.IpCodec
 import cattivole.spectra.core.LocalCa
+import cattivole.spectra.core.MapLocal
+import cattivole.spectra.core.MapRule
+import cattivole.spectra.core.Throttle
+import cattivole.spectra.core.ThrottleSettings
 import cattivole.spectra.core.TlsBridge
+import cattivole.spectra.core.TlsHostFilter
+import cattivole.spectra.core.TrafficBodies
 import cattivole.spectra.core.TrafficFlow
 import cattivole.spectra.core.TrafficHints
 import java.io.FileInputStream
@@ -52,6 +61,17 @@ class TrafficProxy(
     private val onGiveUp: (StopReason) -> Unit = {},
     /** Apps keep refusing the certificate and none has accepted it: it is probably not trusted. */
     private val onRefusedCertificate: () -> Unit = {},
+    /** Where finished HTTP bodies are written. Null keeps none. */
+    private val bodies: TrafficBodies? = null,
+    /** Which hosts are decrypted while [decryptTls] is on. */
+    private val hostFilter: java.util.concurrent.atomic.AtomicReference<TlsHostFilter> =
+        java.util.concurrent.atomic.AtomicReference(TlsHostFilter()),
+    /** How fast connections may go; read again on every turn of the loop. */
+    private val throttleSettings: java.util.concurrent.atomic.AtomicReference<ThrottleSettings> =
+        java.util.concurrent.atomic.AtomicReference(ThrottleSettings()),
+    /** Map Local rules, read for every new decrypted connection. */
+    private val mapRules: java.util.concurrent.atomic.AtomicReference<List<MapRule>> =
+        java.util.concurrent.atomic.AtomicReference(emptyList()),
 ) {
     enum class StopReason { STALLED, OVERLOADED }
 
@@ -80,6 +100,42 @@ class TrafficProxy(
     private var refusals = 0
     private var acceptances = 0
     private var refusalNoticeSent = false
+
+    /** The buckets for the settings in force; rebuilt when the settings change. */
+    private var throttle: Throttle? = null
+    private var throttleFor: ThrottleSettings? = null
+    /** Links holding data back for the throttle; the loop turns quickly while there are any. */
+    private val throttled = LinkedHashSet<TcpLink>()
+
+    private fun refreshThrottle() {
+        val settings = throttleSettings.get()
+        if (settings === throttleFor) return
+        throttleFor = settings
+        throttle = if (settings.enabled) Throttle(settings) else null
+    }
+
+    /** Writes bodies off the loop: a slow disk must not hold up packets. */
+    private val bodyWriter = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "spectra-bodies").apply { isDaemon = true } }
+
+    private fun keepBody(flowId: Long, index: Int, request: Boolean, body: ByteArray): Boolean {
+        val store = bodies ?: return false
+        if (!store.reserve(body.size)) return false
+        bodyWriter.execute { store.write(flowId, index, request, body) }
+        return true
+    }
+
+    private fun keepMessage(flowId: Long, index: Int, number: Int, body: ByteArray): Boolean {
+        val store = bodies ?: return false
+        if (!store.reserve(body.size)) return false
+        bodyWriter.execute { store.writeMessage(flowId, index, number, body) }
+        return true
+    }
+
+    /** Where one connection's bodies and WebSocket messages go. */
+    private fun sinkFor(flowId: Long) = object : BodySink {
+        override fun keep(index: Int, request: Boolean, body: ByteArray) = keepBody(flowId, index, request, body)
+        override fun keepMessage(index: Int, number: Int, body: ByteArray) = keepMessage(flowId, index, number, body)
+    }
 
     fun start() {
         reader = Thread(this::readTun, "spectra-tun").also { it.start() }
@@ -127,6 +183,7 @@ class TrafficProxy(
         }
         reader?.join(400)
         loop?.join(400)
+        bodyWriter.shutdown()
         try {
             selector.close()
         } catch (_: Exception) {
@@ -158,7 +215,8 @@ class TrafficProxy(
         while (running.get()) {
             try {
                 lastBeat = System.currentTimeMillis()
-                selector.select(200)
+                refreshThrottle()
+                selector.select(if (throttled.isEmpty()) 200 else THROTTLE_TICK)
                 while (true) {
                     val packet = incoming.poll() ?: break
                     try {
@@ -187,6 +245,11 @@ class TrafficProxy(
                             is UdpLink -> link.close()
                         }
                     }
+                }
+                if (throttled.isNotEmpty()) {
+                    val waiting = throttled.toList()
+                    throttled.clear()
+                    waiting.forEach { link -> runCatching { link.resume() }.onFailure { link.fail() } }
                 }
                 val now = System.currentTimeMillis()
                 tcp.values.toList().forEach { it.sweep(now) }
@@ -219,7 +282,9 @@ class TrafficProxy(
             IpCodec.UDP -> {
                 val header = IpCodec.parseUdp(ip.payload) ?: return
                 // QUIC hides HTTP from the TLS handshake. Dropping it makes the app try TCP, which can be read.
-                if (decryptTls.get() && header.dstPort == 443) {
+                // A host the filter leaves encrypted keeps its QUIC; one whose name is not known yet loses it.
+                val name = names[IpCodec.text(ip.dst)]
+                if (decryptTls.get() && header.dstPort == 443 && (name == null || hostFilter.get().allows(name))) {
                     udp.remove(key("UDP", ip.src, header.srcPort, ip.dst, header.dstPort))?.close()
                     return
                 }
@@ -441,9 +506,12 @@ class TrafficProxy(
         private val unacked = ArrayDeque<Chunk>()
         private var unackedBytes = 0
         private val inbound = ArrayDeque<ByteArray>()
+        /** When each [inbound] chunk may go to the phone: now, or later by the throttle's delay. */
+        private val inboundReady = ArrayDeque<Long>()
         private var inboundBytes = 0
         private val prelude = java.io.ByteArrayOutputStream()
-        private val http = HttpAssembler()
+        /** HTTP/1.1 until a decrypted connection turns out to speak HTTP/2. */
+        private var http: HttpStream = HttpAssembler(sink = sinkFor(flow.id))
         private var held: ByteArray? = null
         private var mitm: TlsBridge? = null
         private var inspect = Inspect.UNKNOWN
@@ -483,12 +551,29 @@ class TrafficProxy(
 
         fun flushRemote() {
             if (!channel.isConnected) return
+            val now = System.currentTimeMillis()
+            val limit = throttle
             try {
                 while (outbound.isNotEmpty()) {
                     val buffer = outbound.first()
+                    val allowed = limit?.up?.take(buffer.remaining(), now) ?: buffer.remaining()
+                    if (allowed <= 0) {
+                        throttled += this
+                        interest(write = false)
+                        return
+                    }
+                    val end = buffer.limit()
+                    buffer.limit(buffer.position() + allowed)
                     channel.write(buffer)
-                    if (buffer.hasRemaining()) {
+                    val socketFull = buffer.hasRemaining()
+                    buffer.limit(end)
+                    if (socketFull) {
                         interest(write = true)
+                        return
+                    }
+                    if (buffer.hasRemaining()) {
+                        throttled += this
+                        interest(write = false)
                         return
                     }
                     outbound.removeFirst()
@@ -537,8 +622,7 @@ class TrafficProxy(
                 return
             }
             noteServer(bytes)
-            inbound.add(bytes)
-            inboundBytes += size
+            queueInbound(bytes)
             flow.received += size
             flow.lastAt = System.currentTimeMillis()
             dirty = true
@@ -655,7 +739,7 @@ class TrafficProxy(
                 try {
                     bridge.fromClient(data)
                 } catch (_: Exception) {
-                    if (flow.exchanges.isEmpty() && !clientTrusted) refused()
+                    if (flow.exchanges.isEmpty() && !clientTrusted && !bridge.serverFailed) refused()
                     fail()
                 }
                 return true
@@ -670,9 +754,10 @@ class TrafficProxy(
                 return true
             }
             val sni = TrafficHints.tlsServerName(buf)
-            if (sni != null && sni in refusedHosts) {
-                // This host's app refused our certificate before: read nothing, but let it work.
-                if (sni.isNotEmpty()) flow.host = sni
+            if ((sni != null && sni in refusedHosts) || !hostFilter.get().allows(sni?.takeIf { it.isNotEmpty() })) {
+                // This host's app refused our certificate before, or the user left it encrypted: read nothing,
+                // but let it work.
+                if (!sni.isNullOrEmpty()) flow.host = sni
                 flow.tls = true
                 inspect = Inspect.OTHER
                 passthroughHeld()
@@ -703,6 +788,9 @@ class TrafficProxy(
             inspect = Inspect.TLS
             val ca = certificate() ?: return false
             val host = sni?.takeIf { it.isNotEmpty() } ?: IpCodec.text(dst)
+            // A host with Map Local rules stays on HTTP/1.1, where single requests can be answered here.
+            val mapLocal = MapLocal(mapRules.get())
+            val offerHttp2 = TrafficHints.tlsAlpn(hello).contains(TlsBridge.H2) && !mapLocal.coversHost(sni)
             val bridge = try {
                 TlsBridge(
                     host = host,
@@ -727,6 +815,9 @@ class TrafficProxy(
                     },
                     toClient = ::toClient,
                     toServer = ::toServer,
+                    offerHttp2 = offerHttp2,
+                    mapLocal = mapLocal.takeUnless { it.isEmpty },
+                    onProtocol = { chosen -> if (chosen == TlsBridge.H2) http = Http2Assembler(sink = sinkFor(flow.id)) },
                 )
             } catch (_: Exception) {
                 return false
@@ -737,7 +828,7 @@ class TrafficProxy(
                 bridge.fromClient(hello)
             } catch (_: Exception) {
                 mitm = null
-                refused()
+                if (!bridge.serverFailed) refused()
                 fail()
             }
             return true
@@ -752,8 +843,20 @@ class TrafficProxy(
         }
 
         private fun toClient(bytes: ByteArray) {
+            queueInbound(bytes)
+            pumpToClient()
+        }
+
+        private fun queueInbound(bytes: ByteArray) {
             inbound.add(bytes)
+            inboundReady.add(System.currentTimeMillis() + (throttle?.latencyMs ?: 0))
             inboundBytes += bytes.size
+        }
+
+        /** The throttle let more through: carry on in both directions. */
+        fun resume() {
+            if (flow.closed) return
+            flushRemote()
             pumpToClient()
         }
 
@@ -765,12 +868,27 @@ class TrafficProxy(
         private fun pumpToClient() {
             if (flow.closed) return
             var room = clientWindow - unackedBytes
+            val now = System.currentTimeMillis()
+            val limit = throttle
             while (room > 0 && inbound.isNotEmpty()) {
+                if (inboundReady.first() > now) {
+                    throttled += this
+                    break
+                }
                 val chunk = inbound.first()
-                val size = min(chunk.size, min(room, mss()))
+                val wanted = min(chunk.size, min(room, mss()))
+                val size = limit?.down?.take(wanted, now) ?: wanted
+                if (size <= 0) {
+                    throttled += this
+                    break
+                }
                 val piece = if (size == chunk.size) chunk else chunk.copyOf(size)
                 inbound.removeFirst()
-                if (size != chunk.size) inbound.addFirst(chunk.copyOfRange(size, chunk.size))
+                val ready = inboundReady.removeFirst()
+                if (size != chunk.size) {
+                    inbound.addFirst(chunk.copyOfRange(size, chunk.size))
+                    inboundReady.addFirst(ready)
+                }
                 inboundBytes -= size
                 val seq = ourSeq
                 emit(seq, IpCodec.ACK or IpCodec.PSH, piece, advance = true)
@@ -1022,6 +1140,8 @@ class TrafficProxy(
         private const val UDP_IDLE = 60_000L
         private const val DNS_IDLE = 10_000L
         private const val WATCH_EVERY = 2_000L
+        /** How often the loop turns while the throttle holds data back. */
+        private const val THROTTLE_TICK = 10L
         private const val STALL_AFTER = 10_000L
         private const val OVERLOAD_AFTER = 10_000L
         private const val REFUSALS_BEFORE_NOTICE = 10

@@ -193,6 +193,42 @@ object TrafficHints {
         return null
     }
 
+    /** The protocols a TLS ClientHello offers (ALPN), in its order. Empty when it offers none. */
+    fun tlsAlpn(data: ByteArray): List<String> {
+        if (data.size < 5 || (data[0].toInt() and 0xFF) != 22) return emptyList()
+        var index = 9
+        if (index + 34 > data.size) return emptyList()
+        index += 34
+        index += 1 + (data[index].toInt() and 0xFF)
+        if (index + 2 > data.size) return emptyList()
+        index += 2 + u16(data, index)
+        if (index + 1 > data.size) return emptyList()
+        index += 1 + (data[index].toInt() and 0xFF)
+        if (index + 2 > data.size) return emptyList()
+        val end = minOf(index + 2 + u16(data, index), data.size)
+        index += 2
+        while (index + 4 <= end) {
+            val type = u16(data, index)
+            val length = u16(data, index + 2)
+            index += 4
+            if (index + length > end) return emptyList()
+            if (type == 16 && length >= 2) {
+                val found = mutableListOf<String>()
+                var at = index + 2
+                val stop = minOf(index + 2 + u16(data, index), index + length)
+                while (at < stop) {
+                    val size = data[at].toInt() and 0xFF
+                    if (at + 1 + size > stop) break
+                    found += String(data, at + 1, size, Charsets.US_ASCII)
+                    at += 1 + size
+                }
+                return found
+            }
+            index += length
+        }
+        return emptyList()
+    }
+
     /** True once a TLS record header is present and its body has arrived. */
     fun tlsRecordComplete(data: ByteArray): Boolean {
         if (data.size < 5 || (data[0].toInt() and 0xFF) != 22) return false

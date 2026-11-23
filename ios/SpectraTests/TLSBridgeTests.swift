@@ -113,6 +113,50 @@ struct TLSBridgeTests {
         #expect(String(decoding: originReceived, as: UTF8.self).contains("GET /search?q=1"))
     }
 
+    /// The phone is answered with the protocol the origin chose, so both legs speak the same HTTP.
+    @Test(.timeLimit(.minutes(1)))
+    func phoneGetsTheProtocolTheOriginChose() throws {
+        #expect(try negotiate(phone: ["h2", "http/1.1"], origin: ["h2", "http/1.1"], offer: ["h2", "http/1.1"]) == ["h2", "h2", "h2"])
+        #expect(try negotiate(phone: ["h2", "http/1.1"], origin: ["http/1.1"], offer: ["h2", "http/1.1"]) == ["http/1.1", "http/1.1", "http/1.1"])
+        #expect(try negotiate(phone: ["h2", "http/1.1"], origin: ["h2", "http/1.1"], offer: ["http/1.1"]) == ["http/1.1", "http/1.1", "http/1.1"])
+        #expect(PlainTap.negotiated("handshakeCompleted(negotiatedProtocol: Optional(\"h2\"))") == "h2")
+        #expect(PlainTap.negotiated("handshakeCompleted(negotiatedProtocol: nil)") == nil)
+    }
+
+    /// Returns what the phone, the bridge and the origin ended up with.
+    private func negotiate(phone phoneProtocols: [String], origin originProtocols: [String], offer: [String]) throws -> [String?] {
+        let mitmDir = tempDir(); defer { try? FileManager.default.removeItem(at: mitmDir) }
+        let originDir = tempDir(); defer { try? FileManager.default.removeItem(at: originDir) }
+        let mitmCA = try LocalCertificateAuthority.open(mitmDir, guard: PlainKeyGuard())
+        let originCA = try LocalCertificateAuthority.open(originDir, guard: PlainKeyGuard())
+        var phoneOut: [[UInt8]] = [], originOut: [[UInt8]] = [], toPhone: [[UInt8]] = [], toOrigin: [[UInt8]] = []
+        var seen: [UInt8] = []
+        var chosen: String?
+        let bridge = try TLSBridge(
+            host: "example.com",
+            phoneContext: { try mitmCA.makeServerContext(for: "example.com", protocols: [$0]) },
+            clientContext: try LocalCertificateAuthority.makeClientContext(trusting: originCA.certificateDER, protocols: offer),
+            onClientPlain: { seen += $0 }, onServerPlain: { _ in }, onServerClosed: {},
+            toClient: { toPhone.append($0) }, toServer: { toOrigin.append($0) },
+            onProtocol: { chosen = $0 }
+        )
+        let phone = try TLSEndpoint(clientTrusting: mitmCA.certificateDER, serverHostname: "example.com", protocols: phoneProtocols)
+        phone.onOutbound = { phoneOut.append($0) }
+        let origin = try TLSEndpoint(server: try originCA.makeServerContext(for: "example.com", protocols: originProtocols))
+        origin.onOutbound = { originOut.append($0) }
+        phone.send(Http2Assembler.preface)
+        for _ in 0..<200 {
+            if phoneOut.isEmpty && toOrigin.isEmpty && originOut.isEmpty && toPhone.isEmpty { break }
+            while !phoneOut.isEmpty { bridge.fromClient(phoneOut.removeFirst()) }
+            while !toOrigin.isEmpty { origin.feed(toOrigin.removeFirst()) }
+            while !originOut.isEmpty { bridge.fromServer(originOut.removeFirst()) }
+            while !toPhone.isEmpty { phone.feed(toPhone.removeFirst()) }
+        }
+        #expect(seen == Http2Assembler.preface)
+        #expect(bridge.protocolName == chosen)
+        return [phone.negotiated, chosen, origin.negotiated]
+    }
+
     private func tempDir() -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("spectra-bridge-\(UUID().uuidString)")
     }
@@ -135,10 +179,13 @@ private nonisolated final class TLSEndpoint {
         tap.sink = { [weak self] in self?.onData($0) }
     }
 
-    init(clientTrusting caDER: [UInt8], serverHostname: String) throws {
+    /// The ALPN protocol agreed in the handshake.
+    var negotiated: String? { tap.negotiated }
+
+    init(clientTrusting caDER: [UInt8], serverHostname: String, protocols: [String] = ["http/1.1"]) throws {
         channel = EmbeddedChannel(loop: loop)
         tap = Tap()
-        let context = try LocalCertificateAuthority.makeClientContext(trusting: caDER)
+        let context = try LocalCertificateAuthority.makeClientContext(trusting: caDER, protocols: protocols)
         try channel.pipeline.syncOperations.addHandler(try NIOSSLClientHandler(context: context, serverHostname: serverHostname))
         try channel.pipeline.syncOperations.addHandler(tap)
         channel.connect(to: try SocketAddress(ipAddress: "10.111.222.4", port: 443), promise: nil)
@@ -178,6 +225,12 @@ private nonisolated final class TLSEndpoint {
     private final class Tap: ChannelInboundHandler {
         typealias InboundIn = ByteBuffer
         var sink: ([UInt8]) -> Void = { _ in }
+        var negotiated: String?
+        func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+            let text = String(describing: event)
+            if text.contains("handshakeCompleted") { negotiated = PlainTap.negotiated(text) }
+            context.fireUserInboundEventTriggered(event)
+        }
         func channelRead(context: ChannelHandlerContext, data: NIOAny) {
             var buffer = unwrapInboundIn(data)
             if let bytes = buffer.readBytes(length: buffer.readableBytes), !bytes.isEmpty { sink(bytes) }
