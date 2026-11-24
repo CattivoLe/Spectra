@@ -7,6 +7,7 @@ import cattivole.spectra.core.MLabNdt7
 import cattivole.spectra.core.MLabServer
 import cattivole.spectra.core.SpeedResult
 import cattivole.spectra.core.SpeedServerChoice
+import cattivole.spectra.core.UploadPace
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -265,8 +266,11 @@ class SpeedTester(context: Context, private val route: suspend () -> RouteAnswer
         val workers = (0 until streams).map {
             launch(Dispatchers.IO) {
                 when (backend) {
-                    Backend.Cloudflare -> while (System.nanoTime() < deadline) {
-                        if (download) pull(network, leg) else push(network, leg)
+                    Backend.Cloudflare -> {
+                        val pace = UploadPace()
+                        while (System.nanoTime() < deadline) {
+                            if (download) pull(network, leg) else push(network, leg, pace)
+                        }
                     }
                     is Backend.MLab -> if (download) {
                         MLabSocket.download(network, backend.server.downloadUrl, leg.moved, deadline, leg.sockets)
@@ -297,7 +301,7 @@ class SpeedTester(context: Context, private val route: suspend () -> RouteAnswer
             last = total
             lastAt = now
             // A one-second moving average, as on iOS: uploads land a whole
-            // megabyte at a time and would otherwise saw-tooth the chart.
+            // body at a time and would otherwise saw-tooth the chart.
             val rate = SpeedResult.smoothed(raw)
             samples.add(rate)
             liveBps = rate
@@ -374,29 +378,37 @@ class SpeedTester(context: Context, private val route: suspend () -> RouteAnswer
     }
 
     /**
-     * POSTs one 1 MB body, like the iOS test. The body only counts once the
+     * POSTs one body, like the iOS test. The body only counts once the
      * server has answered, so bytes still sitting in socket buffers do not
-     * inflate the number. A body cut off at the deadline does not count.
+     * inflate the number. A body cut off at the deadline does not count, so
+     * bodies start small and grow with the line ([UploadPace]): on a slow
+     * mobile uplink a whole megabyte per stream was never answered in time,
+     * and nothing was counted at all.
      * The reply is read to the end and the connection is not torn down, so
      * the next body reuses it instead of paying for a new TLS handshake.
      */
-    private fun push(network: Network, leg: Leg) {
+    private fun push(network: Network, leg: Leg, pace: UploadPace) {
         val connection = open(network, "https://$HOST/__up")
         leg.open.add(connection)
         var finished = false
         try {
             connection.requestMethod = "POST"
             connection.doOutput = true
-            connection.setFixedLengthStreamingMode(UPLOAD_CHUNK.size)
+            val size = pace.size
+            connection.setFixedLengthStreamingMode(size)
             connection.setRequestProperty("Content-Type", "application/octet-stream")
-            connection.outputStream.use { it.write(UPLOAD_CHUNK) }
+            val start = System.nanoTime()
+            connection.outputStream.use { it.write(UPLOAD_BODY, 0, size) }
             val status = connection.responseCode
             (if (status in 200..299) connection.inputStream else connection.errorStream)?.use { reply ->
                 val sink = ByteArray(4096)
                 while (reply.read(sink) >= 0) Unit
             }
             finished = true
-            if (status in 200..299 && System.nanoTime() < leg.deadline) leg.moved.addAndGet(UPLOAD_CHUNK.size.toLong())
+            if (status in 200..299) {
+                if (System.nanoTime() < leg.deadline) leg.moved.addAndGet(size.toLong())
+                pace.answered((System.nanoTime() - start) / 1_000_000_000.0)
+            }
             if (status == 429) leg.limited.set(true)
             if (status !in 200..299) Thread.sleep(if (status == 429) 300 else 200)
         } catch (_: Exception) {
@@ -458,8 +470,8 @@ class SpeedTester(context: Context, private val route: suspend () -> RouteAnswer
         /** The smallest download size: still several round trips' worth on a fast line. */
         const val DOWNLOAD_CHUNK_FLOOR = 1_000_000
 
-        /** One upload body; the same size the iOS test sends. */
-        private val UPLOAD_CHUNK = ByteArray(1_000_000)
+        /** Upload bodies are cut from this; how much of it goes is up to [UploadPace]. */
+        private val UPLOAD_BODY = ByteArray(UploadPace.CEILING)
 
         /** How long the end of a phase waits for its streams to let go. */
         const val STOP_GRACE_MS = 3_000L

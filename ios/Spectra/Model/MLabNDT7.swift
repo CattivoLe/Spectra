@@ -90,6 +90,15 @@ nonisolated enum MLab {
     static func download(url: URL, counter: ByteCounter, until deadline: ContinuousClock.Instant, interface: NWInterface.InterfaceType?) async {
         let connection = makeConnection(url, interface: interface)
         defer { connection.cancel() }
+        // A read waits for the network and never looks at cancellation: closing the connection ends it.
+        await withTaskCancellationHandler {
+            await download(connection, counter: counter, until: deadline)
+        } onCancel: {
+            connection.cancel()
+        }
+    }
+
+    private static func download(_ connection: NWConnection, counter: ByteCounter, until deadline: ContinuousClock.Instant) async {
         do {
             try await ready(connection)
             while ContinuousClock.now < deadline, !Task.isCancelled {
@@ -108,6 +117,14 @@ nonisolated enum MLab {
     static func upload(url: URL, counter: ByteCounter, until deadline: ContinuousClock.Instant, interface: NWInterface.InterfaceType?) async {
         let connection = makeConnection(url, interface: interface)
         defer { connection.cancel() }
+        await withTaskCancellationHandler {
+            await upload(connection, counter: counter, until: deadline)
+        } onCancel: {
+            connection.cancel()
+        }
+    }
+
+    private static func upload(_ connection: NWConnection, counter: ByteCounter, until deadline: ContinuousClock.Instant) async {
         do {
             try await ready(connection)
         } catch {
@@ -171,6 +188,10 @@ nonisolated enum MLab {
                 }
             }
             connection.start(queue: .global(qos: .userInitiated))
+            if Task.isCancelled {
+                connection.cancel()
+                once.run { continuation.resume(throwing: CancellationError()) }
+            }
         }
     }
 

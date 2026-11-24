@@ -28,6 +28,7 @@ import cattivole.spectra.core.SpeedResult
 import cattivole.spectra.core.TlsCheck
 import cattivole.spectra.core.TlsInspector
 import cattivole.spectra.core.TlsObservation
+import cattivole.spectra.core.UploadPace
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -255,5 +256,36 @@ class NetworkChecksTest {
         assertEquals("F", SpeedResult.grade(900))
         val result = SpeedResult(0, 1e8, 2e7, 12, 2, 40, 95, emptyList(), emptyList(), "BEG")
         assertEquals("C", result.bufferbloatGrade)
+    }
+
+    @Test
+    fun uploadBodiesGrowOnAFastLineAndShrinkOnASlowOne() {
+        val pace = UploadPace()
+        assertEquals(UploadPace.FLOOR, pace.size)
+        repeat(10) { pace.answered(0.05) }
+        assertEquals(UploadPace.CEILING, pace.size)
+        // A body that takes a moment is the right size.
+        pace.answered(0.8)
+        assertEquals(UploadPace.CEILING, pace.size)
+        repeat(20) { pace.answered(3.0) }
+        assertEquals(UploadPace.FLOOR, pace.size)
+    }
+
+    /** Three streams at 0.3 Mbit/s together: 8 seconds carry 300 KB, less than one of the old 1 MB bodies. */
+    @Test
+    fun aSlowUplinkGetsSomethingAnswered() {
+        val perStream = 300_000.0 / 8 / 3
+        val pace = UploadPace()
+        var clock = 0.0
+        var counted = 0
+        while (true) {
+            val took = 0.08 + pace.size / perStream
+            clock += took
+            if (clock > 8) break
+            counted += pace.size
+            pace.answered(took)
+        }
+        assertTrue(counted * 3 >= 50_000)
+        assertTrue(1_000_000 / perStream > 8)
     }
 }

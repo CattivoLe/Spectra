@@ -18972,6 +18972,16 @@
           }
         }
       }
+    },
+    "Could not be measured": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось измерить"
+          }
+        }
+      }
     }
   },
   "version": "1.1"

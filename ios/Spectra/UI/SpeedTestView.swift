@@ -129,14 +129,15 @@ struct SpeedTestView: View {
         .animation(.default, value: tester.liveBps)
     }
 
+    /// A direction that moved too little to tell says so, instead of leaving its row out.
+    private func speedValue(_ bps: Double?) -> Text {
+        bps.map { Text(rate($0)).monospacedDigit() } ?? Text("Could not be measured")
+    }
+
     private func resultsSection(_ result: SpeedResult) -> some View {
         Section {
-            if let down = result.downBps {
-                LabeledContent("Download") { Text(rate(down)).monospacedDigit() }
-            }
-            if let up = result.upBps {
-                LabeledContent("Upload") { Text(rate(up)).monospacedDigit() }
-            }
+            LabeledContent("Download") { speedValue(result.downBps) }
+            LabeledContent("Upload") { speedValue(result.upBps) }
             if let latency = result.idleLatencyMs {
                 LabeledContent("Latency") { Text(millis(latency)).monospacedDigit() }
             }
