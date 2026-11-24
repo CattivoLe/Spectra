@@ -80,3 +80,54 @@ struct SpeedTesterTests {
         #expect(SpeedProbe.statusCode(Data("garbage".utf8)) == nil)
     }
 }
+
+/// A slow mobile uplink: bodies it can answer in time, and a stalled line that does not outlive the test.
+struct SlowLineTests {
+    @Test func bodiesGrowOnAFastLineAndShrinkOnASlowOne() {
+        var pace = UploadPace()
+        #expect(pace.size == UploadPace.floor)
+        for _ in 0..<10 { pace.answered(in: 0.05) }
+        #expect(pace.size == UploadPace.ceiling)
+        pace.answered(in: 0.8)
+        #expect(pace.size == UploadPace.ceiling, "a body that takes a moment is the right size")
+        for _ in 0..<20 { pace.answered(in: 3) }
+        #expect(pace.size == UploadPace.floor)
+    }
+
+    /// Three streams at 0.3 Mbit/s together: 8 seconds carry 300 KB, less than one of the old 1 MB bodies.
+    @Test func aSlowUplinkGetsSomethingAnswered() {
+        let perStream = 300_000.0 / 8 / 3
+        var pace = UploadPace()
+        var clock = 0.0, counted = 0
+        while true {
+            let took = 0.08 + Double(pace.size) / perStream
+            clock += took
+            if clock > 8 { break }
+            counted += pace.size
+            pace.answered(in: took)
+        }
+        #expect(counted * 3 >= 50_000, "the test needs that much to give a number")
+        #expect(1_000_000 / perStream > 8, "one old body would not have made it")
+    }
+
+    /// 192.0.2.1 is a documentation address: nothing ever answers there.
+    @Test func cancellingEndsAStalledStream() async {
+        let counter = ByteCounter()
+        let deadline = ContinuousClock.now + .seconds(60)
+        for direction in 0..<2 {
+            let stream = Task.detached {
+                if direction == 0 {
+                    await SpeedProbe.upload(host: "192.0.2.1", counter: counter, until: deadline, interface: nil)
+                } else {
+                    await SpeedProbe.download(host: "192.0.2.1", counter: counter, until: deadline, interface: nil)
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+            let start = ContinuousClock.now
+            stream.cancel()
+            await stream.value
+            #expect(ContinuousClock.now - start < .seconds(3))
+        }
+        #expect(counter.total == 0)
+    }
+}

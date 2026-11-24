@@ -5,6 +5,20 @@ Each `## X.Y.Z` section is the text of the GitHub release for tag `vX.Y.Z`
 `versionName`; the sensor firmware keeps its own version, which the release
 notes name.
 
+## Unreleased
+
+Android and iPhone apps. The sensor firmware is unchanged.
+
+Speed test:
+
+- Upload gives a figure on a slow mobile uplink. Every stream used to send a
+  whole megabyte at a time, which counts only once the server has answered; on a
+  slow line none was answered within the eight seconds. Bodies start at 16 KB
+  now and grow with the line.
+- iPhone: a stalled stream no longer keeps the test going past its end, an
+  upload connection that drops is opened again, and a direction that could not
+  be measured says so.
+
 ## 1.2.1 (2026-11-23)
 
 Android and iPhone apps. The sensor firmware is unchanged.

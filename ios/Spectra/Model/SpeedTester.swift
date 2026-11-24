@@ -445,6 +445,23 @@ nonisolated enum SpeedMath {
     }
 }
 
+/// How large the next upload body is. A body has to be answered well within the test to count, and large enough that
+/// the wait for the answer does not eat the speed: it grows while answers come quickly and shrinks when they are late.
+nonisolated struct UploadPace: Equatable, Sendable {
+    static let floor = 16_000
+    static let ceiling = 1_000_000
+
+    private(set) var size = floor
+
+    mutating func answered(in seconds: TimeInterval) {
+        if seconds < 0.4 {
+            size = min(Self.ceiling, size * 2)
+        } else if seconds > 1.2 {
+            size = max(Self.floor, size / 2)
+        }
+    }
+}
+
 /// The raw transfers. Each stream is one TLS connection to the speed host.
 nonisolated enum SpeedProbe {
     /// Time from request to the first byte of the reply on a fresh
@@ -454,16 +471,18 @@ nonisolated enum SpeedProbe {
         defer { connection.cancel() }
         do {
             return try await withTimeout(seconds: 5) {
-                try await ready(connection)
-                let request = Data("GET /__down?bytes=0 HTTP/1.1\r\nHost: \(host)\r\nUser-Agent: Spectra\r\n\r\n".utf8)
-                // The first request on a connection pays for session setup
-                // on both sides; the second is the round trip itself.
-                try await write(connection, request)
-                try await readResponse(connection)
-                let start = ContinuousClock.now
-                try await write(connection, request)
-                try await readResponse(connection)
-                return Int((elapsed(since: start) * 1000).rounded())
+                try await closing(connection) {
+                    try await ready(connection)
+                    let request = Data("GET /__down?bytes=0 HTTP/1.1\r\nHost: \(host)\r\nUser-Agent: Spectra\r\n\r\n".utf8)
+                    // The first request on a connection pays for session setup
+                    // on both sides; the second is the round trip itself.
+                    try await write(connection, request)
+                    try await readResponse(connection)
+                    let start = ContinuousClock.now
+                    try await write(connection, request)
+                    try await readResponse(connection)
+                    return Int((elapsed(since: start) * 1000).rounded())
+                }
             }
         } catch {
             return nil
@@ -476,40 +495,46 @@ nonisolated enum SpeedProbe {
     static func download(host: String, counter: ByteCounter, until deadline: ContinuousClock.Instant, interface: NWInterface.InterfaceType?) async {
         while ContinuousClock.now < deadline, !Task.isCancelled {
             let connection = makeConnection(host: host, interface: interface)
-            do {
-                try await ready(connection)
-                let request = Data("GET /__down?bytes=\(counter.downloadChunk) HTTP/1.1\r\nHost: \(host)\r\nUser-Agent: Spectra\r\nConnection: close\r\n\r\n".utf8)
-                try await write(connection, request)
-                var header = Data()
-                var status: Int?
-                var finished = false
-                while ContinuousClock.now < deadline, !Task.isCancelled {
-                    let piece = try await read(connection)
-                    if let data = piece.data {
-                        if status != nil {
-                            counter.add(data.count)
-                        } else {
-                            header.append(data)
-                            if let range = header.range(of: Data("\r\n\r\n".utf8)) {
-                                status = statusCode(header[..<range.lowerBound])
-                                guard let code = status, (200..<300).contains(code) else { break }
-                                counter.add(header.count - range.upperBound)
-                            }
+            let goOn = await closing(connection) { await downloadOnce(connection, host: host, counter: counter, until: deadline) }
+            if !goOn { return }
+        }
+    }
+
+    /// One download. False when the stream is over.
+    private static func downloadOnce(_ connection: NWConnection, host: String, counter: ByteCounter, until deadline: ContinuousClock.Instant) async -> Bool {
+        do {
+            try await ready(connection)
+            let request = Data("GET /__down?bytes=\(counter.downloadChunk) HTTP/1.1\r\nHost: \(host)\r\nUser-Agent: Spectra\r\nConnection: close\r\n\r\n".utf8)
+            try await write(connection, request)
+            var header = Data()
+            var status: Int?
+            var finished = false
+            while ContinuousClock.now < deadline, !Task.isCancelled {
+                let piece = try await read(connection)
+                if let data = piece.data {
+                    if status != nil {
+                        counter.add(data.count)
+                    } else {
+                        header.append(data)
+                        if let range = header.range(of: Data("\r\n\r\n".utf8)) {
+                            status = statusCode(header[..<range.lowerBound])
+                            guard let code = status, (200..<300).contains(code) else { break }
+                            counter.add(header.count - range.upperBound)
                         }
                     }
-                    if piece.done { finished = true; break }
                 }
-                connection.cancel()
-                if let code = status, !(200..<300).contains(code) {
-                    if code == 429 { counter.throttle(shrink: true) }
-                    try? await Task.sleep(for: .milliseconds(code == 429 ? 300 : 200))
-                    continue
-                }
-                if !finished { return }
-            } catch {
-                connection.cancel()
-                return
+                if piece.done { finished = true; break }
             }
+            connection.cancel()
+            if let code = status, !(200..<300).contains(code) {
+                if code == 429 { counter.throttle(shrink: true) }
+                try? await Task.sleep(for: .milliseconds(code == 429 ? 300 : 200))
+                return true
+            }
+            return finished
+        } catch {
+            connection.cancel()
+            return false
         }
     }
 
@@ -520,32 +545,46 @@ nonisolated enum SpeedProbe {
         return parts.count > 1 ? Int(parts[1]) : nil
     }
 
-    /// POSTs 1 MB bodies on one kept-alive connection until the deadline. A
-    /// body only counts once the server has answered, so socket buffers do
-    /// not inflate the number.
+    /// POSTs bodies on one kept-alive connection until the deadline. A body only counts once the server has answered,
+    /// so socket buffers do not inflate the number. Bodies start small and grow with the line (`UploadPace`): on a slow
+    /// mobile uplink a whole megabyte per stream was never answered in time, and nothing was counted at all.
     static func upload(host: String, counter: ByteCounter, until deadline: ContinuousClock.Instant, interface: NWInterface.InterfaceType?) async {
-        let connection = makeConnection(host: host, interface: interface)
-        defer { connection.cancel() }
-        let chunk = Data(count: 1_000_000)
-        do {
-            try await ready(connection)
-            while ContinuousClock.now < deadline, !Task.isCancelled {
-                let header = Data("POST /__up HTTP/1.1\r\nHost: \(host)\r\nUser-Agent: Spectra\r\nContent-Type: application/octet-stream\r\nContent-Length: \(chunk.count)\r\n\r\n".utf8)
-                try await write(connection, header + chunk)
-                let status = try await readResponse(connection)
-                if let status, (200..<300).contains(status) {
-                    counter.add(chunk.count)
-                } else {
-                    if status == 429 { counter.throttle(shrink: false) }
-                    try? await Task.sleep(for: .milliseconds(status == 429 ? 300 : 200))
+        var pace = UploadPace()
+        // A connection the mobile network drops is opened again.
+        while ContinuousClock.now < deadline, !Task.isCancelled {
+            let connection = makeConnection(host: host, interface: interface)
+            defer { connection.cancel() }
+            do {
+                try await closing(connection) {
+                    try await ready(connection)
+                    while ContinuousClock.now < deadline, !Task.isCancelled {
+                        let size = pace.size
+                        let header = Data("POST /__up HTTP/1.1\r\nHost: \(host)\r\nUser-Agent: Spectra\r\nContent-Type: application/octet-stream\r\nContent-Length: \(size)\r\n\r\n".utf8)
+                        let start = ContinuousClock.now
+                        try await write(connection, header + Data(count: size))
+                        let status = try await readResponse(connection)
+                        if let status, (200..<300).contains(status) {
+                            counter.add(size)
+                            pace.answered(in: elapsed(since: start))
+                        } else {
+                            if status == 429 { counter.throttle(shrink: false) }
+                            try? await Task.sleep(for: .milliseconds(status == 429 ? 300 : 200))
+                        }
+                    }
                 }
+            } catch {
+                try? await Task.sleep(for: .milliseconds(200))
             }
-        } catch {
-            return
         }
     }
 
     // MARK: Plumbing
+
+    /// Runs `body` and closes the connection when the task is cancelled: reads and writes wait for the network and
+    /// never look at cancellation themselves, so a stalled line kept the test going long after its time was up.
+    private static func closing<T>(_ connection: NWConnection, _ body: () async throws -> T) async rethrows -> T {
+        try await withTaskCancellationHandler(operation: body, onCancel: { connection.cancel() })
+    }
 
     private static func makeConnection(host: String, interface: NWInterface.InterfaceType?) -> NWConnection {
         let parameters = NWParameters.tls
@@ -565,6 +604,11 @@ nonisolated enum SpeedProbe {
                 }
             }
             connection.start(queue: .global(qos: .userInitiated))
+            // Cancelled before the start: the handler above may never be told.
+            if Task.isCancelled {
+                connection.cancel()
+                once.run { continuation.resume(throwing: CancellationError()) }
+            }
         }
     }
 
