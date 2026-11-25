@@ -5,6 +5,7 @@ struct LANView: View {
     @Environment(WiFiInfo.self) private var wifi
     @Environment(SensorLink.self) private var link
     @Environment(NetworkStore.self) private var store
+    @Environment(WebLinks.self) private var webLinks
     @AppStorage("notifyNewDevices") private var notifyNewDevices = true
     @AppStorage("hideTrusted") private var hideTrusted = false
     @AppStorage("autosaveHistory") private var autosave = true
@@ -12,6 +13,7 @@ struct LANView: View {
     @State private var search = ""
     @State private var confirmForget = false
     @State private var showHistory = false
+    @State private var showWebLinks = false
     /// Show only the hosts whose services need attention.
     @State private var onlyAtRisk = false
 
@@ -50,6 +52,10 @@ struct LANView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                }
+
+                if !webLinks.links.isEmpty, search.isEmpty {
+                    Section { webLinksRow }
                 }
 
                 if case .done = scanner.state, !scanner.devices.isEmpty, search.isEmpty {
@@ -165,6 +171,9 @@ struct LANView: View {
             .navigationDestination(isPresented: $showHistory) {
                 HistoryView(area: .lan)
             }
+            .navigationDestination(isPresented: $showWebLinks) {
+                WebLinksView()
+            }
             .toolbar {
                 if !autosave {
                     ToolbarItem(placement: .topBarLeading) {
@@ -186,6 +195,8 @@ struct LANView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        Button("Web interfaces", systemImage: "bookmark") { showWebLinks = true }
+                        Divider()
                         Toggle("Notify about new devices", systemImage: "bell.badge", isOn: $notifyNewDevices)
                         Toggle("Hide trusted devices", systemImage: "checkmark.seal", isOn: $hideTrusted)
                         Toggle("Use Wi-Fi name", systemImage: "wifi", isOn: Binding(get: { wifi.enabled }, set: { wifi.setEnabled($0) }))
@@ -233,6 +244,37 @@ struct LANView: View {
             }
             Spacer(minLength: 0)
         }
+    }
+
+    /// The way to the kept web pages; shown before any scan, since they need none.
+    private var webLinksRow: some View {
+        Button {
+            showWebLinks = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "bookmark.fill")
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+                    .frame(width: 30)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Web interfaces")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text(webLinks.titles.joined(separator: ", "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Text(webLinks.links.count, format: .number)
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.forward")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// One line on the network's open services. Tapping filters the list.

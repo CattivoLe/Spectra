@@ -11,6 +11,7 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Keyboard
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Memory
@@ -167,6 +168,19 @@ fun LanDevice.icon(): ImageVector {
 }
 
 /** A low set-top box, distinct from the television glyph. */
+/** The icons [icon] gives a host, found again by name. */
+private val hostIcons: Map<String, ImageVector> by lazy {
+    listOf(
+        Icons.Rounded.Router, Icons.Rounded.PhoneAndroid, Icons.Rounded.PhoneIphone, Icons.Rounded.TabletAndroid,
+        Icons.Rounded.Laptop, MediaBox, Icons.Rounded.Tv, Icons.Rounded.Watch, Icons.Rounded.DesktopWindows,
+        Icons.Rounded.Videocam, Icons.Rounded.Sensors, Icons.Rounded.Speaker, Icons.Rounded.Print,
+        Icons.Rounded.SportsEsports, Icons.Rounded.Memory, Icons.Rounded.Storage,
+    ).associateBy { it.name }
+}
+
+/** The host icon kept under [name]; a web page's for a host of no known kind. */
+fun deviceIcon(name: String?): ImageVector = hostIcons[name] ?: Icons.Rounded.Language
+
 private val MediaBox: ImageVector by lazy {
     ImageVector.Builder(
         name = "MediaBox",

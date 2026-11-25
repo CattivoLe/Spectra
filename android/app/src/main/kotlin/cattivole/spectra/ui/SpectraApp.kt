@@ -46,6 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -210,6 +211,7 @@ class Navigator(private val nav: NavHostController) : cattivole.spectra.assistan
 
     fun channels() = nav.navigate("channels")
     fun savedNetworks() = nav.navigate("saved-networks")
+    fun webLinks() = nav.navigate("web-links")
     fun pcap() = nav.navigate("pcap")
 
     /** Decodes the sensor's last raw capture, shown under [name]. */
@@ -271,6 +273,12 @@ fun SpectraApp(model: SpectraModel) {
     val entry = nav.currentBackStackEntryAsState().value
     val currentTab = Tab.entries.firstOrNull { tab -> entry?.destination?.hierarchy?.any { it.route == tab.graph } == true }
 
+    // Kept for as long as this back stack: it is built on the first tab.
+    val start = rememberSaveable { (Tab.entries.firstOrNull { it.graph == model.lastTab } ?: Tab.Networks).graph }
+    LaunchedEffect(currentTab) {
+        if (currentTab != null) model.lastTab = currentTab.graph
+    }
+
     // The Bluetooth tab listens only while it is showing, its device cards included.
     val onBluetooth = currentTab == Tab.Bluetooth
     LaunchedEffect(onBluetooth) {
@@ -316,7 +324,7 @@ fun SpectraApp(model: SpectraModel) {
         ) { padding ->
             NavHost(
                 nav,
-                startDestination = Tab.Networks.graph,
+                startDestination = start,
                 modifier = Modifier.padding(bottom = padding.calculateBottomPadding()),
                 enterTransition = { enter() },
                 exitTransition = { exit() },
@@ -349,6 +357,7 @@ fun SpectraApp(model: SpectraModel) {
                 navigation(startDestination = Tab.Lan.start, route = Tab.Lan.graph) {
                     composable(Tab.Lan.start) { LanScreen(model, navigator) }
                     composable("${Tab.Lan.cardRoute}/{id}") { summaryCard(model, navigator, it) }
+                    composable("web-links") { WebLinksScreen(model, navigator) }
                     composable("host/{ip}") { LanDetail(model, navigator, it.text("ip"), entryId = null) }
                     historyScreens(model, navigator, Tab.Lan)
                     composable("saved/host/{entry}/{ip}") { LanDetail(model, navigator, it.text("ip"), it.text("entry")) }

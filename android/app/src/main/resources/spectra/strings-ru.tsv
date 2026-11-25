@@ -1802,3 +1802,40 @@ No handshake seen	Рукопожатие не встретилось
 Partial handshake	Рукопожатие неполное
 Export for hashcat (.hc22000)	Экспорт для hashcat (.hc22000)
 A crackable handshake was found. Export it as a hashcat 22000 file to recover the Wi-Fi password with hashcat on a computer — only for networks you own.	Найдено рукопожатие, пригодное для взлома. Экспортируй его как файл hashcat 22000, чтобы подобрать пароль Wi-Fi в hashcat на компьютере — только для своих сетей.
+Web interfaces	Веб-интерфейсы
+No web interfaces	Нет веб-интерфейсов
+Other network	Другая сеть
+Open a device on the LAN tab and tap the bookmark next to a port that has a web page.	Откройте устройство на вкладке LAN и нажмите на закладку рядом с портом, у которого есть веб-страница.
+Opens while the phone is on the same network. When the router gives a device another address, the next LAN scan updates its link.	Открываются, пока телефон в той же сети. Если роутер выдаст устройству другой адрес, следующее сканирование LAN обновит ссылку.
+The bookmark keeps a web page in Web interfaces on the LAN tab.	Закладка сохраняет веб-страницу в «Веб-интерфейсы» на вкладке LAN.
+Add to web interfaces	Добавить в веб-интерфейсы
+Remove from web interfaces	Убрать из веб-интерфейсов
+Added to web interfaces	Добавлено в веб-интерфейсы
+Removed from web interfaces	Убрано из веб-интерфейсов
+No app here opens web pages.	Нет приложения, которое открывает веб-страницы.
+Router	Роутер
+Storage	Хранилище
+Doorbell	Звонок
+Smart home	Умный дом
+Socket	Розетка
+Water	Вода
+Energy	Энергия
+Charger	Зарядка
+Kitchen	Кухня
+Speaker	Колонка
+3D printer	3D-принтер
+Laptop	Ноутбук
+Board	Плата
+Game console	Игровая приставка
+Downloads	Загрузки
+Protection	Защита
+Statistics	Статистика
+Terminal	Терминал
+Car	Машина
+Garden	Сад
+Web page	Веб-страница
+Star	Звезда
+Heart	Сердце
+Icon	Иконка
+Auto	Авто
+All icons	Все иконки

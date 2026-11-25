@@ -47,7 +47,8 @@ model, never an address or a name) to the search service you pick.
   mean: Telnet, open shares, camera streams, unencrypted web pages, UPnP port
   forwarding on the router. Smart-home appliances that open no TCP port at all,
   such as Xiaomi Mi Home devices, are found by their own UDP hello. A device
-  new to the network gets a notification.
+  new to the network gets a notification. The web pages of your own devices can
+  be kept in a list that opens them with a tap.
 - **Internet.** A connection check, a link checker for phishing and look-alike
   names, a speed test and traceroute on a map. Wi‑Fi, the mobile network and a
   VPN are measured apart; when a VPN lets no app around it, the Android app

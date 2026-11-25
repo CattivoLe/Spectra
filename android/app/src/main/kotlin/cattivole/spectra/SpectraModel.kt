@@ -21,6 +21,8 @@ import cattivole.spectra.core.HistoryStore
 import cattivole.spectra.core.LinkStatus
 import cattivole.spectra.core.NetworkStore
 import cattivole.spectra.core.SavedConnection
+import cattivole.spectra.core.WebLinkNetwork
+import cattivole.spectra.ui.icon
 
 class SpectraModel(app: Application) : AndroidViewModel(app) {
     val store = NetworkStore()
@@ -38,6 +40,9 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         }
     }
     val lan = LanScanner(app, cattivole.spectra.core.KnownHosts(hostStore), cattivole.spectra.core.DeviceLabels(hostStore))
+
+    /** The web pages of devices the user kept. */
+    val webLinks = cattivole.spectra.core.WebLinks(hostStore, icon = { it.icon().name })
     val traffic = TrafficSniffer(app)
     val connection = LinkProbe(app, lan)
     val speed = cattivole.spectra.platform.SpeedTester(app) { connection.currentNetwork() }
@@ -71,6 +76,13 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
             generation += 1
         }
 
+    /** The tab the app was left on; the app opens on it again. The screenshot demo neither reads nor moves it. */
+    var lastTab: String?
+        get() = if (demo) null else prefs.getString(LAST_TAB, null)
+        set(value) {
+            if (!demo) prefs.edit().putString(LAST_TAB, value).apply()
+        }
+
     /** Hosts marked Trusted leave the LAN list unless a search is on. */
     var hideTrustedHosts: Boolean
         get() = prefs.getBoolean(HIDE_TRUSTED, false)
@@ -86,6 +98,30 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
             prefs.edit().putBoolean(NOTIFY_NEW, value).apply()
             generation += 1
         }
+
+    /** The network of the last LAN scan, as the kept web pages remember it. */
+    val webLinkNetwork: WebLinkNetwork
+        get() = WebLinkNetwork(lan.networkKey, lan.networkKeys, wifiJoiner.currentSsid ?: lan.networkLabel)
+
+    /** Keeps the web page on this port of a host, or drops it. True when it is kept now. */
+    fun toggleWebLink(device: cattivole.spectra.core.LanDevice, port: Int): Boolean =
+        webLinks.toggle(device, port, webLinkNetwork).also { generation += 1 }
+
+    fun editWebLink(id: String, name: String, address: String, icon: String?) {
+        webLinks.edit(id, name, address, icon)
+        generation += 1
+    }
+
+    fun removeWebLink(id: String) {
+        webLinks.remove(id)
+        generation += 1
+    }
+
+    /** The kept web pages take the new addresses and names of their devices. */
+    fun followWebLinks() {
+        webLinks.follow(lan.devices, webLinkNetwork)
+        generation += 1
+    }
 
     /** BSSIDs and Bluetooth addresses the user is watching for. */
     val watchedIds: Set<String>
@@ -217,6 +253,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
             lastLanScan = lan.lastScanDate
             finished = true
             announceNewDevices()
+            followWebLinks()
         }
         if (finished) autosave()
     }
@@ -278,6 +315,7 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
         /** English key; the UI translates it through `sourceName`, like iOS. */
         const val PHONE_SOURCE = "This phone"
         const val AUTOSAVE_HISTORY = "autosaveHistory"
+        const val LAST_TAB = "lastTab"
         const val WATCHED = "watchedIds"
         const val HIDE_TRUSTED = "hideTrustedHosts"
         const val NOTIFY_NEW = "notifyNewDevices"
