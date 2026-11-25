@@ -20,6 +20,8 @@ nonisolated struct WebLink: Codable, Identifiable, Equatable, Sendable {
     /// The device's own icon, and the one the user picked instead, by `WebLinkIcon.id`.
     var symbol: String
     var customIcon: String?
+    /// The icon's colour, by `WebLinkColor`; the app's own without it.
+    var color: String?
     /// What the device and its page say about themselves, to suggest icons by.
     var hints: [String]?
 
@@ -53,6 +55,29 @@ nonisolated struct WebLink: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+/// The colours an icon can have. Mirrors the Kotlin `WebLinkColor`.
+nonisolated enum WebLinkColor: String, CaseIterable, Identifiable, Sendable {
+    case red, orange, yellow, green, teal, blue, indigo, purple, pink, brown, gray
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .red: String(localized: "Red")
+        case .orange: String(localized: "Orange")
+        case .yellow: String(localized: "Yellow")
+        case .green: String(localized: "Green")
+        case .teal: String(localized: "Teal")
+        case .blue: String(localized: "Blue")
+        case .indigo: String(localized: "Indigo")
+        case .purple: String(localized: "Purple")
+        case .pink: String(localized: "Pink")
+        case .brown: String(localized: "Brown")
+        case .gray: String(localized: "Gray")
+        }
+    }
+}
+
 /// The network a scan walked, as the links remember it.
 nonisolated struct WebLinkNetwork: Equatable, Sendable {
     /// The key to store, and every key the same network may have been stored under before.
@@ -64,6 +89,13 @@ nonisolated struct WebLinkNetwork: Equatable, Sendable {
         guard let network = link.network else { return true }
         return network == key || keys.contains(network)
     }
+}
+
+/// The links of one network.
+nonisolated struct WebLinkGroup: Identifiable, Equatable, Sendable {
+    var id: String
+    var label: String?
+    var links: [WebLink]
 }
 
 /// The kept web pages of devices. A router hands out addresses anew, so a link
@@ -91,6 +123,37 @@ final class WebLinks {
         return links.map(\.title).filter { seen.insert($0).inserted }
     }
 
+    /// The links by network, the one the phone is on first. A network is told by
+    /// its key: what it is called depends on whether the Wi-Fi name was readable.
+    func groups(current: WebLinkNetwork) -> [WebLinkGroup] {
+        var groups: [WebLinkGroup] = []
+        for link in links {
+            let isCurrent = link.network != nil && current.includes(link)
+            let id = isCurrent ? current.key ?? "" : link.network ?? ""
+            if let index = groups.firstIndex(where: { $0.id == id }) {
+                groups[index].links.append(link)
+                groups[index].label = Self.better(groups[index].label, link.networkLabel)
+            } else {
+                groups.append(WebLinkGroup(id: id, label: link.networkLabel, links: [link]))
+            }
+        }
+        func isCurrent(_ group: WebLinkGroup) -> Bool {
+            (current.key != nil && group.id == current.key) || (current.label != nil && group.label == current.label)
+        }
+        return groups.filter(isCurrent) + groups.filter { !isCurrent($0) }
+    }
+
+    /// A Wi-Fi name rather than "192.168.1.0/24"; the newer of two names.
+    private static func better(_ old: String?, _ new: String?) -> String? {
+        guard let new else { return old }
+        guard let old else { return new }
+        return isSubnet(new) ? old : new
+    }
+
+    private static func isSubnet(_ label: String) -> Bool {
+        label.wholeMatch(of: /\d+\.\d+\.\d+\.\d+\/\d+/) != nil
+    }
+
     /// The link made from this port of this host, if there is one.
     func link(for device: LANDevice, port: Int, network: WebLinkNetwork) -> WebLink? {
         links.first {
@@ -113,13 +176,24 @@ final class WebLinks {
         persist()
     }
 
-    /// A blank name and no icon go back to the device's own; a bad address changes nothing.
-    func edit(_ id: UUID, name: String, address: String, icon: String?) {
+    /// A blank name, no icon and no colour go back to the usual; a bad address changes nothing.
+    func edit(_ id: UUID, name: String, address: String, icon: String?, color: WebLinkColor?) {
         guard let index = links.firstIndex(where: { $0.id == id }), let address = WebLink.normalized(address) else { return }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         links[index].name = name.isEmpty ? nil : name
         links[index].address = address
         links[index].customIcon = icon
+        links[index].color = color?.rawValue
+        persist()
+    }
+
+    /// Puts the links with these ids in this order, in the places they hold
+    /// now: the links of other networks in between stay where they are.
+    func reorder(_ ids: [UUID]) {
+        let places = links.indices.filter { ids.contains(links[$0].id) }
+        let moved = ids.compactMap { id in links.first { $0.id == id } }
+        guard places.count == moved.count else { return }
+        for (place, link) in zip(places, moved) { links[place] = link }
         persist()
     }
 
@@ -146,7 +220,7 @@ final class WebLinks {
             let hints = Self.hints(of: home, port: link.port)
             if !hints.isEmpty { link.hints = hints }
             link.network = network.key ?? link.network
-            link.networkLabel = network.label ?? link.networkLabel
+            link.networkLabel = Self.better(link.networkLabel, network.label)
             let fresh = Self.prints(of: home)
             link.prints += fresh.filter { !link.prints.contains($0) }
             links[index] = link

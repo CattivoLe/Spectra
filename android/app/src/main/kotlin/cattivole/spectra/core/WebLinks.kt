@@ -24,6 +24,8 @@ data class WebLink(
     /** The device's own icon, by name, and the one the user picked instead, by [WebLinkIcon.id]. */
     val icon: String? = null,
     val customIcon: String? = null,
+    /** The icon's colour, by [WebLinkColor.id]; the app's own without it. */
+    val color: String? = null,
     /** What the device and its page say about themselves, to suggest icons by. */
     val hints: List<String> = emptyList(),
 ) {
@@ -61,6 +63,26 @@ data class WebLink(
     }
 }
 
+/** The colours an icon can have; [title] is English. Mirrors the iOS `WebLinkColor`. */
+enum class WebLinkColor(val id: String, val title: String) {
+    RED("red", "Red"),
+    ORANGE("orange", "Orange"),
+    YELLOW("yellow", "Yellow"),
+    GREEN("green", "Green"),
+    TEAL("teal", "Teal"),
+    BLUE("blue", "Blue"),
+    INDIGO("indigo", "Indigo"),
+    PURPLE("purple", "Purple"),
+    PINK("pink", "Pink"),
+    BROWN("brown", "Brown"),
+    GRAY("gray", "Gray"),
+    ;
+
+    companion object {
+        fun of(id: String?): WebLinkColor? = entries.firstOrNull { it.id == id }
+    }
+}
+
 /** The network a scan walked, as the links remember it. */
 data class WebLinkNetwork(
     /** The key to store, and every key the same network may have been stored under before. */
@@ -70,6 +92,9 @@ data class WebLinkNetwork(
 ) {
     fun includes(link: WebLink): Boolean = link.network == null || link.network == key || link.network in keys
 }
+
+/** The links of one network. */
+data class WebLinkGroup(val id: String, val label: String?, val links: List<WebLink>)
 
 /**
  * The kept web pages of devices. A router hands out addresses anew, so a link
@@ -82,6 +107,28 @@ class WebLinks(private val store: TextStore = MemoryTextStore(), private val ico
 
     /** The kept devices by name, each once. */
     val titles: List<String> get() = links.map { it.title }.distinct()
+
+    /**
+     * The links by network, the one the phone is on first. A network is told by
+     * its key: what it is called depends on whether the Wi-Fi name was readable.
+     */
+    fun groups(current: WebLinkNetwork): List<WebLinkGroup> =
+        links.groupBy { link ->
+            val isCurrent = link.network != null && current.includes(link)
+            (if (isCurrent) current.key else link.network).orEmpty()
+        }
+            .map { (id, group) -> WebLinkGroup(id, group.map { it.networkLabel }.reduce(::better), group) }
+            .sortedBy { group ->
+                !((current.key != null && group.id == current.key) || (current.label != null && group.label == current.label))
+            }
+
+    /** A Wi-Fi name rather than "192.168.1.0/24"; the newer of two names. */
+    private fun better(old: String?, new: String?): String? = when {
+        new == null -> old
+        old == null -> new
+        subnet.matches(new) -> old
+        else -> new
+    }
 
     /** The link made from this port of this host, if there is one. */
     fun link(device: LanDevice, port: Int, network: WebLinkNetwork): WebLink? = links.firstOrNull {
@@ -110,10 +157,22 @@ class WebLinks(private val store: TextStore = MemoryTextStore(), private val ico
         return true
     }
 
-    /** A blank name and no icon go back to the device's own; a bad address changes nothing. */
-    fun edit(id: String, name: String, address: String, icon: String?) {
+    /** A blank name, no icon and no colour go back to the usual; a bad address changes nothing. */
+    fun edit(id: String, name: String, address: String, icon: String?, color: WebLinkColor?) {
         val valid = WebLink.normalized(address) ?: return
-        links = links.map { if (it.id == id) it.copy(name = name.trim().ifEmpty { null }, address = valid, customIcon = icon) else it }
+        links = links.map { if (it.id == id) it.copy(name = name.trim().ifEmpty { null }, address = valid, customIcon = icon, color = color?.id) else it }
+        persist()
+    }
+
+    /**
+     * Puts the links with these [ids] in this order, in the places they hold
+     * now: the links of other networks in between stay where they are.
+     */
+    fun reorder(ids: List<String>) {
+        val moved = ids.mapNotNull { id -> links.firstOrNull { it.id == id } }
+        if (moved.size != ids.size) return
+        val next = moved.iterator()
+        links = links.map { if (it.id in ids) next.next() else it }
         persist()
     }
 
@@ -138,7 +197,7 @@ class WebLinks(private val store: TextStore = MemoryTextStore(), private val ico
                     ip = newIp,
                     prints = (link.prints + prints(home)).distinct(),
                     network = network.key ?: link.network,
-                    networkLabel = network.label ?: link.networkLabel,
+                    networkLabel = better(link.networkLabel, network.label),
                     icon = icon(home) ?: link.icon,
                     hints = hints(home, link.port).ifEmpty { link.hints },
                 )
@@ -201,6 +260,7 @@ class WebLinks(private val store: TextStore = MemoryTextStore(), private val ico
                 networkLabel = item.optString("networkLabel").ifEmpty { null },
                 icon = item.optString("icon").ifEmpty { null },
                 customIcon = item.optString("customIcon").ifEmpty { null },
+                color = item.optString("color").ifEmpty { null },
                 hints = strings(item.optJSONArray("hints")),
             )
         }
@@ -224,6 +284,7 @@ class WebLinks(private val store: TextStore = MemoryTextStore(), private val ico
             link.networkLabel?.let { item.put("networkLabel", it) }
             link.icon?.let { item.put("icon", it) }
             link.customIcon?.let { item.put("customIcon", it) }
+            link.color?.let { item.put("color", it) }
             if (link.hints.isNotEmpty()) item.put("hints", JSONArray(link.hints))
             array.put(item)
         }
@@ -232,5 +293,6 @@ class WebLinks(private val store: TextStore = MemoryTextStore(), private val ico
 
     private companion object {
         const val KEY = "webLinks"
+        val subnet = Regex("\\d+\\.\\d+\\.\\d+\\.\\d+/\\d+")
     }
 }

@@ -1588,6 +1588,16 @@
         }
       }
     },
+    "Blue": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Синий"
+          }
+        }
+      }
+    },
     "Bluetooth scan": {
       "extractionState": "manual",
       "localizations": {
@@ -1625,6 +1635,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "поле тела «%@»"
+          }
+        }
+      }
+    },
+    "Brown": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Коричневый"
           }
         }
       }
@@ -2664,6 +2684,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Холоднее"
+          }
+        }
+      }
+    },
+    "Color": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Цвет"
           }
         }
       }
@@ -4653,6 +4683,26 @@
         }
       }
     },
+    "Green": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зелёный"
+          }
+        }
+      }
+    },
+    "Gray": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Серый"
+          }
+        }
+      }
+    },
     "Group cipher": {
       "localizations": {
         "ru": {
@@ -4987,6 +5037,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Всего %@."
+          }
+        }
+      }
+    },
+    "Indigo": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Индиго"
           }
         }
       }
@@ -6311,6 +6371,16 @@
         }
       }
     },
+    "Orange": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оранжевый"
+          }
+        }
+      }
+    },
     "Other network": {
       "localizations": {
         "ru": {
@@ -6371,6 +6441,16 @@
         }
       }
     },
+    "Pink": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Розовый"
+          }
+        }
+      }
+    },
     "port forwarding check": {
       "extractionState": "manual",
       "localizations": {
@@ -6413,6 +6493,16 @@
         }
       }
     },
+    "Purple": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Фиолетовый"
+          }
+        }
+      }
+    },
     "push messages": {
       "localizations": {
         "ru": {
@@ -6429,6 +6519,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Идёт запись"
+          }
+        }
+      }
+    },
+    "Red": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Красный"
           }
         }
       }
@@ -6763,6 +6863,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Хранилище"
+          }
+        }
+      }
+    },
+    "Teal": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Бирюзовый"
           }
         }
       }
@@ -13221,6 +13331,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Яндекс"
+          }
+        }
+      }
+    },
+    "Yellow": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Жёлтый"
           }
         }
       }

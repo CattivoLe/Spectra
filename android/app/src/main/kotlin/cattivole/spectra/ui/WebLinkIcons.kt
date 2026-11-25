@@ -40,8 +40,12 @@ import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.ViewInAr
 import androidx.compose.material.icons.rounded.WaterDrop
 import androidx.compose.material.icons.rounded.Wifi
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import cattivole.spectra.core.WebLink
+import cattivole.spectra.core.WebLinkColor
 import cattivole.spectra.core.WebLinkIcon
 
 private val vectors: Map<String, ImageVector> by lazy {
@@ -97,4 +101,24 @@ fun WebLink.vector(): ImageVector = vectors[customIcon] ?: deviceIcon(icon)
 internal fun ownIconId(link: WebLink): String? {
     val own = deviceIcon(link.icon)
     return vectors.entries.firstOrNull { it.value.name == own.name }?.key
+}
+
+/** The colour on this theme: a darker one on light, a lighter one on dark. The app's own for null. */
+@Composable
+fun WebLinkColor?.shown(): Color {
+    val dark = Spectra.colors.isDark
+    return when (this) {
+        null -> MaterialTheme.colorScheme.primary
+        WebLinkColor.RED -> if (dark) Color(0xFFFF6961) else Color(0xFFD93A32)
+        WebLinkColor.ORANGE -> if (dark) Color(0xFFFFB340) else Color(0xFFC76200)
+        WebLinkColor.YELLOW -> if (dark) Color(0xFFFFD426) else Color(0xFFA67C00)
+        WebLinkColor.GREEN -> if (dark) Color(0xFF30DB5B) else Color(0xFF248A3D)
+        WebLinkColor.TEAL -> if (dark) Color(0xFF5DE6FF) else Color(0xFF007A8A)
+        WebLinkColor.BLUE -> if (dark) Color(0xFF409CFF) else Color(0xFF1F6FEB)
+        WebLinkColor.INDIGO -> if (dark) Color(0xFF8F8CFF) else Color(0xFF4B49C9)
+        WebLinkColor.PURPLE -> if (dark) Color(0xFFDA8FFF) else Color(0xFF8944AB)
+        WebLinkColor.PINK -> if (dark) Color(0xFFFF6482) else Color(0xFFC2256A)
+        WebLinkColor.BROWN -> if (dark) Color(0xFFB59469) else Color(0xFF7F6545)
+        WebLinkColor.GRAY -> if (dark) Color(0xFFAEAEB2) else Color(0xFF6C6C70)
+    }
 }

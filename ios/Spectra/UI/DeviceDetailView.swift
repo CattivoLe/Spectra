@@ -44,7 +44,14 @@ struct DeviceDetailView: View {
                             Text(device.displayName)
                                 .font(.title2.weight(.semibold))
                                 .fixedSize(horizontal: false, vertical: true)
-                            HStack(spacing: 6) {
+                            if let about = device.identity.label.isEmpty ? device.manufacturer : device.identity.label {
+                                Text(about)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            // One under another: side by side they ran out of width and broke their words.
+                            VStack(alignment: .leading, spacing: 4) {
                                 if device.isLocalDevice {
                                     badge("This device", color: .teal)
                                 }
@@ -62,16 +69,8 @@ struct DeviceDetailView: View {
                                 } else if device.trust == .suspicious {
                                     badge("Suspicious", color: .red)
                                 }
-                                if !device.identity.label.isEmpty {
-                                    Text(device.identity.label)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                } else if let mfr = device.manufacturer {
-                                    Text(mfr)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
                             }
+                            .padding(.top, 2)
                         }
                     }
                     if let note = device.note {
@@ -509,6 +508,7 @@ struct DeviceDetailView: View {
         Text(text)
             .font(.caption2.weight(.medium))
             .foregroundStyle(.white)
+            .lineLimit(1)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(color, in: .capsule)

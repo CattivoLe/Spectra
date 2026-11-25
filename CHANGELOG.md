@@ -11,9 +11,10 @@ Web interfaces:
 
 - A list of your devices' web pages on the LAN tab, on Android and iPhone: a tap
   opens one in the browser, without a scan first. A page is added with the
-  bookmark next to its port on the device's screen; its name, address and icon
-  can be changed, with icons suggested by what the device is. When the router
-  gives the device another address, the next LAN scan updates the link.
+  bookmark next to its port on the device's screen; its name, address, icon
+  and colour can be changed, with icons suggested by what the device is, and the
+  links put in any order. When the router gives the device another address, the
+  next LAN scan updates the link.
 
 Other:
 

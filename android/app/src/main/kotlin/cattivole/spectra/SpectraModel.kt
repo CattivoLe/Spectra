@@ -107,8 +107,13 @@ class SpectraModel(app: Application) : AndroidViewModel(app) {
     fun toggleWebLink(device: cattivole.spectra.core.LanDevice, port: Int): Boolean =
         webLinks.toggle(device, port, webLinkNetwork).also { generation += 1 }
 
-    fun editWebLink(id: String, name: String, address: String, icon: String?) {
-        webLinks.edit(id, name, address, icon)
+    fun editWebLink(id: String, name: String, address: String, icon: String?, color: cattivole.spectra.core.WebLinkColor?) {
+        webLinks.edit(id, name, address, icon, color)
+        generation += 1
+    }
+
+    fun reorderWebLinks(ids: List<String>) {
+        webLinks.reorder(ids)
         generation += 1
     }
 

@@ -5,6 +5,7 @@ import cattivole.spectra.core.LanDevice
 import cattivole.spectra.core.MacAddress
 import cattivole.spectra.core.MemoryTextStore
 import cattivole.spectra.core.WebLink
+import cattivole.spectra.core.WebLinkColor
 import cattivole.spectra.core.WebLinkIcon
 import cattivole.spectra.core.WebLinkNetwork
 import cattivole.spectra.core.WebLinks
@@ -55,7 +56,7 @@ class WebLinksTest {
     fun followsTheDeviceToANewAddress() {
         val links = WebLinks()
         links.toggle(host("192.168.1.10", "AA:BB:CC:00:00:01", "nas.local", listOf(5000)), 5000, home)
-        links.edit(links.links.first().id, "", "http://192.168.1.10:5000/admin?x=1", null)
+        links.edit(links.links.first().id, "", "http://192.168.1.10:5000/admin?x=1", null, null)
         val other = host("192.168.1.10", "AA:BB:CC:00:00:02", "tv.local")
         val moved = host("192.168.1.77", "AA:BB:CC:00:00:01", "nas.local", listOf(5000))
         links.follow(listOf(other, moved), home)
@@ -101,7 +102,7 @@ class WebLinksTest {
         device.customName = "Thermostat"
         links.follow(listOf(device), home)
         assertEquals("Thermostat", links.links.first().title)
-        links.edit(links.links.first().id, " Heating ", "thermo.local/status", null)
+        links.edit(links.links.first().id, " Heating ", "thermo.local/status", null, null)
         links.follow(listOf(host("192.168.1.30", name = "esp.local")), home)
         assertEquals("Heating", links.links.first().title)
         assertEquals("http://thermo.local/status", links.links.first().address)
@@ -114,12 +115,49 @@ class WebLinksTest {
         val nas = host("192.168.1.10", name = "nas.local")
         links.toggle(nas, 80, home)
         val link = links.links.first()
-        links.edit(link.id, "", link.address, "heart")
+        links.edit(link.id, "", link.address, "heart", WebLinkColor.PINK)
         links.follow(listOf(nas), home)
         assertEquals("heart", WebLinks(store).links.first().customIcon)
+        assertEquals("pink", WebLinks(store).links.first().color)
         assertEquals("Rounded.Storage", WebLinks(store).links.first().icon)
-        links.edit(link.id, "", link.address, null)
+        links.edit(link.id, "", link.address, null, null)
         assertNull(WebLinks(store).links.first().customIcon)
+    }
+
+    @Test
+    fun orderChangesWithinANetworkOnly() {
+        val store = MemoryTextStore()
+        val links = WebLinks(store)
+        val office = WebLinkNetwork("lan:net:10.0.0.0/24", listOf("lan:net:10.0.0.0/24"), "Office")
+        links.toggle(host("192.168.1.10", name = "nas.local"), 80, home)
+        links.toggle(host("10.0.0.1", name = "printer.local"), 80, office)
+        links.toggle(host("192.168.1.20", name = "camera.local"), 80, home)
+        links.toggle(host("192.168.1.30", name = "tv.local"), 80, home)
+        val ids = links.links.map { it.id }
+        val order = listOf(ids[3], ids[1], ids[0], ids[2])
+        links.reorder(listOf(ids[3], ids[0], ids[2]))
+        assertEquals(order, links.links.map { it.id })
+        assertEquals(order, WebLinks(store).links.map { it.id })
+        links.reorder(listOf("unknown", ids[0]))
+        assertEquals(order, links.links.map { it.id })
+    }
+
+    @Test
+    fun oneNetworkIsOneGroupWhateverItIsCalled() {
+        val links = WebLinks()
+        val keys = listOf("lan:gw:1", "lan:net:192.168.1.0/24")
+        val unnamed = WebLinkNetwork("lan:gw:1", keys, "192.168.1.0/24")
+        val named = WebLinkNetwork("lan:gw:1", keys, "Home")
+        val office = WebLinkNetwork("lan:gw:2", listOf("lan:gw:2"), "Office")
+        links.toggle(host("10.0.0.1", name = "printer.local"), 80, office)
+        links.toggle(host("192.168.1.10", name = "nas.local"), 80, named)
+        links.toggle(host("192.168.1.20", name = "camera.local"), 80, unnamed)
+        val groups = links.groups(unnamed)
+        assertEquals(listOf("Home", "Office"), groups.map { it.label })
+        assertEquals(listOf("192.168.1.10", "192.168.1.20"), groups.first().links.map { it.ip })
+        links.follow(listOf(host("192.168.1.10", name = "nas.local")), unnamed)
+        assertEquals("Home", links.links[1].networkLabel)
+        assertEquals(listOf("Office", "Home"), links.groups(WebLinkNetwork(null, emptyList(), null)).map { it.label })
     }
 
     @Test

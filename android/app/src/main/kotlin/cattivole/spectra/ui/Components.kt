@@ -383,6 +383,7 @@ fun <T> LazyListScope.cardSection(
     headerTrailing: (@Composable RowScope.() -> Unit)? = null,
     onHeaderClick: (() -> Unit)? = null,
     dividerInset: Dp = 16.dp,
+    cellModifier: @Composable LazyItemScope.(T) -> Modifier = { Modifier.animateItem() },
     row: @Composable LazyItemScope.(T) -> Unit,
 ) {
     if (items.isEmpty()) return
@@ -395,7 +396,7 @@ fun <T> LazyListScope.cardSection(
         item(key = "gap-$sectionKey", contentType = "gap") { Spacer(Modifier.height(12.dp)) }
     }
     itemsIndexed(items, key = key?.let { k -> { _, item -> k(item) } }, contentType = { _, _ -> "row" }) { index, item ->
-        CardCell(cardPosition(index, items.size), Modifier.animateItem(), dividerInset = dividerInset) {
+        CardCell(cardPosition(index, items.size), cellModifier(item), dividerInset = dividerInset) {
             row(item)
         }
     }

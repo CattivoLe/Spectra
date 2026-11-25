@@ -6,39 +6,29 @@ import UIKit
 struct WebLinksView: View {
     @Environment(WebLinks.self) private var store
     @Environment(LANScanner.self) private var scanner
+    @Environment(\.openURL) private var openURL
     @State private var editing: WebLink?
-
-    private struct NetworkGroup: Identifiable {
-        var id: String
-        var links: [WebLink]
-    }
-
-    /// By network, the one the phone is on first.
-    private var groups: [NetworkGroup] {
-        var groups: [NetworkGroup] = []
-        for link in store.links {
-            let label = link.networkLabel ?? ""
-            if let index = groups.firstIndex(where: { $0.id == label }) {
-                groups[index].links.append(link)
-            } else {
-                groups.append(NetworkGroup(id: label, links: [link]))
-            }
-        }
-        let current = scanner.networkLabel ?? ""
-        return groups.filter { $0.id == current } + groups.filter { $0.id != current }
-    }
+    @State private var editMode: EditMode = .inactive
 
     var body: some View {
-        let groups = groups
+        let groups = store.groups(current: scanner.webLinkNetwork)
         List {
             ForEach(groups) { group in
                 Section {
                     ForEach(group.links) { link in
                         row(link)
                     }
+                    .onMove { source, destination in
+                        var ids = group.links.map(\.id)
+                        ids.move(fromOffsets: source, toOffset: destination)
+                        store.reorder(ids)
+                    }
+                    .onDelete { offsets in
+                        offsets.map { group.links[$0].id }.forEach(store.remove)
+                    }
                 } header: {
                     if groups.count > 1 {
-                        group.id.isEmpty ? Text("Other network") : Text(verbatim: group.id)
+                        group.label.map { Text(verbatim: $0) } ?? Text("Other network")
                     }
                 } footer: {
                     if group.id == groups.last?.id {
@@ -58,20 +48,36 @@ struct WebLinksView: View {
         }
         .navigationTitle("Web interfaces")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !store.links.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) { EditButton() }
+            }
+        }
+        .environment(\.editMode, $editMode)
+        .onChange(of: store.links.isEmpty) { _, empty in
+            if empty { editMode = .inactive }
+        }
         .sheet(item: $editing) { link in
             WebLinkEditor(link: link)
         }
         .sensoryFeedback(.impact(weight: .light), trigger: store.links.count)
     }
 
+    /// Opens the page; while the list is being edited, the link's settings.
     @ViewBuilder
     private func row(_ link: WebLink) -> some View {
         if let url = link.url {
-            Link(destination: url) {
+            Button {
+                if editMode.isEditing {
+                    editing = link
+                } else {
+                    openURL(url)
+                }
+            } label: {
                 HStack(spacing: 12) {
                     Image(systemName: link.shownSymbol)
                         .font(.title3)
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(link.tint)
                         .frame(width: 30)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(link.title)
@@ -93,13 +99,15 @@ struct WebLinksView: View {
                         .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
-                    Image(systemName: "safari")
-                        .foregroundStyle(.tint)
+                    if !editMode.isEditing {
+                        Image(systemName: "safari")
+                            .foregroundStyle(.tint)
+                    }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityHint(Text("Opens \(link.address) in the browser"))
+            .accessibilityHint(editMode.isEditing ? Text("Edit…") : Text("Opens \(link.address) in the browser"))
             .contextMenu {
                 Button("Copy address", systemImage: "doc.on.doc") { UIPasteboard.general.string = link.address }
                 Button("Edit…", systemImage: "pencil") { editing = link }
@@ -114,7 +122,32 @@ struct WebLinksView: View {
     }
 }
 
-/// Changes a link's name, icon and address, say to add the path of a login page.
+extension WebLinkColor {
+    var color: Color {
+        switch self {
+        case .red: .red
+        case .orange: .orange
+        case .yellow: .yellow
+        case .green: .green
+        case .teal: .teal
+        case .blue: .blue
+        case .indigo: .indigo
+        case .purple: .purple
+        case .pink: .pink
+        case .brown: .brown
+        case .gray: .gray
+        }
+    }
+}
+
+extension WebLink {
+    /// The icon's colour, the app's own unless one was picked.
+    var tint: AnyShapeStyle {
+        color.flatMap(WebLinkColor.init).map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.tint)
+    }
+}
+
+/// Changes a link's name, address and how its icon looks.
 private struct WebLinkEditor: View {
     var link: WebLink
     @Environment(WebLinks.self) private var store
@@ -122,12 +155,14 @@ private struct WebLinkEditor: View {
     @State private var name: String
     @State private var address: String
     @State private var icon: String?
+    @State private var color: WebLinkColor?
 
     init(link: WebLink) {
         self.link = link
         _name = State(initialValue: link.name ?? "")
         _address = State(initialValue: link.address)
         _icon = State(initialValue: link.customIcon)
+        _color = State(initialValue: link.color.flatMap(WebLinkColor.init))
     }
 
     /// By the name being typed, then what the device and its page say about themselves.
@@ -159,6 +194,13 @@ private struct WebLinkEditor: View {
                     .padding(.vertical, 6)
                     .animation(.default, value: suggestions)
                 }
+                Section("Color") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 8) {
+                        colorCell(nil)
+                        ForEach(WebLinkColor.allCases) { colorCell($0) }
+                    }
+                    .padding(.vertical, 6)
+                }
                 Section("All icons") {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 48), spacing: 8)], spacing: 8) {
                         ForEach(WebLinkIcon.all) { item in
@@ -177,7 +219,7 @@ private struct WebLinkEditor: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        store.edit(link.id, name: name, address: address, icon: icon)
+                        store.edit(link.id, name: name, address: address, icon: icon, color: color)
                         dismiss()
                     }
                     .fontWeight(.semibold)
@@ -186,6 +228,31 @@ private struct WebLinkEditor: View {
             }
         }
         .sensoryFeedback(.selection, trigger: icon)
+        .sensoryFeedback(.selection, trigger: color)
+    }
+
+    private var tint: AnyShapeStyle { style(color) }
+
+    private func style(_ color: WebLinkColor?) -> AnyShapeStyle {
+        color.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.tint)
+    }
+
+    private func colorCell(_ value: WebLinkColor?) -> some View {
+        let chosen = color == value
+        return Button {
+            color = value
+        } label: {
+            Circle()
+                .fill(style(value))
+                .frame(width: 30, height: 30)
+                .padding(5)
+                .overlay { Circle().strokeBorder(style(value), lineWidth: chosen ? 2.5 : 0) }
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(value?.title ?? String(localized: "Auto"))
+        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 
     private func captionedCell(_ id: String?, symbol: String, title: String) -> some View {
@@ -194,7 +261,7 @@ private struct WebLinkEditor: View {
                 .accessibilityLabel(title)
             Text(title)
                 .font(.caption2)
-                .foregroundStyle(icon == id ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .foregroundStyle(icon == id ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .accessibilityHidden(true)
@@ -208,9 +275,11 @@ private struct WebLinkEditor: View {
         } label: {
             Image(systemName: symbol)
                 .font(.title3)
-                .foregroundStyle(chosen ? AnyShapeStyle(.white) : AnyShapeStyle(.tint))
+                .foregroundStyle(tint)
                 .frame(width: 48, height: 48)
-                .background(chosen ? AnyShapeStyle(.tint) : AnyShapeStyle(.fill.tertiary), in: .rect(cornerRadius: 12))
+                .background(.fill.tertiary, in: .rect(cornerRadius: 12))
+                // An outline rather than a fill: white on yellow could not be made out.
+                .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(tint, lineWidth: chosen ? 2.5 : 0) }
                 .contentShape(Rectangle())
         }
         // Several buttons share one row of the form.
