@@ -1854,3 +1854,32 @@ Gray	Серый
 Change order	Изменить порядок
 Move up	Переместить выше
 Move down	Переместить ниже
+On Wi‑Fi “%s”, channel %d; the sensor hears it at %d dBm.	В Wi‑Fi «%s», канал %d; датчик слышит его на %d дБм.
+Sends data over Wi‑Fi the whole time (%s up), as a camera or microphone would.	Постоянно передаёт данные по Wi‑Fi (%s на отдачу), как камера или микрофон.
+The router forwards ports from the internet to this device: %s.	Роутер пробрасывает на это устройство порты из интернета: %s.
+Open from the internet right now: %s — the router forwards it to this device.	Сейчас открыт из интернета: %s — роутер пробрасывает его на это устройство.
+Also heard over Bluetooth as “%s” (%d dBm): probably the same device.	Слышно и по Bluetooth как «%s» (%d дБм): вероятно, это то же устройство.
+The phone talked to it in the recorded traffic: %d connections, some unencrypted.	Телефон обращался к нему в записанном трафике: соединений — %d, часть без шифрования.
+The phone talked to it in the recorded traffic: %d connections.	Телефон обращался к нему в записанном трафике: соединений — %d.
+In the last capture (%s): %d packets from or to it.	В последнем захвате (%s): пакетов от него и к нему — %d.
+%s: open from the internet right now on port %d.	%s: сейчас открыт из интернета на порту %d.
+The router forwards port %d to %s, which is not on the network now.	Роутер пробрасывает порт %d на %s, которого сейчас нет в сети.
+%s sends data over Wi‑Fi the whole time, as a camera or microphone would.	%s постоянно передаёт данные по Wi‑Fi, как камера или микрофон.
+The sensor hears %d more devices on your Wi‑Fi than the network scan found: asleep, or kept apart from the phone.	В вашем Wi‑Fi датчик слышит устройств больше, чем нашёл скан сети, на %d: они спят или отделены от телефона.
+Your phone is on this network.	Телефон подключён к этой сети.
+Your phone is on this network: the network scan found %d devices on it.	Телефон подключён к этой сети: скан сети нашёл в ней устройств — %d.
+Devices on it that need attention: %s.	Устройства в ней, требующие внимания: %s.
+Most likely your router's access point: %s.	Скорее всего, это точка доступа вашего роутера: %s.
+Devices of your network on it: %s.	Устройства вашей сети на этой точке: %s.
+The last capture (%s) holds %d packets of this access point.	В последнем захвате (%s) пакетов этой точки доступа — %d.
+A Bluetooth device with the same name is nearby (“%s”, %d dBm): probably the one that broadcasts this network.	Рядом есть Bluetooth‑устройство с тем же именем («%s», %d дБм): вероятно, оно и раздаёт эту сеть.
+The connection check on it: the internet works, HTTPS is not intercepted.	Проверка соединения в ней: интернет работает, HTTPS не перехватывается.
+Probably the same device as %s on your local network, and it has a risky open port there: %s.	Вероятно, это то же устройство, что %s в вашей локальной сети, и там у него открыт опасный порт: %s.
+Probably the same device as %s on your local network.	Вероятно, это то же устройство, что %s в вашей локальной сети.
+A Wi‑Fi network with the same name is on air (%s): probably this device's own access point.	В эфире есть сеть Wi‑Fi с тем же именем (%s): вероятно, это собственная точка доступа устройства.
+Port %d open from the internet leads to %s.	Порт %d, открытый из интернета, ведёт на %s.
+Port %d answers from the internet but is not in the router's UPnP table: the router itself answers, or the port is forwarded by hand in its settings.	Порт %d отвечает из интернета, но в таблице UPnP роутера его нет: отвечает сам роутер, или порт проброшен вручную в его настройках.
+First seen on %s.	Впервые замечено %s.
+Ask the router where the open ports lead	Спросить роутер, куда ведут открытые порты
+The server is a device on your network: %s (%s).	Сервер — устройство вашей сети: %s (%s).
+The phone talked to devices on your network: %s.	Телефон обращался к устройствам вашей сети: %s.

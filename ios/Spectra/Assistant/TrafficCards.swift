@@ -73,6 +73,24 @@ nonisolated enum TrafficCards {
         var flows: [TrafficFlow]
         var bodies: TrafficAudit.Bodies?
         var recording = false
+        /// Devices of the user's own network by their address, as the LAN scan names them: a server may be one.
+        var local: [String: String] = [:]
+    }
+
+    /// The server is a device of the user's own network: the LAN scan knows it by the same address.
+    static func localTie(_ flow: TrafficFlow, _ context: Context) -> CrossLink? {
+        guard let name = context.local[flow.destination] else { return nil }
+        return CrossLink(
+            finding: .init(risk: .info, text: String(localized: "The server is a device on your network: \(name) (\(flow.destination)).")),
+            line: "The server is a device on the user's own local network, found by the LAN scan: \(name) (\(flow.destination))")
+    }
+
+    /// The card's lines with the tie right after the head, where the length cut cannot reach it.
+    private static func tied(_ lines: [String], _ tie: CrossLink?) -> [String] {
+        guard let tie else { return lines }
+        var result = lines
+        result.insert(tie.line, at: min(2, result.count))
+        return result
     }
 
     // MARK: - One request
@@ -98,8 +116,10 @@ nonisolated enum TrafficCards {
             let clean = !issues.contains { $0.kind == .secretInAddress || $0.kind == .personal }
             found.append(.init(risk: .ok, text: clean ? String(localized: "Sent encrypted, with no secrets in the address.") : String(localized: "Sent encrypted.")))
         }
+        let tie = localTie(flow, context)
+        if let finding = tie?.finding { found.append(finding) }
         let ref = TrafficRef(session: context.session, flow: flow, index: index)
-        let data = text(requestLines(hit, scans[0], same: same))
+        let data = text(tied(requestLines(hit, scans[0], same: same), tie))
         let group = EndpointGroup.find(endpoint.key, in: context.flows)
         let deep = [data, group.map { text(endpointLines($0, TrafficAudit.scan($0.hits))) }, text(connectionLines(flow, intro: false))].compactMap { $0 }
         return CardFacts(
@@ -179,8 +199,10 @@ nonisolated enum TrafficCards {
         }
         // The button repeats a request that failed, when there is one: that is the one worth trying again.
         let example = group.hits.first { RequestFilter.failed($0.exchange, of: $0.flow) } ?? newest
+        let tie = localTie(newest.flow, context)
+        if let finding = tie?.finding { found.append(finding) }
         let ref = TrafficRef(session: context.session, flow: example.flow, index: example.index)
-        let data = text(endpointLines(group, scans))
+        let data = text(tied(endpointLines(group, scans), tie))
         let host = group.endpoint.host
         let neighbours = EndpointGroup.build(context.flows).filter { $0.endpoint.host == host && $0.endpoint != group.endpoint }
         var deep = [data]
@@ -257,8 +279,10 @@ nonisolated enum TrafficCards {
         if flow.sent >= TrafficAudit.largeBytes, flow.sent > flow.received * 4 {
             found.append(.init(risk: .info, text: String(localized: "Mostly upload: the phone sent far more than it received.")))
         }
+        let tie = localTie(flow, context)
+        if let finding = tie?.finding { found.append(finding) }
         let ref = TrafficRef(session: context.session, flow: flow)
-        let data = text(connectionLines(flow, intro: true) + [
+        let data = text(tied(connectionLines(flow, intro: true), tie) + [
             "Secrets: \(hits.isEmpty ? "unknown, no request was read" : secrets(scans))",
             "Errors: \(hits.isEmpty ? "unknown, no request was read" : tallyErrors(hits))",
         ])

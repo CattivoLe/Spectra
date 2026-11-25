@@ -19532,6 +19532,325 @@
           }
         }
       }
+    },
+    "On Wi‑Fi “%@”, channel %lld; the sensor hears it at %lld dBm.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В Wi‑Fi «%@», канал %lld; датчик слышит его на %lld дБм."
+          }
+        }
+      }
+    },
+    "Sends data over Wi‑Fi the whole time (%@ up), as a camera or microphone would.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Постоянно передаёт данные по Wi‑Fi (%@ на отдачу), как камера или микрофон."
+          }
+        }
+      }
+    },
+    "The router forwards ports from the internet to this device: %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Роутер пробрасывает на это устройство порты из интернета: %@."
+          }
+        }
+      }
+    },
+    "Open from the internet right now: %@ — the router forwards it to this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас открыт из интернета: %@ — роутер пробрасывает его на это устройство."
+          }
+        }
+      }
+    },
+    "Also heard over Bluetooth as “%@” (%lld dBm): probably the same device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слышно и по Bluetooth как «%@» (%lld дБм): вероятно, это то же устройство."
+          }
+        }
+      }
+    },
+    "The phone talked to it in the recorded traffic: %lld connections, some unencrypted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Телефон обращался к нему в записанном трафике: соединений — %lld, часть без шифрования."
+          }
+        }
+      }
+    },
+    "The phone talked to it in the recorded traffic: %lld connections.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Телефон обращался к нему в записанном трафике: соединений — %lld."
+          }
+        }
+      }
+    },
+    "In the last capture (%@): %lld packets from or to it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В последнем захвате (%@): пакетов от него и к нему — %lld."
+          }
+        }
+      }
+    },
+    "%@: open from the internet right now on port %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: сейчас открыт из интернета на порту %@."
+          }
+        }
+      }
+    },
+    "The router forwards port %@ to %@, which is not on the network now.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Роутер пробрасывает порт %@ на %@, которого сейчас нет в сети."
+          }
+        }
+      }
+    },
+    "%@ sends data over Wi‑Fi the whole time, as a camera or microphone would.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ постоянно передаёт данные по Wi‑Fi, как камера или микрофон."
+          }
+        }
+      }
+    },
+    "The sensor hears %lld more devices on your Wi‑Fi than the network scan found: asleep, or kept apart from the phone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В вашем Wi‑Fi датчик слышит устройств больше, чем нашёл скан сети, на %lld: они спят или отделены от телефона."
+          }
+        }
+      }
+    },
+    "Your phone is on this network.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Телефон подключён к этой сети."
+          }
+        }
+      }
+    },
+    "Your phone is on this network: the network scan found %lld devices on it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Телефон подключён к этой сети: скан сети нашёл в ней устройств — %lld."
+          }
+        }
+      }
+    },
+    "Devices on it that need attention: %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Устройства в ней, требующие внимания: %@."
+          }
+        }
+      }
+    },
+    "Most likely your router's access point: %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скорее всего, это точка доступа вашего роутера: %@."
+          }
+        }
+      }
+    },
+    "Devices of your network on it: %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Устройства вашей сети на этой точке: %@."
+          }
+        }
+      }
+    },
+    "The last capture (%@) holds %lld packets of this access point.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В последнем захвате (%@) пакетов этой точки доступа — %lld."
+          }
+        }
+      }
+    },
+    "A Bluetooth device with the same name is nearby (“%@”, %lld dBm): probably the one that broadcasts this network.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рядом есть Bluetooth‑устройство с тем же именем («%@», %lld дБм): вероятно, оно и раздаёт эту сеть."
+          }
+        }
+      }
+    },
+    "The connection check on it: the internet works, HTTPS is not intercepted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка соединения в ней: интернет работает, HTTPS не перехватывается."
+          }
+        }
+      }
+    },
+    "Probably the same device as %@ on your local network, and it has a risky open port there: %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вероятно, это то же устройство, что %@ в вашей локальной сети, и там у него открыт опасный порт: %@."
+          }
+        }
+      }
+    },
+    "Probably the same device as %@ on your local network.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вероятно, это то же устройство, что %@ в вашей локальной сети."
+          }
+        }
+      }
+    },
+    "A Wi‑Fi network with the same name is on air (%@): probably this device's own access point.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В эфире есть сеть Wi‑Fi с тем же именем (%@): вероятно, это собственная точка доступа устройства."
+          }
+        }
+      }
+    },
+    "Port %@ open from the internet leads to %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Порт %@, открытый из интернета, ведёт на %@."
+          }
+        }
+      }
+    },
+    "Port %@ answers from the internet but is not in the router's UPnP table: the router itself answers, or the port is forwarded by hand in its settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Порт %@ отвечает из интернета, но в таблице UPnP роутера его нет: отвечает сам роутер, или порт проброшен вручную в его настройках."
+          }
+        }
+      }
+    },
+    "First seen on %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Впервые замечено %@."
+          }
+        }
+      }
+    },
+    "Ask the router where the open ports lead": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Спросить роутер, куда ведут открытые порты"
+          }
+        }
+      }
+    },
+    "The server is a device on your network: %@ (%@).": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сервер — устройство вашей сети: %@ (%@)."
+          }
+        }
+      }
+    },
+    "The phone talked to devices on your network: %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Телефон обращался к устройствам вашей сети: %@."
+          }
+        }
+      }
     }
   },
   "version": "1.1"

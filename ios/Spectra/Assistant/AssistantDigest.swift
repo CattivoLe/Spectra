@@ -17,6 +17,45 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
         var inRange = true
         var clients = 0
         var streaming = false
+        /// The devices the sensor heard connected to it: what ties a network to the hosts of the LAN scan.
+        var stations: [Station] = []
+        /// When the app first heard it, in any session.
+        var firstSeen: Date?
+    }
+
+    /// A device the sensor heard connected to an access point.
+    struct Station: Equatable, Sendable {
+        var mac: String
+        var rssi: Int
+    }
+
+    /// A device the sensor counted sending data the whole time, as a camera or a microphone would.
+    struct Sender: Equatable, Sendable {
+        var mac: String
+        var bssid: String
+        var bytesPerSecond: Int
+    }
+
+    /// One enabled rule of the router's forwarding table: a port of the public address and where it leads.
+    struct ForwardTarget: Equatable, Sendable {
+        var proto: String
+        var externalPort: Int
+        var client: String
+        var internalPort: Int
+    }
+
+    /// A device of the local network the phone's recorded traffic went to.
+    struct LocalPeer: Equatable, Sendable {
+        var address: String
+        var connections: Int
+        /// Some of it went as plain HTTP.
+        var cleartext = false
+    }
+
+    /// An address among the busiest of the last decoded capture: a MAC in a Wi‑Fi capture, an IP otherwise.
+    struct CaptureTalker: Equatable, Sendable {
+        var address: String
+        var packets: Int
     }
 
     struct Finding: Equatable, Sendable {
@@ -41,6 +80,8 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
     struct Forwarding: Equatable, Sendable {
         var supported: Bool
         var rules: [String]
+        /// The same rules by their parts: what ties a forwarded port to the device it leads to.
+        var targets: [ForwardTarget] = []
     }
 
     struct PortRiskItem: Equatable, Sendable {
@@ -98,6 +139,8 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
         var portRisks: [PortRiskItem] = []
         /// The router's forwarding table once a check read it; `nil` before that. Gateway only.
         var forwarding: Forwarding?
+        /// When the app first met it, in any session.
+        var firstSeen: Date?
     }
 
     struct Bluetooth: Equatable, Sendable {
@@ -112,6 +155,10 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
         var away: Bool?
         /// The system's identifier of the device: what a Bluetooth summary is about.
         var id = ""
+        /// It says a name of its own: `name` is not the maker's or a made-up one, so it can be matched by.
+        var ownName = true
+        /// When the app first heard it, in any session.
+        var firstSeen: Date?
     }
 
     struct Session: Equatable, Sendable {
@@ -188,6 +235,13 @@ nonisolated struct AssistantSnapshot: Equatable, Sendable {
     var sites: [SiteReach] = []
     /// The last traceroute, when one was run.
     var route: Route?
+    /// Devices that send data the whole time, by the sensor's count.
+    var senders: [Sender] = []
+    /// Devices of the local network the phone's recorded traffic went to.
+    var localPeers: [LocalPeer] = []
+    /// The last decoded capture's name and its busiest addresses.
+    var captureName: String?
+    var captureTalkers: [CaptureTalker] = []
 }
 
 /// The parts of the app's data a summary card reads.

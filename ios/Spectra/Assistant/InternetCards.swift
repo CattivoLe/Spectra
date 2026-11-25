@@ -62,6 +62,12 @@ nonisolated enum InternetCards {
             if !route.running && !route.reached && !route.hops.isEmpty { steps.append(trace(route.target, again: true)) }
         }
         if checked { steps.append(AssistantCards.step(.checkConnection, label: String(localized: "Check the connection again"))) }
+        // A port that answers from outside leads to some device: the router's table names it.
+        let ties = CrossLinks.internet(s)
+        found += CrossLinks.findings(ties)
+        if CrossLinks.asksForwarding(s) {
+            steps.insert(AssistantCards.step(.checkPortForwarding, label: String(localized: "Ask the router where the open ports lead")), at: 0)
+        }
 
         let title = [String(localized: "Internet"), link?.provider.map { AssistantDigest.clean($0, limit: 30) }].compactMap { $0 }.joined(separator: " · ")
         let connection = AssistantDigest.section(.link, snapshot: s, now: now)
@@ -72,8 +78,8 @@ nonisolated enum InternetCards {
             title: title,
             findings: AssistantCards.ranked(found),
             steps: Array(AssistantCards.unique(steps, by: \.tool).prefix(3)),
-            data: data,
-            deepData: deep + "\n\n" + AssistantCards.sections(s, now: now, .history),
+            data: data + CrossLinks.block(ties),
+            deepData: deep + CrossLinks.block(ties) + "\n\n" + AssistantCards.sections(s, now: now, .history),
             awaitsCheck: !checked && link == nil && s.sites.isEmpty && s.route == nil
         )
     }

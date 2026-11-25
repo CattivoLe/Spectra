@@ -76,6 +76,12 @@ object InternetCards {
         s.route?.let { route -> routeFindings(route, found) }
         s.route?.takeIf { !it.running && !it.reached && it.hops.isNotEmpty() }?.let { steps += trace(it.target, again = true) }
         if (checked) steps += AssistantCards.step(AssistantActions.Name.CHECK_CONNECTION, tr("Check the connection again"))
+        // A port that answers from outside leads to some device: the router's table names it.
+        val ties = CrossLinks.internet(s)
+        found += CrossLinks.findings(ties)
+        if (CrossLinks.asksForwarding(s)) {
+            steps.add(0, AssistantCards.step(AssistantActions.Name.CHECK_PORT_FORWARDING, tr("Ask the router where the open ports lead")))
+        }
 
         val title = listOfNotNull(tr("Internet"), link?.provider?.let { AssistantDigest.clean(it, 30) }).joinToString(" · ")
         val connection = AssistantDigest.section(AssistantTopic.LINK, s, now)
@@ -86,8 +92,8 @@ object InternetCards {
             title,
             AssistantCards.ranked(found),
             steps.distinctBy { it.tool }.take(3),
-            data,
-            deep + "\n\n" + AssistantCards.sections(s, now, AssistantTopic.HISTORY),
+            data + CrossLinks.block(ties),
+            deep + CrossLinks.block(ties) + "\n\n" + AssistantCards.sections(s, now, AssistantTopic.HISTORY),
             awaitsCheck = !checked && link == null && s.sites.isEmpty() && s.route == null,
         )
     }

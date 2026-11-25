@@ -88,7 +88,24 @@ object TrafficCards {
         val flows: List<TrafficFlow>,
         val bodies: TrafficAudit.Bodies? = null,
         val recording: Boolean = false,
+        /** Devices of the user's own network by their address, as the LAN scan names them: a server may be one. */
+        val local: Map<String, String> = emptyMap(),
     )
+
+    /** The server is a device of the user's own network: the LAN scan knows it by the same address. */
+    fun localTie(flow: TrafficFlow, context: Context): CrossLink? {
+        val name = context.local[flow.destination] ?: return null
+        return CrossLink(
+            CardFinding(CardRisk.INFO, tr("The server is a device on your network: %s (%s).", name, flow.destination)),
+            "The server is a device on the user's own local network, found by the LAN scan: $name (${flow.destination})",
+        )
+    }
+
+    /** The card's lines with the tie right after the head, where the length cut cannot reach it. */
+    private fun tied(lines: List<String>, tie: CrossLink?): List<String> {
+        tie ?: return lines
+        return lines.toMutableList().apply { add(minOf(2, size), tie.line) }
+    }
 
     // One request.
 
@@ -109,8 +126,10 @@ object TrafficCards {
             found += CardFinding(CardRisk.INFO, tr("WebSocket: %d messages sent, %d received.", sent, exchange.messages.size - sent))
         }
         if (!scans[0].cleartext) found += encrypted(issues)
+        val tie = localTie(flow, context)
+        tie?.finding?.let { found += it }
         val ref = TrafficRef(context.session, flow, index)
-        val data = text(requestLines(hit, scans[0], same))
+        val data = text(tied(requestLines(hit, scans[0], same), tie))
         val group = EndpointGroup.find(endpoint.key, context.flows)
         val deep = listOfNotNull(data, group?.let { text(endpointLines(it, TrafficAudit.scan(it.hits))) }, text(connectionLines(flow, intro = false)))
         return CardFacts(
@@ -197,8 +216,10 @@ object TrafficCards {
         if (scans.none { it.cleartext }) found += encrypted(issues)
         // The button repeats a request that failed, when there is one: that is the one worth trying again.
         val example = group.hits.firstOrNull { RequestFilter.failed(it.exchange, it.flow) } ?: group.hits.first()
+        val tie = localTie(group.hits.first().flow, context)
+        tie?.finding?.let { found += it }
         val ref = TrafficRef(context.session, example.flow, example.index)
-        val data = text(endpointLines(group, scans))
+        val data = text(tied(endpointLines(group, scans), tie))
         val host = group.endpoint.host
         val neighbours = EndpointGroup.build(context.flows).filter { it.endpoint.host == host && it.endpoint != group.endpoint }
         val around = if (neighbours.isEmpty()) "Other endpoints of this server in the recording: none."
@@ -283,9 +304,11 @@ object TrafficCards {
         if (flow.sent >= TrafficAudit.LARGE_BYTES && flow.sent > flow.received * 4) {
             found += CardFinding(CardRisk.INFO, tr("Mostly upload: the phone sent far more than it received."))
         }
+        val tie = localTie(flow, context)
+        tie?.finding?.let { found += it }
         val ref = TrafficRef(context.session, flow)
         val data = text(
-            connectionLines(flow, intro = true) + listOf(
+            tied(connectionLines(flow, intro = true), tie) + listOf(
                 "Secrets: ${if (hits.isEmpty()) "unknown, no request was read" else secrets(scans)}",
                 "Errors: ${if (hits.isEmpty()) "unknown, no request was read" else tallyErrors(hits)}",
             ),
