@@ -107,6 +107,10 @@ class SensorLink(
         private set
     var rawByteCount = 0
         private set
+    /** Which WPA 4-way handshake messages (1..4) have been heard in this capture,
+     *  updated as frames arrive so the recording screen can show them live. */
+    var rawEapolMessages: Set<Int> = emptySet()
+        private set
     /** True once any frame was lost — gaps are expected over BLE. */
     var rawDropped = false
         private set
@@ -413,6 +417,7 @@ class SensorLink(
         rawAssembler = cattivole.spectra.core.RawFrameAssembler()
         rawFrameCount = 0
         rawByteCount = 0
+        rawEapolMessages = emptySet()
         rawDropped = false
         rawCaptureStartMs = System.currentTimeMillis()
         rawFirstDeviceTs = null
@@ -460,6 +465,9 @@ class SensorLink(
         )
         rawFrameCount = rawFrames.size
         rawByteCount += completed.bytes.size
+        cattivole.spectra.core.PacketDissector
+            .dissect(cattivole.spectra.core.LinkType.IEEE802_11, completed.bytes)
+            .eapolMessage?.let { rawEapolMessages = rawEapolMessages + it }
         if (rawFrameCount >= RAW_FRAME_CAP || rawByteCount >= RAW_BYTE_CAP) stopRawCapture()
     }
 

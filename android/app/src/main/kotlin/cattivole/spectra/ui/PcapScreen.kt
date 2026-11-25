@@ -45,11 +45,17 @@ import cattivole.spectra.core.CaptureAnalysis
 import cattivole.spectra.core.CaptureSummary
 import cattivole.spectra.core.PacketFilter
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FilterAlt
 import androidx.compose.material.icons.rounded.Lan
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import cattivole.spectra.core.PacketRow
@@ -194,6 +200,30 @@ private fun LazyListScope.results(
         CountBar(it.name, it.count, summary.packetCount)
     }
 
+    if (summary.hasRadio || summary.eapolMessages.isNotEmpty()) {
+        val hashes = analysis.hc22000
+        freeCard(
+            "handshake",
+            header = tr("WPA handshake"),
+            footer = if (hashes.isEmpty()) {
+                tr("The EAPOL 4-way handshake (M1-M4) between an access point and a device. All four means a complete handshake was captured; fewer means it was not.")
+            } else {
+                tr("A crackable handshake was found. Export it as a hashcat 22000 file to recover the Wi-Fi password with hashcat on a computer — only for networks you own.")
+            },
+        ) {
+            HandshakeContent(summary.eapolMessages)
+            if (hashes.isNotEmpty()) {
+                val context = LocalContext.current
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { shareHc22000(context, hashes, name) }, contentPadding = PaddingValues(0.dp)) {
+                    Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("Export for hashcat (.hc22000)"))
+                }
+            }
+        }
+    }
+
     cardSection(
         items = summary.talkers,
         header = tr("Top hosts"),
@@ -331,6 +361,47 @@ private fun LazyListScope.packetFilters(summary: CaptureSummary, filter: PacketF
         }
         if (filter.isActive) {
             TextButton(onClick = { onFilter(PacketFilter()) }) { Text(tr("Reset filters")) }
+        }
+    }
+}
+
+/** Which of the WPA 4-way handshake messages (M1..M4) a capture holds, and whether together they make a complete handshake. */
+@Composable
+private fun ColumnScope.HandshakeContent(messages: Map<Int, Int>) {
+    val present = (1..4).filter { (messages[it] ?: 0) > 0 }.toSet()
+    val complete = present.containsAll(listOf(1, 2, 3, 4))
+    val status = when {
+        complete -> Triple(Icons.Rounded.VerifiedUser, Spectra.colors.good, tr("Full handshake captured"))
+        present.isEmpty() -> Triple(Icons.Rounded.RadioButtonUnchecked, MaterialTheme.colorScheme.onSurfaceVariant, tr("No handshake seen"))
+        else -> Triple(Icons.Rounded.Warning, Spectra.colors.warning, tr("Partial handshake"))
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(status.first, contentDescription = null, tint = status.second, modifier = Modifier.size(20.dp))
+        Text(status.third, style = MaterialTheme.typography.bodyMedium, color = status.second)
+    }
+    Spacer(Modifier.height(12.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        (1..4).forEach { number ->
+            val count = messages[number] ?: 0
+            val on = count > 0
+            Column(
+                Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Icon(
+                    if (on) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
+                    contentDescription = null,
+                    tint = if (on) Spectra.colors.good else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.size(24.dp),
+                )
+                Text("M$number", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    if (on) "$count" else "—",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

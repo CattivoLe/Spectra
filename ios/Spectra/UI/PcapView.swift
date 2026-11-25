@@ -33,6 +33,19 @@ struct PcapView: View {
         }
     }
 
+    /// Writes the handshake as a hashcat 22000 file and offers it to share.
+    private func exportHc22000(_ lines: [String], name: String) {
+        let base = (name as NSString).deletingPathExtension
+        let fileName = (base.isEmpty ? "capture" : base) + ".hc22000"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        do {
+            try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: url, options: .atomic)
+            shareItem = ShareItem(url: url)
+        } catch {
+            // Writing to the temporary directory should not fail; nothing to show if it does.
+        }
+    }
+
     private enum Phase {
         case idle
         case loading(name: String)
@@ -191,6 +204,27 @@ struct PcapView: View {
                 Text("Applications")
             } footer: {
                 Text("Guessed from well-known ports, so it is a hint, not proof.")
+            }
+        }
+
+        if summary.hasRadio || !summary.eapolMessages.isEmpty {
+            Section {
+                HandshakeView(messages: summary.eapolMessages)
+                if !analysis.hc22000.isEmpty {
+                    Button {
+                        exportHc22000(analysis.hc22000, name: name)
+                    } label: {
+                        Label("Export for hashcat (.hc22000)", systemImage: "square.and.arrow.up")
+                    }
+                }
+            } header: {
+                Text("WPA handshake")
+            } footer: {
+                if analysis.hc22000.isEmpty {
+                    Text("The EAPOL 4‑way handshake (M1–M4) between an access point and a device. All four means a complete handshake was captured; fewer means it was not.")
+                } else {
+                    Text("A crackable handshake was found. Export it as a hashcat 22000 file to recover the Wi‑Fi password with hashcat on a computer — only for networks you own.")
+                }
             }
         }
 
@@ -419,6 +453,57 @@ private struct CountBar: View {
             }
             .frame(height: 4)
         }
+    }
+}
+
+/// Shows which of the WPA 4‑way handshake messages (M1…M4) a capture holds, and
+/// whether together they make a complete handshake.
+private struct HandshakeView: View {
+    var messages: [Int: Int]
+
+    private var present: Set<Int> { Set(messages.filter { $0.value > 0 }.keys) }
+    private var complete: Bool { present.isSuperset(of: [1, 2, 3, 4]) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            status
+            HStack(spacing: 8) {
+                ForEach(1...4, id: \.self) { badge($0) }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder private var status: some View {
+        if complete {
+            Label("Full handshake captured", systemImage: "checkmark.seal.fill")
+                .foregroundStyle(.green)
+                .font(.callout)
+        } else if present.isEmpty {
+            Label("No handshake seen", systemImage: "circle.dashed")
+                .foregroundStyle(.secondary)
+                .font(.callout)
+        } else {
+            Label("Partial handshake", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.callout)
+        }
+    }
+
+    private func badge(_ number: Int) -> some View {
+        let count = messages[number] ?? 0
+        let on = count > 0
+        return VStack(spacing: 3) {
+            Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                .font(.title3)
+                .foregroundStyle(on ? Color.green : Color.secondary.opacity(0.4))
+            Text("M\(number)").font(.caption.weight(.semibold))
+            Text(on ? "\(count)" : "—")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
     }
 }
 

@@ -67,10 +67,18 @@ class CaptureSummary(
     val apps: List<NamedCount>,
     val talkers: List<Talker>,
     val conversations: List<Conversation>,
+    /** How many frames of each WPA 4-way handshake message (1..4) were seen.
+     *  Empty when the capture carried no EAPOL key exchange. */
+    val eapolMessages: Map<Int, Int> = emptyMap(),
 ) {
     /** Capture span in seconds, or null when timestamps are absent. */
     val duration: Double?
         get() = if (start != null && end != null && end >= start) end - start else null
+
+    /** True when the capture holds Wi-Fi frames, so the handshake section is worth
+     *  showing even when no message was heard. */
+    val hasRadio: Boolean
+        get() = linkTypes.any { it.startsWith("802.11") }
 }
 
 class CaptureAnalysis(
@@ -79,6 +87,8 @@ class CaptureAnalysis(
     val rows: List<PacketRow>,
     /** True when there were more packets than the row cap, so the list is partial. */
     val rowsTruncated: Boolean,
+    /** hashcat 22000 lines for any WPA handshake or PMKID found, ready to export. */
+    val hc22000: List<String> = emptyList(),
 )
 
 /**
@@ -107,12 +117,14 @@ object PcapAnalyzer {
         var end: Double? = null
         var wireBytes = 0L
         var capturedBytes = 0L
+        val eapolCounts = HashMap<Int, Int>()
         val rows = ArrayList<PacketRow>()
 
         file.packets.forEachIndexed { index, packet ->
             val info = PacketDissector.dissect(packet.linkType, packet.data)
             protocolCounts[info.transport] = (protocolCounts[info.transport] ?: 0) + 1
             info.app?.let { appCounts[it] = (appCounts[it] ?: 0) + 1 }
+            info.eapolMessage?.let { eapolCounts[it] = (eapolCounts[it] ?: 0) + 1 }
             wireBytes += packet.originalLength
             capturedBytes += packet.data.size
 
@@ -179,7 +191,8 @@ object PcapAnalyzer {
             apps = apps,
             talkers = talkers,
             conversations = conversations,
+            eapolMessages = eapolCounts,
         )
-        return CaptureAnalysis(file.format.label, summary, rows, file.packets.size > maxRows)
+        return CaptureAnalysis(file.format.label, summary, rows, file.packets.size > maxRows, Hc22000.lines(file))
     }
 }

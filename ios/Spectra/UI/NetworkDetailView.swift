@@ -328,6 +328,9 @@ struct NetworkDetailView: View {
                 }
                 .disabled(support != .ok)
             }
+            if mine, link.rawCapturing || link.rawFrameCount > 0 {
+                CaptureHandshakeRow(messages: link.rawEapolMessages)
+            }
         } header: {
             Text("Traffic capture")
         } footer: {
@@ -446,6 +449,28 @@ struct SignalHistoryChart: View {
                 Text("The graph fills in as scans come in")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// A compact, live view of which WPA 4-way handshake messages (M1…M4) the capture
+/// has heard so far, for the recording screen.
+private struct CaptureHandshakeRow: View {
+    var messages: Set<Int>
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("WPA handshake").font(.callout)
+            Spacer(minLength: 8)
+            ForEach(1...4, id: \.self) { number in
+                let on = messages.contains(number)
+                Text("M\(number)")
+                    .font(.caption2.weight(.semibold).monospacedDigit())
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(on ? Color.green.opacity(0.18) : Color.secondary.opacity(0.12), in: Capsule())
+                    .foregroundStyle(on ? Color.green : Color.secondary)
             }
         }
     }

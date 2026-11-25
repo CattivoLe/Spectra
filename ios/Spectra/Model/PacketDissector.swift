@@ -14,6 +14,9 @@ nonisolated struct PacketInfo: Sendable {
     /// otherwise the 802.11/Ethernet MAC), without the port.
     var netSource: String?
     var netDestination: String?
+    /// The WPA/WPA2 4-way handshake message this frame carries (1…4), when it is
+    /// an EAPOL-Key frame of a pairwise handshake; `nil` otherwise.
+    var eapolMessage: Int? = nil
 }
 
 nonisolated enum Transport: String, Sendable, CaseIterable {
@@ -104,6 +107,10 @@ nonisolated enum PacketDissector {
         case 0x0800: return ipv4(p, l3)
         case 0x86DD: return ipv6(p, l3)
         case 0x0806: return arp(p, l3, l2src: l2src)
+        case 0x888E: // 802.1X / EAPOL, e.g. a wired WPA key exchange
+            if let eapol = eapol(p, offset: l3, src: l2src, dst: l2dst) { return eapol }
+            return PacketInfo(transport: .other, source: l2src, destination: l2dst, app: "EAPOL",
+                              info: "EAPOL \(l2src) → \(l2dst)", netSource: l2src, netDestination: l2dst)
         default:
             return PacketInfo(transport: .other, source: l2src, destination: l2dst, app: nil,
                               info: String(format: "EtherType 0x%04X", etherType),
@@ -130,6 +137,10 @@ nonisolated enum PacketDissector {
             return PacketInfo(transport: .dot11Ctrl, source: addr2, destination: addr1, app: name,
                               info: "802.11 \(name)", netSource: nil, netDestination: nil)
         case 2:
+            // A data frame may carry an EAPOL key exchange (the WPA handshake). The
+            // EAPOL-Key frames are not encrypted at the link layer, so the SNAP
+            // header that precedes them is in the clear and can be spotted.
+            if let eapol = eapolInDataFrame(p, addr2: addr2, addr1: addr1) { return eapol }
             return PacketInfo(transport: .dot11Data, source: addr2, destination: addr1, app: nil,
                               info: "802.11 data \(addr2) → \(addr1)", netSource: addr2, netDestination: addr1)
         default:
@@ -167,6 +178,72 @@ nonisolated enum PacketDissector {
         case 14: "CF-end"
         default: "ctrl \(subtype)"
         }
+    }
+
+    // MARK: EAPOL (WPA handshake)
+
+    /// An 802.11 data frame may carry an EAPOL key exchange under an LLC/SNAP
+    /// header. The SNAP position shifts with QoS and the address count, and the
+    /// handshake frames are not link-encrypted, so a short scan for the SNAP
+    /// signature finds it without walking every header variant.
+    private static func eapolInDataFrame(_ p: [UInt8], addr2: String, addr1: String) -> PacketInfo? {
+        let snap: [UInt8] = [0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8E]
+        guard let snapAt = indexOf(snap, in: p, searchLimit: 48) else { return nil }
+        guard let found = classifyEapol(p, at: snapAt + snap.count) else { return nil }
+        return PacketInfo(transport: .dot11Data, source: addr2, destination: addr1, app: "EAPOL",
+                          info: "802.11 \(found.label) \(addr2) → \(addr1)",
+                          netSource: addr2, netDestination: addr1, eapolMessage: found.message)
+    }
+
+    /// EAPOL carried straight over Ethernet/SLL (EtherType 0x888E), e.g. a wired
+    /// 802.1X exchange.
+    private static func eapol(_ p: [UInt8], offset: Int, src: String, dst: String) -> PacketInfo? {
+        guard let found = classifyEapol(p, at: offset) else { return nil }
+        return PacketInfo(transport: .other, source: src, destination: dst, app: "EAPOL",
+                          info: "\(found.label) \(src) → \(dst)",
+                          netSource: src, netDestination: dst, eapolMessage: found.message)
+    }
+
+    /// Reads the 802.1X header at `offset` and, for an EAPOL-Key frame of a
+    /// pairwise (4-way) handshake, says which message it is (1…4). Returns `nil`
+    /// when the bytes are not a readable 802.1X frame.
+    private static func classifyEapol(_ p: [UInt8], at offset: Int) -> (message: Int?, label: String)? {
+        // 802.1X header: version(1) type(1) length(2).
+        guard offset >= 0, offset + 4 <= p.count else { return nil }
+        guard p[offset + 1] == 0x03 else {
+            // A non-Key 802.1X packet (EAP, EAPOL-Start, Logoff): no handshake number.
+            return (nil, "EAPOL")
+        }
+        // EAPOL-Key body: descriptor type(1) then the 16-bit Key Information field.
+        guard offset + 7 <= p.count else { return (nil, "EAPOL-Key") }
+        let keyInfo = be16(p, offset + 5)
+        let pairwise = (keyInfo & 0x0008) != 0 // bit 3: 1 = pairwise, 0 = group
+        let ack      = (keyInfo & 0x0080) != 0 // bit 7: Key ACK
+        let mic      = (keyInfo & 0x0100) != 0 // bit 8: Key MIC
+        let secure   = (keyInfo & 0x0200) != 0 // bit 9: Secure
+        guard pairwise else { return (nil, "EAPOL-Key (group)") }
+        let message: Int
+        if ack && !mic { message = 1 }               // M1: ACK, no MIC
+        else if ack && mic { message = 3 }            // M3: ACK + MIC (+ Install/Secure)
+        else if !ack && mic && !secure { message = 2 } // M2: MIC, not yet secure
+        else if !ack && mic && secure { message = 4 }  // M4: MIC, secure
+        else { return (nil, "EAPOL-Key") }
+        return (message, "EAPOL M\(message)")
+    }
+
+    /// First index of `needle` within the first `searchLimit` bytes of `haystack`.
+    private static func indexOf(_ needle: [UInt8], in haystack: [UInt8], searchLimit: Int) -> Int? {
+        guard !needle.isEmpty, haystack.count >= needle.count else { return nil }
+        let last = min(haystack.count - needle.count, searchLimit)
+        guard last >= 0 else { return nil }
+        var i = 0
+        while i <= last {
+            var j = 0
+            while j < needle.count && haystack[i + j] == needle[j] { j += 1 }
+            if j == needle.count { return i }
+            i += 1
+        }
+        return nil
     }
 
     // MARK: Network layer

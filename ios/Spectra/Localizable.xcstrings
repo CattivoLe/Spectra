@@ -18982,6 +18982,83 @@
           }
         }
       }
+    },
+    "WPA handshake": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рукопожатие WPA"
+          }
+        }
+      }
+    },
+    "The EAPOL 4‑way handshake (M1–M4) between an access point and a device. All four means a complete handshake was captured; fewer means it was not.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Четырёхстороннее рукопожатие EAPOL (M1–M4) между точкой доступа и устройством. Все четыре — рукопожатие перехвачено полностью; меньше — нет."
+          }
+        }
+      }
+    },
+    "Full handshake captured": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рукопожатие перехвачено полностью"
+          }
+        }
+      }
+    },
+    "No handshake seen": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рукопожатие не встретилось"
+          }
+        }
+      }
+    },
+    "Partial handshake": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рукопожатие неполное"
+          }
+        }
+      }
+    },
+    "Export for hashcat (.hc22000)": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспорт для hashcat (.hc22000)"
+          }
+        }
+      }
+    },
+    "A crackable handshake was found. Export it as a hashcat 22000 file to recover the Wi‑Fi password with hashcat on a computer — only for networks you own.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Найдено рукопожатие, пригодное для взлома. Экспортируй его как файл hashcat 22000, чтобы подобрать пароль Wi‑Fi в hashcat на компьютере — только для своих сетей."
+          }
+        }
+      }
     }
   },
   "version": "1.1"

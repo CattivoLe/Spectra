@@ -47,6 +47,14 @@ object CaptureDigest {
         if (summary.conversations.isNotEmpty()) {
             lines.add("Busiest pairs: " + summary.conversations.take(5).joinToString("; ") { "${endpoint(it.a)} ↔ ${endpoint(it.b)} ${it.packets} pkt" } + ".")
         }
+        if (summary.eapolMessages.isNotEmpty()) {
+            val present = (1..4).filter { (summary.eapolMessages[it] ?: 0) > 0 }
+            val list = present.joinToString(", ") { "M$it" }
+            val complete = present == listOf(1, 2, 3, 4)
+            lines.add("WPA 4-way handshake messages seen: $list" + if (complete) " — a complete handshake was captured." else " (incomplete handshake).")
+        } else if (radio) {
+            lines.add("No EAPOL handshake frames (M1-M4) were seen.")
+        }
         val first = analysis.rows.take(12).map { "- ${it.transport}: ${AssistantDigest.clean(it.info, 90)}" }
         if (first.isNotEmpty()) lines.add("First packets:\n" + first.joinToString("\n"))
         if (analysis.rowsTruncated) lines.add("(only part of a very large capture was counted)")

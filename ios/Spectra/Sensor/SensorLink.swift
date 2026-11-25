@@ -61,6 +61,9 @@ final class SensorLink: NSObject {
     private(set) var rawCapturing = false
     private(set) var rawFrameCount = 0
     private(set) var rawByteCount = 0
+    /// Which WPA 4-way handshake messages (1…4) have been heard in this capture,
+    /// updated as frames arrive so the recording screen can show them live.
+    private(set) var rawEapolMessages: Set<Int> = []
     /// True once any frame was lost — the capture has gaps, which is expected
     /// over BLE and worth saying in the UI.
     private(set) var rawDropped = false
@@ -305,6 +308,7 @@ final class SensorLink: NSObject {
         rawAssembler = RawFrameAssembler()
         rawFrameCount = 0
         rawByteCount = 0
+        rawEapolMessages = []
         rawDropped = false
         rawCaptureStart = .now
         rawFirstDeviceTs = nil
@@ -397,6 +401,9 @@ final class SensorLink: NSObject {
         ))
         rawFrameCount = rawFrames.count
         rawByteCount += completed.bytes.count
+        if let message = PacketDissector.dissect(linkType: .ieee802_11, completed.bytes).eapolMessage {
+            rawEapolMessages.insert(message)
+        }
         rawDropped = rawAssembler.dropped > 0
         if rawFrameCount >= Self.rawFrameCap || rawByteCount >= Self.rawByteCap {
             stopRawCapture()

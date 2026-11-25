@@ -86,11 +86,18 @@ nonisolated struct CaptureSummary: Sendable {
     var apps: [NamedCount]
     var talkers: [Talker]
     var conversations: [Conversation]
+    /// How many frames of each WPA 4-way handshake message (1…4) were seen.
+    /// Empty when the capture carried no EAPOL key exchange.
+    var eapolMessages: [Int: Int] = [:]
 
     var duration: TimeInterval? {
         guard let start, let end, end >= start else { return nil }
         return end.timeIntervalSince(start)
     }
+
+    /// True when the capture holds Wi‑Fi frames, so the handshake section is worth
+    /// showing even when no message was heard.
+    var hasRadio: Bool { linkTypes.contains { $0.hasPrefix("802.11") } }
 }
 
 nonisolated struct CaptureAnalysis: Sendable {
@@ -99,6 +106,8 @@ nonisolated struct CaptureAnalysis: Sendable {
     var rows: [PacketRow]
     /// True when there were more packets than the row cap, so the list is partial.
     var rowsTruncated: Bool
+    /// hashcat 22000 lines for any WPA handshake or PMKID found, ready to export.
+    var hc22000: [String] = []
 
     /// How many rows the list shows at most, filtered or not.
     static let shownRows = 2000
@@ -123,12 +132,14 @@ nonisolated enum PcapAnalyzer {
         var end: Date?
         var wireBytes = 0
         var capturedBytes = 0
+        var eapolCounts: [Int: Int] = [:]
         var rows: [PacketRow] = []
 
         for (index, packet) in file.packets.enumerated() {
             let info = PacketDissector.dissect(linkType: packet.linkType, packet.data)
             protocolCounts[info.transport, default: 0] += 1
             if let app = info.app { appCounts[app, default: 0] += 1 }
+            if let message = info.eapolMessage { eapolCounts[message, default: 0] += 1 }
             wireBytes += packet.originalLength
             capturedBytes += packet.data.count
 
@@ -193,13 +204,15 @@ nonisolated enum PcapAnalyzer {
             protocols: protocols,
             apps: apps,
             talkers: Array(talkers),
-            conversations: Array(conversations)
+            conversations: Array(conversations),
+            eapolMessages: eapolCounts
         )
         return CaptureAnalysis(
             format: file.format.rawValue,
             summary: summary,
             rows: rows,
-            rowsTruncated: file.packets.count > maxRows
+            rowsTruncated: file.packets.count > maxRows,
+            hc22000: Hc22000.lines(from: file)
         )
     }
 }
