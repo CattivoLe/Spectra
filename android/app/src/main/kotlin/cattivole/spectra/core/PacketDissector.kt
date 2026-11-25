@@ -15,6 +15,9 @@ class PacketInfo(
     val info: String,
     val netSource: String?,
     val netDestination: String?,
+    /** The WPA/WPA2 4-way handshake message this frame carries (1..4), when it is
+     *  an EAPOL-Key frame of a pairwise handshake; null otherwise. */
+    val eapolMessage: Int? = null,
 )
 
 enum class Transport(val label: String) {
@@ -91,6 +94,8 @@ object PacketDissector {
             0x0800 -> ipv4(p, l3)
             0x86DD -> ipv6(p, l3)
             0x0806 -> arp(p, l3, l2src)
+            0x888E -> eapol(p, l3, l2src, l2dst) // 802.1X / EAPOL, e.g. a wired WPA key exchange
+                ?: PacketInfo(Transport.OTHER, l2src, l2dst, "EAPOL", "EAPOL $l2src → $l2dst", l2src, l2dst)
             else -> PacketInfo(Transport.OTHER, l2src, l2dst, null, "EtherType 0x%04X".format(etherType), null, null)
         }
 
@@ -121,7 +126,12 @@ object PacketDissector {
                 val name = dot11CtrlName(subtype)
                 PacketInfo(Transport.DOT11_CTRL, addr2, addr1, name, "802.11 $name", null, null)
             }
-            2 -> PacketInfo(Transport.DOT11_DATA, addr2, addr1, null, "802.11 data $addr2 → $addr1", addr2, addr1)
+            2 ->
+                // A data frame may carry an EAPOL key exchange (the WPA handshake). The
+                // EAPOL-Key frames are not link-encrypted, so the SNAP header before them
+                // is in the clear and can be spotted.
+                eapolInDataFrame(p, addr2, addr1)
+                    ?: PacketInfo(Transport.DOT11_DATA, addr2, addr1, null, "802.11 data $addr2 → $addr1", addr2, addr1)
             else -> PacketInfo(Transport.OTHER, addr2, addr1, null, "802.11", null, null)
         }
     }
@@ -151,6 +161,61 @@ object PacketDissector {
         13 -> "ACK"
         14 -> "CF-end"
         else -> "ctrl $subtype"
+    }
+
+    // EAPOL (WPA handshake)
+
+    private val eapolSnap = byteArrayOf(
+        0xAA.toByte(), 0xAA.toByte(), 0x03, 0x00, 0x00, 0x00, 0x88.toByte(), 0x8E.toByte(),
+    )
+
+    /**
+     * An 802.11 data frame may carry an EAPOL key exchange under an LLC/SNAP
+     * header. The SNAP position shifts with QoS and the address count, and the
+     * handshake frames are not link-encrypted, so a short scan for the SNAP
+     * signature finds it without walking every header variant.
+     */
+    private fun eapolInDataFrame(p: ByteArray, addr2: String, addr1: String): PacketInfo? {
+        val snapAt = findBytes(eapolSnap, p) ?: return null
+        if (snapAt > 48) return null // only the header region, like the iOS search bound
+        val found = classifyEapol(p, snapAt + eapolSnap.size) ?: return null
+        return PacketInfo(
+            Transport.DOT11_DATA, addr2, addr1, "EAPOL",
+            "802.11 ${found.second} $addr2 → $addr1", addr2, addr1, found.first,
+        )
+    }
+
+    /** EAPOL carried straight over Ethernet/SLL (EtherType 0x888E), e.g. a wired 802.1X exchange. */
+    private fun eapol(p: ByteArray, offset: Int, src: String, dst: String): PacketInfo? {
+        val found = classifyEapol(p, offset) ?: return null
+        return PacketInfo(Transport.OTHER, src, dst, "EAPOL", "${found.second} $src → $dst", src, dst, found.first)
+    }
+
+    /**
+     * Reads the 802.1X header at [offset] and, for an EAPOL-Key frame of a
+     * pairwise (4-way) handshake, says which message it is (1..4). Returns null
+     * when the bytes are not a readable 802.1X frame; the message is null for an
+     * 802.1X frame that is not a recognisable 4-way message.
+     */
+    private fun classifyEapol(p: ByteArray, offset: Int): Pair<Int?, String>? {
+        // 802.1X header: version(1) type(1) length(2).
+        if (offset < 0 || offset + 4 > p.size) return null
+        if (p.u8(offset + 1) != 0x03) return Pair(null, "EAPOL") // not an EAPOL-Key (EAP, Start, Logoff…)
+        if (offset + 7 > p.size) return Pair(null, "EAPOL-Key")
+        val keyInfo = p.be16(offset + 5)
+        val pairwise = keyInfo and 0x0008 != 0 // bit 3: 1 = pairwise, 0 = group
+        val ack = keyInfo and 0x0080 != 0 // bit 7: Key ACK
+        val mic = keyInfo and 0x0100 != 0 // bit 8: Key MIC
+        val secure = keyInfo and 0x0200 != 0 // bit 9: Secure
+        if (!pairwise) return Pair(null, "EAPOL-Key (group)")
+        val message = when {
+            ack && !mic -> 1 // M1: ACK, no MIC
+            ack && mic -> 3 // M3: ACK + MIC (+ Install/Secure)
+            !ack && mic && !secure -> 2 // M2: MIC, not yet secure
+            !ack && mic && secure -> 4 // M4: MIC, secure
+            else -> return Pair(null, "EAPOL-Key")
+        }
+        return Pair(message, "EAPOL M$message")
     }
 
     // Network layer

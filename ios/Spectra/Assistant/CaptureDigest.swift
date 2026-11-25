@@ -45,6 +45,15 @@ nonisolated enum CaptureDigest {
             lines.append("Busiest pairs: " + summary.conversations.prefix(5)
                 .map { "\(endpoint($0.a)) ↔ \(endpoint($0.b)) \($0.packets) pkt" }.joined(separator: "; ") + ".")
         }
+        if !summary.eapolMessages.isEmpty {
+            let present = (1...4).filter { (summary.eapolMessages[$0] ?? 0) > 0 }
+            let list = present.map { "M\($0)" }.joined(separator: ", ")
+            let complete = present == [1, 2, 3, 4]
+            lines.append("WPA 4‑way handshake messages seen: \(list)"
+                         + (complete ? " — a complete handshake was captured." : " (incomplete handshake)."))
+        } else if radio {
+            lines.append("No EAPOL handshake frames (M1–M4) were seen.")
+        }
 
         // The first packets, so the model can describe what actually happened, not only the totals.
         let first = analysis.rows.prefix(12).map { row in

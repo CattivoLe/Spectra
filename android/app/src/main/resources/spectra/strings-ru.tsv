@@ -1795,3 +1795,10 @@ there is nothing at this address	по этому адресу ничего не�
 without	без
 {id} stands for the part that changes from request to request.	{id} — часть, которая меняется от запроса к запросу.
 Usually %s.	Обычно %s.
+WPA handshake	Рукопожатие WPA
+The EAPOL 4-way handshake (M1-M4) between an access point and a device. All four means a complete handshake was captured; fewer means it was not.	Четырёхстороннее рукопожатие EAPOL (M1-M4) между точкой доступа и устройством. Все четыре — рукопожатие перехвачено полностью; меньше — нет.
+Full handshake captured	Рукопожатие перехвачено полностью
+No handshake seen	Рукопожатие не встретилось
+Partial handshake	Рукопожатие неполное
+Export for hashcat (.hc22000)	Экспорт для hashcat (.hc22000)
+A crackable handshake was found. Export it as a hashcat 22000 file to recover the Wi-Fi password with hashcat on a computer — only for networks you own.	Найдено рукопожатие, пригодное для взлома. Экспортируй его как файл hashcat 22000, чтобы подобрать пароль Wi-Fi в hashcat на компьютере — только для своих сетей.

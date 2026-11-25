@@ -71,6 +71,22 @@ fun shareHistory(context: Context, entries: List<HistoryEntry>) {
     context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
+/** Writes a WPA handshake as a hashcat 22000 file and hands it to a share chooser. */
+fun shareHc22000(context: Context, lines: List<String>, label: String) {
+    if (lines.isEmpty()) return
+    val base = label.substringBeforeLast('.').ifBlank { "capture" }
+    val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+    val out = File(dir, "$base.hc22000")
+    out.writeText(lines.joinToString("\n") + "\n")
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", out)
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}
+
 /** Writes a captured `.pcap` to cacheDir/exports and hands it to a share chooser. */
 fun sharePcap(context: Context, bytes: ByteArray, label: String) {
     val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())

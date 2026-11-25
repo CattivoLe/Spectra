@@ -1109,6 +1109,9 @@ private fun LazyListScope.captureCard(
                 )
             }
         }
+        if (mine && (link.rawCapturing || link.rawFrameCount > 0)) {
+            add { CaptureHandshakeRow(link.rawEapolMessages) }
+        }
     }
     val footer = buildString {
         append(
@@ -1136,6 +1139,28 @@ private fun LazyListScope.captureCard(
         }
     }
     card(header = tr("Traffic capture"), key = "capture", footer = footer, rows = rows)
+}
+
+/** A compact, live view of which WPA 4-way handshake messages (M1..M4) the capture has heard so far. */
+@Composable
+private fun CaptureHandshakeRow(messages: Set<Int>) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(tr("WPA handshake"), style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.weight(1f))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            (1..4).forEach { number ->
+                val on = number in messages
+                Text(
+                    "M$number",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (on) Spectra.colors.good else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                )
+            }
+        }
+    }
 }
 
 @Composable
