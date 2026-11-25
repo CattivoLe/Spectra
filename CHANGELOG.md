@@ -5,9 +5,19 @@ Each `## X.Y.Z` section is the text of the GitHub release for tag `vX.Y.Z`
 `versionName`; the sensor firmware keeps its own version, which the release
 notes name.
 
-## Unreleased
+## 1.3.0 (2026-11-25)
 
 Android and iPhone apps. The sensor firmware is unchanged.
+
+Wi-Fi handshakes:
+
+- The pcap decode screen now shows whether a capture holds each of the EAPOL
+  4-way handshake messages (M1-M4), on Android and iPhone.
+- During a sensor capture the same M1-M4 indicator fills in live, as the
+  frames arrive.
+- A captured handshake can be exported from the decode screen as a hashcat
+  22000 file (`WPA*02` for the 4-way handshake, `WPA*01` for a PMKID), to
+  recover the password of a network you own with hashcat on a computer.
 
 Speed test:
 
