@@ -202,7 +202,7 @@ class LanScanner(
         }
 
     /** Every key this network may have been saved under: before its router's hardware address was known, too. */
-    private val networkKeys: List<String>
+    val networkKeys: List<String>
         get() = listOfNotNull(
             devices.firstOrNull { it.isGateway }?.macAddress?.let { "lan:gw:${it.text}" },
             subnet?.let { "lan:net:${it.networkLabel}" },

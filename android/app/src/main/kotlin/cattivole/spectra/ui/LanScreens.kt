@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.CheckBox
 import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
 import androidx.compose.material.icons.rounded.DeleteSweep
@@ -179,6 +181,14 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
                         },
                     )
                     DropdownMenuItem(
+                        text = { Text(tr("Web interfaces")) },
+                        leadingIcon = { Icon(Icons.Rounded.BookmarkBorder, null) },
+                        onClick = {
+                            menu = false
+                            nav.webLinks()
+                        },
+                    )
+                    DropdownMenuItem(
                         text = { Text(tr("Notify about new devices")) },
                         leadingIcon = { Icon(if (model.notifyNewDevices) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank, null) },
                         onClick = {
@@ -289,6 +299,22 @@ fun LanScreen(model: SpectraModel, nav: Navigator) {
                     onClick = { if (lan.scanning) lan.stop() else lan.scan() },
                 )
             }
+        }
+        val webLinks = model.webLinks
+        if (webLinks.links.isNotEmpty() && needle.isEmpty()) {
+            // Shown before any scan, since opening a kept page needs none.
+            card(key = "web-links", rows = listOf {
+                ListRow(
+                    title = tr("Web interfaces"),
+                    subtitle = webLinks.titles.joinToString(", "),
+                    subtitleLines = 1,
+                    leading = { IconTile(Icons.Rounded.Bookmark, MaterialTheme.colorScheme.primary) },
+                    trailing = {
+                        Text("${webLinks.links.size}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    },
+                    onClick = nav::webLinks,
+                )
+            })
         }
         if (lan.scanning) {
             card(key = "progress", rows = listOf { ProgressRow(lanPhase(lan.progress), lan.fraction) })
@@ -523,6 +549,7 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
             device,
             onSave = {
                 lan.setLabel(device, it)
+                model.followWebLinks()
                 editing = false
             },
             onDismiss = { editing = false },
@@ -684,7 +711,15 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
             card(
                 header = tr("Ports"),
                 key = "ports",
-                footer = if (snapshot) null else tr("Checks %d common TCP ports, or every TCP port from 1 to 65535.", DiscoveredPort.commonPorts.size),
+                footer = if (snapshot) {
+                    null
+                } else {
+                    listOfNotNull(
+                        tr("The bookmark keeps a web page in Web interfaces on the LAN tab.")
+                            .takeIf { device.openPorts.any { port -> device.webAddress(port.number) != null } },
+                        tr("Checks %d common TCP ports, or every TCP port from 1 to 65535.", DiscoveredPort.commonPorts.size),
+                    ).joinToString("\n")
+                },
                 rows = buildList {
                     if (device.portsScanned) {
                         if (device.openPorts.isEmpty()) {
@@ -718,6 +753,11 @@ fun LanDetail(model: SpectraModel, nav: Navigator, ip: String, entryId: String?)
                                                 } catch (_: Exception) {
                                                 }
                                             }
+                                        },
+                                        kept = if (web == null || snapshot) null else model.webLinks.link(device, port.number, model.webLinkNetwork) != null,
+                                        onKeep = {
+                                            val kept = model.toggleWebLink(device, port.number)
+                                            notify(if (kept) tr("Added to web interfaces") else tr("Removed from web interfaces"))
                                         },
                                         onCopy = stream?.let { address -> { copy(tr("Stream address"), address) } },
                                     )
@@ -770,6 +810,9 @@ private fun PortRow(
     stream: Boolean = false,
     onOpen: (() -> Unit)? = null,
     onCopy: (() -> Unit)? = null,
+    /** Whether the port's web page is kept; null when there is none to keep. */
+    kept: Boolean? = null,
+    onKeep: () -> Unit = {},
 ) {
     val detail = device.profile.banners.firstOrNull { it.port == port.number }?.summary
         ?: device.profile.rtsp.firstOrNull { it.port == port.number }?.summary
@@ -787,7 +830,7 @@ private fun PortRow(
                     Modifier
                 },
             )
-            .padding(horizontal = 16.dp, vertical = 13.dp),
+            .padding(horizontal = 16.dp, vertical = if (kept == null) 13.dp else 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -809,6 +852,16 @@ private fun PortRow(
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(20.dp),
             )
+        }
+        if (kept != null) {
+            IconButton(onClick = onKeep, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    if (kept) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder,
+                    contentDescription = if (kept) tr("Remove from web interfaces") else tr("Add to web interfaces"),
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
         }
         Box(Modifier.size(8.dp).clip(CircleShape).background(Spectra.colors.success))
     }

@@ -12,6 +12,7 @@ struct SpectraApp: App {
     @State private var bleScanner: BLEScanner
     @State private var location = LocationService()
     @State private var watchList = WatchList()
+    @State private var webLinks = WebLinks()
     @State private var joiner = WiFiJoiner()
     @State private var sniffer = TrafficSniffer()
     @State private var speedTester = SpeedTester()
@@ -60,6 +61,7 @@ struct SpectraApp: App {
                 .environment(bleScanner)
                 .environment(location)
                 .environment(watchList)
+                .environment(webLinks)
                 .environment(joiner)
                 .environment(sniffer)
                 .onChange(of: watchList.ids, initial: true) { _, ids in
@@ -90,19 +92,30 @@ struct SpectraApp: App {
 
 struct RootView: View {
     /// No shared History tab: each tab with saved scans opens its own history (the clock in its top bar).
-    enum Tab: Hashable { case networks, lan, internet, bluetooth, assistant }
+    enum Tab: String, Hashable {
+        case networks, lan, internet, bluetooth, assistant
+
+        private static let key = "lastTab"
+
+        /// The tab the app was left on; the app opens on it again.
+        static var last: Tab {
+            get { UserDefaults.standard.string(forKey: key).flatMap(Tab.init) ?? .networks }
+            set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+        }
+    }
 
     @Environment(HistoryStore.self) private var history
     @Environment(LinkProbe.self) private var linkProbe
     @Environment(SensorLink.self) private var link
     @Environment(NetworkStore.self) private var store
     @Environment(LANScanner.self) private var lanScanner
+    @Environment(WebLinks.self) private var webLinks
     @Environment(BLEScanner.self) private var bleScanner
     @Environment(AssistantModel.self) private var assistant
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("autosaveHistory") private var autosave = true
     @AppStorage("notifyNewDevices") private var notifyNewDevices = true
-    @State private var tab: Tab = .networks
+    @State private var tab = Tab.last
     @State private var showSensor = false
     @State private var notice: SaveNotice?
 
@@ -127,6 +140,10 @@ struct RootView: View {
         let found = verdict.newIPs.compactMap { lanScanner.devices[$0] }
         let label = lanScanner.networkLabel
         Task { await NewDeviceNotifier.notify(found, networkLabel: label) }
+    }
+
+    private func followWebLinks() {
+        webLinks.follow(lanScanner.sortedDevices, network: lanScanner.webLinkNetwork)
     }
 
     private func keepConnection(_ snapshot: LinkSnapshot, viaVpn: Bool) {
@@ -158,6 +175,7 @@ struct RootView: View {
                 .tabItem { Label("Assistant", systemImage: "sparkles") }
                 .tag(Tab.assistant)
         }
+        .onChange(of: tab) { _, tab in Tab.last = tab }
         .sheet(isPresented: $showSensor) {
             SensorView()
         }
@@ -189,7 +207,10 @@ struct RootView: View {
         .onChange(of: lanScanner.scanCount) { _, _ in
             autosaveNow()
             announceNewDevices()
+            followWebLinks()
         }
+        // A device the user renamed takes its links along.
+        .onChange(of: lanScanner.labels.labels) { _, _ in followWebLinks() }
         .onChange(of: history.lastSave) { _, saved in
             guard let saved else { return }
             withAnimation(.spring(duration: 0.35)) { notice = saved }

@@ -5,6 +5,21 @@ Each `## X.Y.Z` section is the text of the GitHub release for tag `vX.Y.Z`
 `versionName`; the sensor firmware keeps its own version, which the release
 notes name.
 
+## Unreleased
+
+Web interfaces:
+
+- A list of your devices' web pages on the LAN tab, on Android and iPhone: a tap
+  opens one in the browser, without a scan first. A page is added with the
+  bookmark next to its port on the device's screen; its name, address, icon
+  and colour can be changed, with icons suggested by what the device is, and the
+  links put in any order. When the router gives the device another address, the
+  next LAN scan updates the link.
+
+Other:
+
+- The app opens on the tab it was left on.
+
 ## 1.3.0 (2026-11-25)
 
 Android and iPhone apps. The sensor firmware is unchanged.

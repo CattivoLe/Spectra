@@ -15,6 +15,7 @@ struct DeviceDetailView: View {
     }
 
     @Environment(LANScanner.self) private var scanner
+    @Environment(WebLinks.self) private var webLinks
     @State private var editingLabel = false
     @Environment(\.openURL) private var openURL
     /// A stream address no app on this iPhone would open.
@@ -43,7 +44,14 @@ struct DeviceDetailView: View {
                             Text(device.displayName)
                                 .font(.title2.weight(.semibold))
                                 .fixedSize(horizontal: false, vertical: true)
-                            HStack(spacing: 6) {
+                            if let about = device.identity.label.isEmpty ? device.manufacturer : device.identity.label {
+                                Text(about)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            // One under another: side by side they ran out of width and broke their words.
+                            VStack(alignment: .leading, spacing: 4) {
                                 if device.isLocalDevice {
                                     badge("This device", color: .teal)
                                 }
@@ -61,16 +69,8 @@ struct DeviceDetailView: View {
                                 } else if device.trust == .suspicious {
                                     badge("Suspicious", color: .red)
                                 }
-                                if !device.identity.label.isEmpty {
-                                    Text(device.identity.label)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                } else if let mfr = device.manufacturer {
-                                    Text(mfr)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
                             }
+                            .padding(.top, 2)
                         }
                     }
                     if let note = device.note {
@@ -165,22 +165,28 @@ struct DeviceDetailView: View {
             }
 
             if device.portsScanned {
-                Section("Ports") {
+                Section {
                     if device.openPorts.isEmpty {
                         Label("No open ports found", systemImage: "lock.shield")
                             .foregroundStyle(.secondary)
                             .font(.subheadline)
                     } else {
                         ForEach(device.openPorts) { port in
-                            if let url = webAddress(port.number, on: device) {
-                                Link(destination: url) { portRow(port, web: true) }
-                                    .buttonStyle(.plain)
-                                    .accessibilityHint(Text("Opens \(url.absoluteString) in the browser"))
+                            if let url = device.webAddress(port.number) {
+                                HStack(spacing: 12) {
+                                    Link(destination: url) { portLabel(port, web: true) }
+                                        .buttonStyle(.plain)
+                                        .accessibilityHint(Text("Opens \(url.absoluteString) in the browser"))
+                                    if snapshot == nil {
+                                        webLinkButton(port.number, on: device)
+                                    }
+                                    riskDot(port)
+                                }
                             } else if let stream = device.streamAddress(port.number) {
                                 Button {
                                     editableStreamURL = stream
                                 } label: {
-                                    portRow(port, web: false, stream: true)
+                                    portRow(port, stream: true)
                                 }
                                 .buttonStyle(.plain)
                                 .contextMenu {
@@ -190,9 +196,15 @@ struct DeviceDetailView: View {
                                 }
                                 .accessibilityHint(Text("Opens \(stream) in a video player"))
                             } else {
-                                portRow(port, web: false)
+                                portRow(port)
                             }
                         }
+                    }
+                } header: {
+                    Text("Ports")
+                } footer: {
+                    if snapshot == nil, device.openPorts.contains(where: { device.webAddress($0.number) != nil }) {
+                        Text("The bookmark keeps a web page in Web interfaces on the LAN tab.")
                     }
                 }
             }
@@ -289,9 +301,41 @@ struct DeviceDetailView: View {
         }
     }
 
-    private func portRow(_ port: DiscoveredPort, web: Bool, stream: Bool = false) -> some View {
+    private func portRow(_ port: DiscoveredPort, stream: Bool = false) -> some View {
+        HStack(spacing: 12) {
+            portLabel(port, stream: stream)
+            riskDot(port)
+        }
+        .contentShape(Rectangle())
+    }
+
+    /// Keeps the port's web page in the list of web interfaces, or drops it.
+    private func webLinkButton(_ port: Int, on device: LANDevice) -> some View {
+        let network = scanner.webLinkNetwork
+        let kept = webLinks.link(for: device, port: port, network: network) != nil
+        return Button {
+            webLinks.toggle(device, port: port, network: network)
+        } label: {
+            Image(systemName: kept ? "bookmark.fill" : "bookmark")
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(kept ? Text("Remove from web interfaces") : Text("Add to web interfaces"))
+        .sensoryFeedback(.selection, trigger: kept)
+    }
+
+    private func riskDot(_ port: DiscoveredPort) -> some View {
         let risk = PortRisk.level(forPort: port.number)
-        return HStack(spacing: 12) {
+        return Image(systemName: "circle.fill")
+            .font(.system(size: 8))
+            .foregroundStyle(risk.map { $0 >= .low ? $0.color : Color.green } ?? .green)
+            .accessibilityLabel(Text(risk?.label ?? String(localized: "port.open", defaultValue: "Open", comment: "A port that answers")))
+    }
+
+    private func portLabel(_ port: DiscoveredPort, web: Bool = false, stream: Bool = false) -> some View {
+        HStack(spacing: 12) {
             Text(port.number, format: .number.grouping(.never))
                 .font(.body.monospacedDigit().weight(.semibold))
                 .foregroundStyle(.primary)
@@ -308,10 +352,6 @@ struct DeviceDetailView: View {
                 Image(systemName: "play.circle")
                     .foregroundStyle(.tint)
             }
-            Image(systemName: "circle.fill")
-                .font(.system(size: 8))
-                .foregroundStyle(risk.map { $0 >= .low ? $0.color : Color.green } ?? .green)
-                .accessibilityLabel(Text(risk?.label ?? String(localized: "port.open", defaultValue: "Open", comment: "A port that answers")))
         }
         .contentShape(Rectangle())
     }
@@ -450,24 +490,6 @@ struct DeviceDetailView: View {
         }
     }
 
-    /// The browser address of a port that speaks HTTP: the banner grab says
-    /// so, or the port is one web servers commonly use.
-    private func webAddress(_ number: Int, on device: LANDevice) -> URL? {
-        let https: Bool
-        if let banner = device.profile.banners.first(where: { $0.port == number }) {
-            https = banner.secure
-        } else if LANProbes.secureWeb.contains(number) {
-            https = true
-        } else if LANProbes.plainWeb.contains(number) {
-            https = false
-        } else {
-            return nil
-        }
-        let scheme = https ? "https" : "http"
-        let isDefault = (https && number == 443) || (!https && number == 80)
-        return URL(string: isDefault ? "\(scheme)://\(device.ipAddress)" : "\(scheme)://\(device.ipAddress):\(number)")
-    }
-
     /// The readable name and model on lines of their own. Google Cast and
     /// Spotify name their instances with a long hex ID, which goes on a
     /// separate monospaced line instead of passing for a name.
@@ -486,6 +508,7 @@ struct DeviceDetailView: View {
         Text(text)
             .font(.caption2.weight(.medium))
             .foregroundStyle(.white)
+            .lineLimit(1)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(color, in: .capsule)
