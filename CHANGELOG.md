@@ -33,6 +33,8 @@ Assistant:
 Other:
 
 - The app opens on the tab it was left on.
+- The icon is now Spectra's own: the beam is amber and the scattering pixels
+  are red, so it no longer looks the same as Probe Lab's on the home screen.
 
 ## 1.3.0 (2026-11-25)
 
