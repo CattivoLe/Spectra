@@ -47,9 +47,10 @@ struct AssistantSources {
 
     private func trafficWork(_ subject: CardSubject, bodies: Bool) -> (@Sendable () -> CardFacts?)? {
         let library = captures.library
+        let local = localNames()
         func context(_ session: String?, _ flows: [TrafficFlow]) -> TrafficCards.Context {
             TrafficCards.Context(session: session, flows: flows, bodies: bodies ? library.bodies(session) : nil,
-                                 recording: library.recording())
+                                 recording: library.recording(), local: local)
         }
         switch subject {
         case .traffic:
@@ -57,7 +58,8 @@ struct AssistantSources {
             return {
                 AssistantCards.traffic(recording.flows, name: recording.name,
                                        digest: TrafficDigest.text(recording.flows, name: recording.name,
-                                                                  origin: "recorded on the phone (Traffic screen)"))
+                                                                  origin: "recorded on the phone (Traffic screen)"),
+                                       local: local)
             }
         case .request(let ref):
             guard let index = ref.index, let (session, flow) = library.find(ref) else { return nil }
@@ -101,8 +103,13 @@ struct AssistantSources {
                 isHidden: name == nil,
                 inRange: network.isInRange,
                 clients: network.clients.count,
-                streaming: network.movesDataSteadily || store.steadySenders.contains { $0.traffic.bssid == network.id }
+                streaming: network.movesDataSteadily || store.steadySenders.contains { $0.traffic.bssid == network.id },
+                stations: network.clients.map { AssistantSnapshot.Station(mac: $0.mac.description, rssi: $0.rssi) },
+                firstSeen: network.firstSeen
             )
+        }
+        snapshot.senders = store.steadySenders.map {
+            AssistantSnapshot.Sender(mac: $0.traffic.mac.description, bssid: $0.traffic.bssid.description, bytesPerSecond: $0.traffic.upBytesPerSecond)
         }
         snapshot.findings = Threats.assess(networks: networks, deauths: store.deauthEvents, senders: store.steadySenders, lanName: lan.name(of:)).map {
             AssistantSnapshot.Finding(severity: $0.severity == .critical ? "critical" : "warning", title: $0.title, detail: $0.detail,
@@ -133,9 +140,13 @@ struct AssistantSources {
                 forwarding: device.isGateway ? device.profile.portForwarding.map { table in
                     AssistantSnapshot.Forwarding(
                         supported: table.supported,
-                        rules: table.mappings.filter(\.enabled).map { "\($0.proto) \($0.externalPort) → \($0.internalClient):\($0.internalPort)" }
+                        rules: table.mappings.filter(\.enabled).map { "\($0.proto) \($0.externalPort) → \($0.internalClient):\($0.internalPort)" },
+                        targets: table.mappings.filter(\.enabled).map {
+                            AssistantSnapshot.ForwardTarget(proto: $0.proto, externalPort: $0.externalPort, client: $0.internalClient, internalPort: $0.internalPort)
+                        }
                     )
-                } : nil
+                } : nil,
+                firstSeen: device.firstSeen
             )
         }
 
@@ -150,7 +161,9 @@ struct AssistantSources {
                 tracker: assessment?.kind.label,
                 trackerLevel: assessment.map { $0.level == .alert ? "alert" : ($0.level == .watch ? "watch" : "info") },
                 away: assessment?.separated,
-                id: device.id.uuidString
+                id: device.id.uuidString,
+                ownName: device.hasOwnName,
+                firstSeen: device.firstSeen
             )
         }
 
@@ -222,6 +235,11 @@ struct AssistantSources {
             )
         }
         snapshot.capture = captureText()
+        snapshot.localPeers = Self.localPeers(captures.currentRecording?.flows ?? [], hosts: Set(snapshot.hosts.map(\.ip)))
+        if let entry = captures.latest {
+            snapshot.captureName = entry.name
+            snapshot.captureTalkers = entry.analysis.summary.talkers.map { AssistantSnapshot.CaptureTalker(address: $0.endpoint, packets: $0.packets) }
+        }
         if let read = ble.lastRead {
             let age = Int(now.timeIntervalSince(read.readAt) / 60)
             snapshot.gatt = GATTDigest.text(read, intro: age < 1 ? "Read just now from" : "Read \(age) min ago from")
@@ -241,6 +259,27 @@ struct AssistantSources {
             }
         }
         return snapshot
+    }
+
+    /// The devices of the local network the phone's recorded traffic went to, busiest first.
+    nonisolated static func localPeers(_ flows: [TrafficFlow], hosts: Set<String>) -> [AssistantSnapshot.LocalPeer] {
+        var peers: [String: AssistantSnapshot.LocalPeer] = [:]
+        for flow in flows where hosts.contains(flow.destination) && flow.kind != .dns {
+            var peer = peers[flow.destination] ?? AssistantSnapshot.LocalPeer(address: flow.destination, connections: 0)
+            peer.connections += 1
+            if flow.kind == .http && !flow.tls { peer.cleartext = true }
+            peers[flow.destination] = peer
+        }
+        return peers.values.sorted { ($0.connections, $1.address) > ($1.connections, $0.address) }
+    }
+
+    /// What the cards of recorded traffic call a server that is a device of the local network: by its address.
+    private func localNames() -> [String: String] {
+        Dictionary(lan.sortedDevices.filter { !$0.isLocalDevice }.map { device in
+            let maker = device.identity.manufacturer ?? device.manufacturer
+            let name = AssistantDigest.clean(device.displayName, limit: 30)
+            return (device.ipAddress, maker.map { name.contains($0) ? name : "\(name) · \(AssistantDigest.clean($0))" } ?? name)
+        }, uniquingKeysWith: { first, _ in first })
     }
 
     /// Both kinds of recorded traffic the user may mean by "the capture", newest first: the Wi‑Fi capture (see

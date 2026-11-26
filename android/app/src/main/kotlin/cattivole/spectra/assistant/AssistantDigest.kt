@@ -36,12 +36,37 @@ data class AssistantSnapshot(
     val sites: List<SiteReach> = emptyList(),
     /** The last traceroute, when one was run. */
     val route: Route? = null,
+    /** Devices that send data the whole time, by the sensor's count. */
+    val senders: List<Sender> = emptyList(),
+    /** Devices of the local network the phone's recorded traffic went to. */
+    val localPeers: List<LocalPeer> = emptyList(),
+    /** The last decoded capture's name and its busiest addresses. */
+    val captureName: String? = null,
+    val captureTalkers: List<CaptureTalker> = emptyList(),
 ) {
+    /** A device the sensor heard connected to an access point. */
+    data class Station(val mac: String, val rssi: Int)
+
+    /** A device the sensor counted sending data the whole time, as a camera or a microphone would. */
+    data class Sender(val mac: String, val bssid: String, val bytesPerSecond: Long)
+
+    /** One enabled rule of the router's forwarding table: a port of the public address and where it leads. */
+    data class ForwardTarget(val proto: String, val externalPort: Int, val client: String, val internalPort: Int)
+
+    /** A device of the local network the phone's recorded traffic went to. [cleartext]: some of it went as plain HTTP. */
+    data class LocalPeer(val address: String, val connections: Int, val cleartext: Boolean = false)
+
+    /** An address among the busiest of the last decoded capture: a MAC in a Wi‑Fi capture, an IP otherwise. */
+    data class CaptureTalker(val address: String, val packets: Int)
+
     /** [vendor]: in a service the Bluetooth catalog does not name, i.e. the maker's own. */
     data class GattItem(val service: String, val name: String, val value: String?, val writable: Boolean, val vendor: Boolean)
 
-    /** The router's answer to a port-forwarding check: [rules] as "TCP 8080 → 192.168.1.50:80". */
-    data class Forwarding(val supported: Boolean, val rules: List<String>)
+    /**
+     * The router's answer to a port-forwarding check: [rules] as "TCP 8080 → 192.168.1.50:80", [targets] the same
+     * rules by their parts: what ties a forwarded port to the device it leads to.
+     */
+    data class Forwarding(val supported: Boolean, val rules: List<String>, val targets: List<ForwardTarget> = emptyList())
 
     data class Wifi(
         val name: String,
@@ -56,6 +81,10 @@ data class AssistantSnapshot(
         val inRange: Boolean = true,
         val clients: Int = 0,
         val streaming: Boolean = false,
+        /** The devices the sensor heard connected to it: what ties a network to the hosts of the LAN scan. */
+        val stations: List<Station> = emptyList(),
+        /** When the app first heard it, in any session. */
+        val firstSeen: Long? = null,
     )
 
     /** [bssids]: the access points the finding is about. */
@@ -82,6 +111,8 @@ data class AssistantSnapshot(
         val portRisks: List<PortRiskItem> = emptyList(),
         /** The router's forwarding table once a check read it; null before that. Gateway only. */
         val forwarding: Forwarding? = null,
+        /** When the app first met it, in any session. */
+        val firstSeen: Long? = null,
     )
 
     data class PortRiskItem(val title: String, val high: Boolean)
@@ -97,6 +128,10 @@ data class AssistantSnapshot(
         val trackerLevel: String? = null,
         val away: Boolean? = null,
         val address: String = "",
+        /** It says a name of its own: [name] is not the maker's or a made-up one, so it can be matched by. */
+        val ownName: Boolean = true,
+        /** When the app first heard it, in any session. */
+        val firstSeen: Long? = null,
     )
 
     data class Session(val kind: String, val date: Long, val source: String, val place: String?, val count: Int)

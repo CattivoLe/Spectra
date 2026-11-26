@@ -47,12 +47,13 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf) {
     }
 
     private fun trafficWork(subject: CardSubject, bodies: Boolean): (() -> CardFacts?)? {
+        val local = localNames()
         fun context(session: String?, flows: List<TrafficFlow>) =
-            TrafficCards.Context(session, flows, if (bodies) library.bodies(session) else null, library.recording())
+            TrafficCards.Context(session, flows, if (bodies) library.bodies(session) else null, library.recording(), local)
         return when (subject) {
             CardSubject.Traffic -> captures.currentRecording?.let { recording ->
                 {
-                    AssistantCards.traffic(recording.flows, recording.name, TrafficDigest.text(recording.flows, recording.name, "recorded on the phone (Traffic screen)"))
+                    AssistantCards.traffic(recording.flows, recording.name, TrafficDigest.text(recording.flows, recording.name, "recorded on the phone (Traffic screen)"), local)
                 }
             }
             is CardSubject.Request -> {
@@ -93,6 +94,8 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf) {
                 inRange = network.isInRange,
                 clients = network.clients.size,
                 streaming = network.movesDataSteadily || senders.any { it.traffic.bssid == network.id },
+                stations = network.clients.map { AssistantSnapshot.Station(it.mac.text, it.rssi) },
+                firstSeen = network.firstSeen,
             )
         }
         val findings = Threats.assess(networks, model.store.deauthEvents, senders, model.lan::nameOf).map { finding ->
@@ -135,8 +138,10 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf) {
                     AssistantSnapshot.Forwarding(
                         table.supported,
                         table.mappings.filter { it.enabled }.map { "${it.proto} ${it.externalPort} → ${it.internalClient}:${it.internalPort}" },
+                        table.mappings.filter { it.enabled }.map { AssistantSnapshot.ForwardTarget(it.proto, it.externalPort, it.internalClient, it.internalPort) },
                     )
                 },
+                firstSeen = device.firstSeen,
             )
         }
         val bluetooth = model.ble.devices.values.map { device ->
@@ -151,6 +156,8 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf) {
                 trackerLevel = assessment?.level?.name?.lowercase(),
                 away = assessment?.separated,
                 address = device.address,
+                ownName = device.hasOwnName,
+                firstSeen = device.firstSeen,
             )
         }
         val sessions = model.history.entries.map {
@@ -265,7 +272,18 @@ class AssistantSources(val model: SpectraModel, val captures: CaptureShelf) {
             },
             sites = sites,
             route = route,
+            senders = senders.map { AssistantSnapshot.Sender(it.traffic.mac.text, it.traffic.bssid.text, it.traffic.upBytesPerSecond) },
+            localPeers = CrossLinks.localPeers(captures.currentRecording?.flows.orEmpty(), hosts.map { it.ip }.toSet()),
+            captureName = captures.latest?.name,
+            captureTalkers = captures.latest?.analysis?.summary?.talkers.orEmpty().map { AssistantSnapshot.CaptureTalker(it.endpoint, it.packets) },
         )
+    }
+
+    /** What the cards of recorded traffic call a server that is a device of the local network: by its address. */
+    private fun localNames(): Map<String, String> = model.lan.devices.filter { !it.isLocalDevice }.associate { device ->
+        val maker = device.identity.manufacturer ?: device.manufacturer
+        val name = AssistantDigest.clean(device.displayName, 30)
+        device.ipAddress to if (maker == null || name.contains(maker)) name else "$name · ${AssistantDigest.clean(maker)}"
     }
 
     /** Both kinds of recorded traffic the user may mean by "the capture", newest first. */

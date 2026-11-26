@@ -285,7 +285,8 @@ card only the device's maker and model (or a link's domain) is searched: never
 an IP or MAC address, a network name or a name someone gave their device.
 Nothing from recorded traffic is searched for.
 
-Spectra and Probe Lab, its App Store sibling, share one icon.
+Spectra and Probe Lab, its App Store sibling, share one icon design: Spectra's
+has an amber beam and red pixels, Probe Lab's is all cyan.
 
 ## Recording traffic
 

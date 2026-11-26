@@ -16,9 +16,25 @@ Web interfaces:
   links put in any order. When the router gives the device another address, the
   next LAN scan updates the link.
 
+Assistant:
+
+- A ✨ summary now ties its subject to what the app's other screens know about
+  it, on Android and iPhone. A device of the local network shows the Wi-Fi
+  network it is on and its signal at the sensor, the ports the router forwards
+  to it from the internet (and whether they answer right now), a steady data
+  stream the sensor counted from it, its Bluetooth side, and the phone's
+  recorded traffic to it. A Wi-Fi network shows the devices of the LAN scan
+  on it, its router, and the connection check made through it. The internet
+  summary names the device behind each port that is open from outside, and
+  recorded traffic names a server that is a device of your own network.
+- The local network summary counts devices the sensor hears on your Wi-Fi
+  that the network scan did not find.
+
 Other:
 
 - The app opens on the tab it was left on.
+- The icon is now Spectra's own: the beam is amber and the scattering pixels
+  are red, so it no longer looks the same as Probe Lab's on the home screen.
 
 ## 1.3.0 (2026-11-25)
 
